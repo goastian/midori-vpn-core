@@ -1,0 +1,7 @@
+__pycache__
+test*
+config
+validate.py
+WG.py
+.env
+tmp
