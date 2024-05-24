@@ -1,15 +1,10 @@
+from typing import Any
 import dotenv
 import requests
-import os
+import os 
+from src.expetions import * 
 
 dotenv.load_dotenv()
-
-class DenyAccess(Exception):
-    
-    def __init__(self, message, code) -> None:
-        self.message = message
-        self.code = code
-    
         
 class Authorization():
     
@@ -29,11 +24,12 @@ class Authorization():
                                 verify=False,
                                 headers= { 
                                           'Authorization' : token, 
-                                          "X-SCOPES": scope
+                                          "X-SCOPES": scope,
+                                          "Accept" : "application/json"
                                           })
         
-        if response.ok:
-            pass
+        if response.status_code == 200:
+           pass
         elif response.status_code == 401:
             raise DenyAccess("The client must authenticate itself to get the requested response", 401)
         elif response.status_code == 403:
