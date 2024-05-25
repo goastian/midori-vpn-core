@@ -38,6 +38,12 @@ class wireguardInterfaceExists(Exception):
     def __str__(self) -> str:
         return self.message
     
+class WireguardModuleNotFount(Exception):
+    
+    def __init__(self, message, code) -> None:
+        self.message = message
+        self.code = code
+    
 
 
                 

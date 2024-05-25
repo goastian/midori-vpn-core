@@ -1,11 +1,17 @@
 #!env/bin/python
-from fastapi import FastAPI, Request, HTTPException 
-from src.wireguard import WgCore, wireguardInterfaceExists
+from fastapi import FastAPI, Request 
 from src.oauth2_server import   Authorization
 from src.expetions import *
 from json.decoder import JSONDecodeError
 from src.validation import Validation, JsonResponser
-
+try:
+    from src.wireguard import WgCore, wireguardInterfaceExists
+except ModuleNotFoundError as e:
+    raise WireguardModuleNotFount(f"{ e.msg } . This module is owned by Astian Inc and is not yet available to the general public.", 404)
+    
+    
+    
+    
 app = FastAPI()
     
 @app.post("/api/wireguard/mount")
