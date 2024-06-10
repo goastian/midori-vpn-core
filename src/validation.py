@@ -74,8 +74,8 @@ class Validation():
             #Get body content        
             body = await request.json()          
             
-            Validation.check_field_is_empty_in_dict('name', body)
-            Validation.check_field_is_empty_in_dict('gateway', body)
+            Validation.check_field_is_empty_in_dict('interface_name', body)
+            Validation.check_field_is_empty_in_dict('address', body)
             Validation.check_field_is_empty_in_dict('private_key', body)
             Validation.check_field_is_empty_in_dict('listen_port', body)
             Validation.check_field_is_empty_in_dict('out_interface', body)
@@ -84,15 +84,15 @@ class Validation():
                 raise FieldRequired(Validation.errors, 422)
                                         
             return {
-                    "name": body["name"], 
-                    "gateway": body["gateway"], 
+                    "interface_name": body["interface_name"], 
+                    "address": body["address"], 
                     "private_key" : body["private_key"],
                     "listen_port" : body["listen_port"], 
                     "out_interface" : body["out_interface"]
                     }
         except JSONDecodeError as e:
-            Validation.check_field_is_empty_in_dict('name', body)
-            Validation.check_field_is_empty_in_dict('gateway', body)
+            Validation.check_field_is_empty_in_dict('interface_name', body)
+            Validation.check_field_is_empty_in_dict('address', body)
             Validation.check_field_is_empty_in_dict('private_key', body)
             Validation.check_field_is_empty_in_dict('listen_port', body)
             Validation.check_field_is_empty_in_dict('out_interface', body)
@@ -132,6 +132,7 @@ class Validation():
         try:
             body = await request.json()        
             
+            Validation.check_field_is_empty_in_dict('device_name', body)
             Validation.check_field_is_empty_in_dict('interface_name', body)
             Validation.check_field_is_empty_in_dict('public_key', body)
             Validation.check_field_is_empty_in_dict('preshared_key', body)
@@ -143,6 +144,7 @@ class Validation():
                 raise FieldRequired(Validation.errors, 422)
             
             return {
+                "device_name" : body['device_name'],
                 "interface_name" : body['interface_name'],
                 "public_key" : body['public_key'],
                 "preshared_key" : body['preshared_key'], 
@@ -151,6 +153,7 @@ class Validation():
                 "endpoint": body['endpoint']
             }
         except JSONDecodeError as e:
+            Validation.check_field_is_empty_in_dict('device_name', body)
             Validation.check_field_is_empty_in_dict('interface_name', body)
             Validation.check_field_is_empty_in_dict('public_key', body)
             Validation.check_field_is_empty_in_dict('preshared_key', body)
