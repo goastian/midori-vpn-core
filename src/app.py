@@ -9,14 +9,22 @@ try:
     from src.core import WgCore, wireguardInterfaceExists
 except ModuleNotFoundError as e:
     raise WireguardModuleNotFound(f"{ e.msg } . This module is owned by @ELyerr. and is not yet available to the general public.", 404)
-
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
     
 app = FastAPI()
+templates = Jinja2Templates(directory="templates/errors")
+#app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 @app.exception_handler(GlobalException)
 async def custom_api_exception_handler(request: Request, e: GlobalException):
     return JsonResponser.report_error(e.message,  e.code)
+
+
+@app.exception_handler(404)
+async def custom_404_handler(request: Request, exc):
+    return templates.TemplateResponse("404.html", {"request": request}, status_code=404)
 
 
 @app.post("/api/wireguard/mount")
