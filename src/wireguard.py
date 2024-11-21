@@ -23,6 +23,11 @@ class WgConfig():
                 line.write(f"#DNS = \n\n")
                     
     def get_interface(self):
+        """Get Wireguard Interface
+
+        Returns:
+            _type_: list()
+        """
         head = ['[Interface]', '#Address', 'Address' ,'PrivateKey', 'ListenPort', '#DNS','DNS']
         interface = list()        
         for line in self.read_file():

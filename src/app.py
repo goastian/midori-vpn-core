@@ -4,11 +4,11 @@ from fastapi.responses import JSONResponse
 from src.oauth2_server import   Authorization
 from src.expetions import *
 from json.decoder import JSONDecodeError
-from src.validation import Validation, JsonResponser
+from src.validation import Validation, JsonResponser 
 try:
     from src.core import WgCore, wireguardInterfaceExists
 except ModuleNotFoundError as e:
-    raise WireguardModuleNotFound(f"{ e.msg } . This module is owned by Astian Inc. and is not yet available to the general public.", 404)
+    raise WireguardModuleNotFound(f"{ e.msg } . This module is owned by @ELyerr. and is not yet available to the general public.", 404)
 
     
 app = FastAPI()
@@ -21,17 +21,16 @@ async def custom_api_exception_handler(request: Request, e: GlobalException):
 
 @app.post("/api/wireguard/mount")
 async def mount(request: Request):
-    """_Create and mount a new Wireguard Network Interface_
+    """Mount interface 
 
     Args:
-        request (Request): _Request_
- 
+        request (Request): request
+
     Returns:
-        _Response_: _response data_
-    """ 
-    Authorization.check_scope(
-        Validation.check_authorization_header(request), 
-        'vpn_admin') 
+        _type_: _description_
+    """
+    token = Validation.check_authorization_header(request)
+    Authorization.check_scope(token,'vpn_admin')
     
     body = await Validation.check_mount_validation(request)    
     response, code = WgCore.add_interface(body)
@@ -39,16 +38,15 @@ async def mount(request: Request):
      
 
 @app.delete("/api/wireguard/umount")
-async def umount(request: Request):
-    """_summary_
+async def umount(request: Request):   
+    """Remove Interface
 
     Args:
-        request (Request): _Request_ 
+        request (Request): request
 
     Returns:
-        _Response_: _response data_
-
-    """    
+        _json_: json
+    """
     #Checking authorization        
     token = Validation.check_authorization_header(request)       
     Authorization.check_scope(token, 'vpn_admin')
@@ -60,26 +58,34 @@ async def umount(request: Request):
              
     
 @app.get("/api/wireguard/down/{interface_name}")
-async def down(interface_name: str, request: Request):
-    """Stop Wireguard interface
+async def down(interface_name: str, request: Request): 
+    """Shutdown interface
 
     Args:
-        interface_name (str): Connection name
-    """     
+        interface_name (str): Interface Name
+        request (Request): request
+
+    Returns:
+        _json_: json
+    """
     #Checking authorization        
     token = Validation.check_authorization_header(request)     
     Authorization.check_scope(token, 'vpn_admin')   
-                
+    
     response, code = WgCore.stop_interface(interface_name)
     return JsonResponser.report_success(response, code)
     
       
 @app.get("/api/wireguard/up/{interface_name}")
 async def up(interface_name: str, request: Request):
-    """Start wireguard interface
+    """Start interface
 
     Args:
-        interface_name (str): Connection name
+        interface_name (str): Interface Name
+        request (Request): request
+
+    Returns:
+        _json_: json
     """
     #Checking authorization        
     token = Validation.check_authorization_header(request)   
@@ -91,56 +97,50 @@ async def up(interface_name: str, request: Request):
          
 @app.post("/api/wireguard/peer/add")
 async def store(request: Request):
-    """_summary_
+    """Add new peer
+
     Args:
-        request (Request): _description_
+        request (Request): request
 
     Returns:
-        _type_: _description_
-    """ 
-    #Checkin scopes 
+        _json_: json
+    """
+    #Checking scopes 
     token = Validation.check_authorization_header(request)        
     Authorization.check_basic_authentication(token)       
     user_id = Authorization.get_authenticated_user(token).get('id')
 
-    body = await Validation.check_add_peer_validation(request)  
-        
-    response, code =  WgCore.add_peer(user_id, body)
-    
+    body = await Validation.check_add_peer_validation(request)          
+    response, code =  WgCore.add_peer(user_id, body)    
     return JsonResponser.report_success(response, code)
     
    
     
 @app.delete("/api/wireguard/peer/delete")
-async def destroy(request: Request): 
-    """_summary_
-
-    Args:
-        request (Request): _description_
- 
-    Returns:
-        _type_: _description_
-    """
-    
-    #Checning scopes
+async def destroy(request: Request):
+    #Checking scopes
     token = Validation.check_authorization_header(request)        
     Authorization.check_basic_authentication(token)
     
     #Get body content
     body = await Validation.check_remove_peer(request)        
     response, code = WgCore.remove_peer(body)
-
     return  JsonResponser.report_success(response, code)
  
 
 @app.get("/api/system/network-interfaces")
 async def get_interfaces(request: Request):
-    """Return all Network Interfaces available
-    """    
-    #Checking authorization        
+    """Show all physical network interface
+
+    Args:
+        request (Request): request
+
+    Returns:
+        _json_: json
+    """
+    #Checking authorization    
     token = Validation.check_authorization_header(request)         
     Authorization.check_scope(token, 'vpn_admin')
-    
     return JsonResponser.report_success(WgCore.list_network_interfaces(), 200)
 
      

@@ -206,7 +206,7 @@ class Validation():
 class JsonResponser():
     
     @staticmethod
-    def report_error(message, code: int):
+    def report_error(message, code):
         """_Report a response error_
 
         Args:
@@ -222,8 +222,8 @@ class JsonResponser():
             media_type= "application/json")
     
     @staticmethod  
-    def report_success(message : str, code: int):
-        """_Report a response succes message_
+    def report_success(message : str, code):
+        """_Report a response success message_
 
         Args:
             message (str): _Message_
@@ -231,7 +231,7 @@ class JsonResponser():
 
         Returns:
             _JSON_: _JsonResponser_
-        """
+        """ 
         return Response(
             content= json.dumps({"data" : message , "code" : code}), 
             status_code= code, 
