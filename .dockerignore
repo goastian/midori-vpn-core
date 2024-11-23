@@ -1,0 +1,14 @@
+__pycache__
+config
+.git*
+tmp
+.env*
+.gitignore
+docker-compose*
+Dockerfile
+validate*
+video.mp4
+WG.py
+venv
+app-dev.py
+!.dockerignore

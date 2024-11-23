@@ -1,0 +1,14 @@
+version: "3.9"
+
+services:
+  vpn-core:
+    image: elyerr/vpn-core:dev
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config:/app/config
+    env_file:
+      - .env
+    command: uvicorn app:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      - UVICORN_WORKERS=4
