@@ -35,5 +35,8 @@ class PeerNotFound(GlobalException):
     
 class PeerExists(GlobalException):
     pass
+
+class RunConfig(GlobalException):
+    pass
     
     
