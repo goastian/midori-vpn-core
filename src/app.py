@@ -1,4 +1,3 @@
-#!env/bin/python
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from src.oauth2_server import   Authorization
@@ -12,7 +11,11 @@ except ModuleNotFoundError as e:
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
     
-app = FastAPI()
+app = FastAPI(
+    docs_url=None, 
+    redoc_url=None,  
+    openapi_url=None 
+    )
 templates = Jinja2Templates(directory="templates/errors")
 #app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -151,4 +154,11 @@ async def get_interfaces(request: Request):
     Authorization.check_scope(token, 'vpn_admin')
     return JsonResponser.report_success(WgCore.list_network_interfaces(), 200)
 
-     
+@app.post("/api/system/reload-networks")
+async def reload_wgs(request: Request):
+    token = Validation.check_authorization_header(request)        
+    Authorization.check_scope(token, 'vpn_admin')
+    
+    body = await request.json() 
+    [response , code ] = WgCore.reload_interfaces(body['name'])
+    return JsonResponser.report_success(response, code)
