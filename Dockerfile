@@ -1,14 +1,12 @@
-FROM python:3.11-slim
- 
+FROM python:3.11-alpine
+
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
-    wireguard \
+RUN apk add --no-cache \
+    wireguard-tools \
     iproute2 \
     iptables \
-    net-tools \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    net-tools
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -18,3 +16,4 @@ COPY . .
 EXPOSE 8000
 
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+
