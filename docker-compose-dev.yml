@@ -2,9 +2,9 @@ version: "3.9"
 
 services:
   vpn-core:
-    image: elyerr/vpn-core:latest
+    image: elyerr/vpn-core:dev
     ports:
-      - "8020:8000"
+      - "8021:8000"
     volumes:
       - vpn-core-data:/app/config
       - .env:/app/.env
