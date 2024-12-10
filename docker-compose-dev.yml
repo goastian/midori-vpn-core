@@ -13,6 +13,7 @@ services:
       net.ipv4.ip_forward: 1
     ports:
       - "8021:8000"
+      - "51820:51850/udp"
     volumes:
       - vpn-core-data:/app/config
       - .env:/app/.env
@@ -20,11 +21,11 @@ services:
     environment:
       - UVICORN_WORKERS=4 
     networks:
-      - vpn_core_public_net
+      - vpn-core-public-net
 
 volumes:
   vpn-core-data:
 
 networks:
-  vpn_core_public_net:
+  vpn-core-public-net:
     driver: bridge
