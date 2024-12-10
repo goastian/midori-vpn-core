@@ -9,6 +9,8 @@ services:
       - SYS_MODULE
     devices:
       - /dev/net/tun:/dev/net/tun
+    sysctls:
+      net.ipv4.ip_forward: 1
     ports:
       - "8021:8000"
     volumes:
