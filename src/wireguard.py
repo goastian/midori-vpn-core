@@ -1,8 +1,8 @@
-import os
+import os, subprocess
 from src.expetions import *
 
 class WgConfig():
-         
+    
     def __init__(self, interface_name : str) -> None:
         self.config_dir = 'config'
         self.config_file =  f"{self.config_dir}/{interface_name}.conf"
@@ -11,11 +11,15 @@ class WgConfig():
         if not os.path.exists(self.config_dir):
             os.mkdir(self.config_dir)
     
-    def set_interface(self, private_key: str, address: str, listen_port: str, dns : str = None):
+    def get_config_file(self):
+        return self.config_file
+    
+    def set_interface(self, private_key: str, net: str, subnet: str, listen_port: str, dns : str = None):
         with open(self.config_file, 'w') as line:
             line.write("[Interface]\n") 
             line.write(f"PrivateKey = {private_key}\n")
-            line.write(f"#Address = {address}\n")
+            line.write(f"#PhysicalInterface = {net}\n")
+            line.write(f"#Address = {subnet}\n")
             line.write(f"ListenPort = {listen_port}\n")
             if dns is not None:
                 line.write(f"DNS = {dns}\n\n")
@@ -28,7 +32,7 @@ class WgConfig():
         Returns:
             _type_: list()
         """
-        head = ['[Interface]', '#Address', 'Address' ,'PrivateKey', 'ListenPort', '#DNS','DNS']
+        head = ['[Interface]', '#PhysicalInterface', '#Address', 'PrivateKey', 'ListenPort', '#DNS','DNS']
         interface = list()        
         for line in self.read_file():
             if any(line.startswith(key) for key in head):
@@ -36,8 +40,14 @@ class WgConfig():
         interface.append('\n')
         return interface
     
-    def get_interface_address(self):
-        head = ["Address", "#Address"]
+    def get_subnet(self):
+        head = ['#Address']
+        for line in self.read_file():
+            if any(line.startswith(key) for key in head):
+                return line.split('=')[1].strip()
+    
+    def get_physical_interface(self):
+        head = ["#PhysicalInterface"]
         for line in self.read_file():
             if any(line.startswith(key) for key in head):
                 return line.split('=')[1].strip()
@@ -84,7 +94,7 @@ class WgConfig():
                 return True
             
         return False
-             
+
     def read_file(self):
         file_content = list()      
         with open(self.config_file, 'r') as line:
@@ -107,7 +117,7 @@ class WgConfig():
         if current_peer:
             current_peer.append('\n')
             peers.append(current_peer)
-              
+        
         return peers
     
     def peer_exists(self, value: str):
@@ -132,14 +142,49 @@ class WgConfig():
         for item in content:
             data.append("".join(item))
         return "".join(data)
-     
+    
     def set_dns(self):
         pass 
-    
-    def get_port(self):
-        pass
+ 
     
     def get_private_key(self):
         pass
     
+    
+    @staticmethod
+    def load_config_file(config_file):
+        if os.path.exists(config_file): 
+            try:
+                subprocess.run(['wg-quick','up', config_file], check= True, capture_output = True).stdout
+                return [f"Network Interface run successfully", 201]
+            except subprocess.CalledProcessError as e:
+                raise RunConfig("Can not run the config file", 403)
+    
+    @staticmethod
+    def add_iptables_rules(interface_name: str, physical_interface : str):
+        try:
+            subprocess.run(["iptables", "-A", "INPUT", "-i", interface_name , "-j", "ACCEPT"], check=True)
+            subprocess.run(["iptables", "-A", "OUTPUT", "-o", interface_name, "-j", "ACCEPT"], check=True)
+            #subprocess.run(["iptables", "-A", "FORWARD", "-i", interface_name ,"-j", "ACCEPT"], check=True)
+            
+            subprocess.run(["iptables", "-A", "FORWARD", "-i", interface_name, "-o", physical_interface, "-j", "ACCEPT"],check=True)
+            subprocess.run(["iptables","-A" ,"FORWARD", "-i", physical_interface , "-o" , interface_name ,"-m" , "state", "--state", "RELATED,ESTABLISHED", "-j" ,"ACCEPT"],check=True)
+        except subprocess.CalledProcessError as e:
+            pass
+    
+    @staticmethod
+    def add_subnet(interface_name:str, subnet: str, listen_port:str):
+        try:
+            # Set the subnet and port
+            subprocess.run(["ip", "address", "add", "dev", interface_name, subnet],check=True)
+            subprocess.run(["wg", "set", interface_name, "listen-port" , listen_port],check=True)
+        except subprocess.CalledProcessError as e:
+            return e
+    
+    @staticmethod
+    def create_interface(interface_name: str):
+        try:
+            subprocess.run(["ip", "link", "add", "dev", interface_name , "type", "wireguard"],check=True)
+        except subprocess.CalledProcessError as e:
+            raise e 
     

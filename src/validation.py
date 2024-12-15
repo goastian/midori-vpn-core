@@ -52,7 +52,7 @@ class Validation():
         if field in [None, '']:
             Validation.errors.append({ field :  f"The field {field.replace('_',' ')} is required"})
         
-                          
+        
     @staticmethod
     async def check_mount_validation(request: Request):
         """_Checking if the fields to mount a new interface exists_
@@ -74,28 +74,28 @@ class Validation():
             #Get body content        
             body = await request.json()          
             
-            Validation.check_field_is_empty_in_dict('interface_name', body)
-            Validation.check_field_is_empty_in_dict('address', body)
+            Validation.check_field_is_empty_in_dict('interface_name', body) 
             Validation.check_field_is_empty_in_dict('private_key', body)
             Validation.check_field_is_empty_in_dict('listen_port', body)
-            Validation.check_field_is_empty_in_dict('out_interface', body)
+            Validation.check_field_is_empty_in_dict('physical_interface', body)
+            Validation.check_field_is_empty_in_dict('subnet', body)
             
             if len(Validation.errors) > 0:
                 raise FieldRequired(Validation.errors, 422)
                                         
             return {
-                    "interface_name": body["interface_name"], 
-                    "address": body["address"], 
+                    "interface_name": body["interface_name"],  
                     "private_key" : body["private_key"],
                     "listen_port" : body["listen_port"], 
-                    "out_interface" : body["out_interface"]
+                    "physical_interface" : body["physical_interface"],
+                    "subnet" : body['subnet']
                     }
         except JSONDecodeError as e:
-            Validation.check_field_is_empty_in_dict('interface_name', body)
-            Validation.check_field_is_empty_in_dict('address', body)
+            Validation.check_field_is_empty_in_dict('interface_name', body) 
             Validation.check_field_is_empty_in_dict('private_key', body)
             Validation.check_field_is_empty_in_dict('listen_port', body)
-            Validation.check_field_is_empty_in_dict('out_interface', body)
+            Validation.check_field_is_empty_in_dict('physical_interface', body)
+            Validation.check_field_is_empty_in_dict('subnet', body)
             raise FieldRequired(Validation.errors, 422)
     
     
@@ -109,17 +109,15 @@ class Validation():
             #Get body content        
             body = await request.json()          
             
-            Validation.check_field_is_empty_in_dict('interface_name', body)
-            Validation.check_field_is_empty_in_dict('out_interface', body) 
+            Validation.check_field_is_empty_in_dict('interface_name', body) 
             
             if len(Validation.errors) > 0:
                 raise FieldRequired(Validation.errors, 422)
                                         
-            return {"interface_name": body["interface_name"],"out_interface": body["out_interface"]}
+            return {"interface_name": body["interface_name"]}
         
         except JSONDecodeError as e:
-            Validation.check_field_is_empty_in_dict('interface_name', body)
-            Validation.check_field_is_empty_in_dict('out_interface', body) 
+            Validation.check_field_is_empty_in_dict('interface_name', body) 
             raise FieldRequired(Validation.errors, 422)
         
     
