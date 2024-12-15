@@ -14,7 +14,7 @@ services:
     environment:
       - UVICORN_WORKERS=4 
     networks:
-      - vpn-core-public-net
+      - public-net
 
 volumes:
   data:
