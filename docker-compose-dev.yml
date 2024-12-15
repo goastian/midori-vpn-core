@@ -1,21 +1,14 @@
-version: "3.9"
+name: vpn-control-dev
 
 services:
   vpn-core:
     image: elyerr/vpn-core:dev
-    container_name: vpn-core
-    cap_add:
-      - NET_ADMIN
-      - SYS_MODULE
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    sysctls:
-      net.ipv4.ip_forward: 1
+    privileged: true
     ports:
       - "8021:8000"
       - "51820:51850/udp"
     volumes:
-      - vpn-core-data:/app/config
+      - data:/app/config
       - .env:/app/.env
     command: uvicorn app:app --host 0.0.0.0 --port 8000 --reload
     environment:
@@ -24,8 +17,8 @@ services:
       - vpn-core-public-net
 
 volumes:
-  vpn-core-data:
+  data:
 
 networks:
-  vpn-core-public-net:
+  public-net:
     driver: bridge

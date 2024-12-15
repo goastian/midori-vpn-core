@@ -1,15 +1,22 @@
-FROM python:3.11-alpine
+FROM alpine:3.20
 
 WORKDIR /app
 
 RUN apk add --no-cache \
-    wireguard-tools \
+    python3 \
+    py3-pip \
+    wireguard-tools  \
+    wireguard-tools-bash-completion \
+    wireguard-tools-openrc \
+    wireguard-tools-wg \
+    wireguard-tools-wg-quick \
     iproute2 \
-    iptables \
-    net-tools
+    net-tools \
+    vim \
+    git
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt --break-system-packages
 
 COPY . .
 

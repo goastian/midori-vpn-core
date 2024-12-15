@@ -10,5 +10,6 @@ validate*
 video.mp4
 WG.py
 venv
+video.mp4
 app-dev.py
 !.dockerignore
