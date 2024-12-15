@@ -1,12 +1,13 @@
-name: vpn-control-dev
+name: vpn-core-dev
 
 services:
   vpn-core:
     image: elyerr/vpn-core:dev
+    restart: always
     privileged: true
     ports:
       - "8021:8000"
-      - "51820:51850/udp"
+      - "51820-51850:51820-51850/udp"
     volumes:
       - data:/app/config
       - .env:/app/.env
