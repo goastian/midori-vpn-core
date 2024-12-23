@@ -2,7 +2,7 @@ name: vpn-core
 
 services:
   vpn-core:
-    image: elyerr/vpn-core:dev
+    image: elyerr/vpn-core:latest
     restart: always
     privileged: true
     ports:
