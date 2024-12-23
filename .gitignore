@@ -5,3 +5,4 @@ validate.py
 WG.py
 .env
 tmp
+docker

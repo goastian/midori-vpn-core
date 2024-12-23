@@ -12,4 +12,5 @@ WG.py
 venv
 video.mp4
 app-dev.py
+docker
 !.dockerignore
