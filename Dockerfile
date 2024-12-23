@@ -6,14 +6,13 @@ RUN apk add --no-cache \
     python3 \
     py3-pip \
     wireguard-tools  \
-    wireguard-tools-bash-completion \
-    wireguard-tools-openrc \
+    wireguard-tools-bash-completion \ 
     wireguard-tools-wg \
     wireguard-tools-wg-quick \
     iproute2 \
     net-tools \
-    vim \
-    git
+    iptables \
+    vim 
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt --break-system-packages
