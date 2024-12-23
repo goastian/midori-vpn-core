@@ -2,7 +2,7 @@ from typing import Any
 import dotenv
 import requests
 import os 
-from src.expetions import * 
+from src.exceptions import * 
 
 dotenv.load_dotenv()
         
@@ -23,13 +23,13 @@ class Authorization():
         response = requests.get(f"{API}/api/gateway/check-scope",
                                 verify=False,
                                 headers= { 
-                                          'Authorization' : token, 
-                                          "X-SCOPES": scope,
-                                          "Accept" : "application/json"
-                                          })
+                                        'Authorization' : token, 
+                                        "X-SCOPES": scope,
+                                        "Accept" : "application/json"
+                                        })
         
         if response.status_code == 200:
-           pass
+            pass
         elif response.status_code == 401:
             raise DenyAccess("The client must authenticate itself to get the requested response", 401)
         elif response.status_code == 403:
@@ -51,9 +51,9 @@ class Authorization():
         response = requests.get(f"{API}/api/gateway/check-scope",
                                 verify=False,
                                 headers= { 
-                                          'Authorization' : token, 
-                                          "X-SCOPES": ','.join(scopes)
-                                          })
+                                        'Authorization' : token, 
+                                        "X-SCOPES": ','.join(scopes)
+                                        })
         
         if response.ok:
             pass

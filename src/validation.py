@@ -1,4 +1,4 @@
-from src.expetions import *
+from src.exceptions import *
 from fastapi import Request, Response
 from json.decoder import JSONDecodeError
 import json
@@ -11,7 +11,7 @@ class Validation():
         self.errors = []
     
     @staticmethod
-    def check_authorization_header(request: Request):
+    def checkAuthorizationHeader(request: Request):
         """_Checking the Authorization header_
 
         Args:
@@ -27,9 +27,9 @@ class Validation():
             return request.headers["Authorization"]
         except KeyError as e:
             raise DenyAccess("The authorization header is unavailable", 401)
-       
+
     @staticmethod
-    def check_field_is_empty_in_dict(field : str, body: dict):
+    def checkFieldIsEmptyInDict(field : str, body: dict):
         """_Check field is empty in a dict_
 
         Args:
@@ -43,7 +43,7 @@ class Validation():
             Validation.errors.append({ field :  f"The field {field.replace('_',' ')} is required"})
     
     @staticmethod
-    def check_field_is_empty(field: str):
+    def checkFieldIsEmpty(field: str):
         """_Checking the input field_
 
         Args:
@@ -54,7 +54,7 @@ class Validation():
         
         
     @staticmethod
-    async def check_mount_validation(request: Request):
+    async def checkMountValidation(request: Request):
         """_Checking if the fields to mount a new interface exists_
 
         Args:
@@ -74,11 +74,12 @@ class Validation():
             #Get body content        
             body = await request.json()          
             
-            Validation.check_field_is_empty_in_dict('interface_name', body) 
-            Validation.check_field_is_empty_in_dict('private_key', body)
-            Validation.check_field_is_empty_in_dict('listen_port', body)
-            Validation.check_field_is_empty_in_dict('physical_interface', body)
-            Validation.check_field_is_empty_in_dict('subnet', body)
+            Validation.checkFieldIsEmptyInDict('interface_name', body) 
+            Validation.checkFieldIsEmptyInDict('private_key', body)
+            Validation.checkFieldIsEmptyInDict('listen_port', body)
+            Validation.checkFieldIsEmptyInDict('physical_interface', body)
+            Validation.checkFieldIsEmptyInDict('subnet', body)
+            Validation.checkFieldIsEmptyInDict('address', body)
             
             if len(Validation.errors) > 0:
                 raise FieldRequired(Validation.errors, 422)
@@ -88,19 +89,21 @@ class Validation():
                     "private_key" : body["private_key"],
                     "listen_port" : body["listen_port"], 
                     "physical_interface" : body["physical_interface"],
-                    "subnet" : body['subnet']
+                    "subnet" : body['subnet'],
+                    "address" : body['address'],
                     }
         except JSONDecodeError as e:
-            Validation.check_field_is_empty_in_dict('interface_name', body) 
-            Validation.check_field_is_empty_in_dict('private_key', body)
-            Validation.check_field_is_empty_in_dict('listen_port', body)
-            Validation.check_field_is_empty_in_dict('physical_interface', body)
-            Validation.check_field_is_empty_in_dict('subnet', body)
+            Validation.checkFieldIsEmptyInDict('interface_name', body) 
+            Validation.checkFieldIsEmptyInDict('private_key', body)
+            Validation.checkFieldIsEmptyInDict('listen_port', body)
+            Validation.checkFieldIsEmptyInDict('physical_interface', body)
+            Validation.checkFieldIsEmptyInDict('subnet', body)
+            Validation.checkFieldIsEmptyInDict('address', body)
             raise FieldRequired(Validation.errors, 422)
     
     
     @staticmethod
-    async def check_umount_validation(request: Request):
+    async def checkUmountValidation(request: Request):
         #Reset values
         Validation.errors = []
         body = dict()
@@ -109,7 +112,7 @@ class Validation():
             #Get body content        
             body = await request.json()          
             
-            Validation.check_field_is_empty_in_dict('interface_name', body) 
+            Validation.checkFieldIsEmptyInDict('interface_name', body) 
             
             if len(Validation.errors) > 0:
                 raise FieldRequired(Validation.errors, 422)
@@ -117,12 +120,12 @@ class Validation():
             return {"interface_name": body["interface_name"]}
         
         except JSONDecodeError as e:
-            Validation.check_field_is_empty_in_dict('interface_name', body) 
+            Validation.checkFieldIsEmptyInDict('interface_name', body) 
             raise FieldRequired(Validation.errors, 422)
         
     
     @staticmethod
-    async def check_add_peer_validation(request: Request):        
+    async def checkAddPeerValidation(request: Request):        
         #Reset values
         Validation.errors = []
         body = dict()
@@ -130,13 +133,13 @@ class Validation():
         try:
             body = await request.json()        
             
-            Validation.check_field_is_empty_in_dict('device_name', body)
-            Validation.check_field_is_empty_in_dict('interface_name', body)
-            Validation.check_field_is_empty_in_dict('public_key', body)
-            Validation.check_field_is_empty_in_dict('preshared_key', body)
-            Validation.check_field_is_empty_in_dict('allowed_ips', body)
-            Validation.check_field_is_empty_in_dict('persistent_keepalive', body)
-            Validation.check_field_is_empty_in_dict('endpoint', body)
+            Validation.checkFieldIsEmptyInDict('device_name', body)
+            Validation.checkFieldIsEmptyInDict('interface_name', body)
+            Validation.checkFieldIsEmptyInDict('public_key', body)
+            Validation.checkFieldIsEmptyInDict('preshared_key', body)
+            Validation.checkFieldIsEmptyInDict('allowed_ips', body)
+            Validation.checkFieldIsEmptyInDict('persistent_keepalive', body)
+            Validation.checkFieldIsEmptyInDict('endpoint', body)
             
             if len(Validation.errors) > 0:
                 raise FieldRequired(Validation.errors, 422)
@@ -151,42 +154,42 @@ class Validation():
                 "endpoint": body['endpoint']
             }
         except JSONDecodeError as e:
-            Validation.check_field_is_empty_in_dict('device_name', body)
-            Validation.check_field_is_empty_in_dict('interface_name', body)
-            Validation.check_field_is_empty_in_dict('public_key', body)
-            Validation.check_field_is_empty_in_dict('preshared_key', body)
-            Validation.check_field_is_empty_in_dict('allowed_ips', body)
-            Validation.check_field_is_empty_in_dict('persistent_keepalive', body)
-            Validation.check_field_is_empty_in_dict('endpoint', body)
+            Validation.checkFieldIsEmptyInDict('device_name', body)
+            Validation.checkFieldIsEmptyInDict('interface_name', body)
+            Validation.checkFieldIsEmptyInDict('public_key', body)
+            Validation.checkFieldIsEmptyInDict('preshared_key', body)
+            Validation.checkFieldIsEmptyInDict('allowed_ips', body)
+            Validation.checkFieldIsEmptyInDict('persistent_keepalive', body)
+            Validation.checkFieldIsEmptyInDict('endpoint', body)
             raise FieldRequired(Validation.errors, 422)
         
         
     @staticmethod
-    def check_stop_validation(interface_name: str):
+    def checkStopValidation(interface_name: str):
         #Reset values
         Validation.errors = []
         
         try:
-            Validation.check_field_is_empty(interface_name)
-           
+            Validation.checkFieldIsEmpty(interface_name)
+        
             if len(Validation.errors) > 0:
                 raise FieldRequired(Validation.errors, 422)
             
         except JSONDecodeError as e:
-            Validation.check_field_is_empty(interface_name)            
+            Validation.checkFieldIsEmpty(interface_name)            
             raise FieldRequired(Validation.errors, 422)
         
 
     @staticmethod
-    async def check_remove_peer(request : Request):
+    async def checkRemovePeer(request : Request):
         Validation.errors = []
         body = dict()
 
         try:
             body = await request.json()        
             
-            Validation.check_field_is_empty_in_dict('interface_name', body)
-            Validation.check_field_is_empty_in_dict('public_key', body)  
+            Validation.checkFieldIsEmptyInDict('interface_name', body)
+            Validation.checkFieldIsEmptyInDict('public_key', body)  
             
             if len(Validation.errors) > 0:
                 raise FieldRequired(Validation.errors, 422)
@@ -196,15 +199,15 @@ class Validation():
                 "public_key" : body['public_key']
             }
         except JSONDecodeError as e:
-            Validation.check_field_is_empty_in_dict('interface_name', body)
-            Validation.check_field_is_empty_in_dict('public_key', body) 
+            Validation.checkFieldIsEmptyInDict('interface_name', body)
+            Validation.checkFieldIsEmptyInDict('public_key', body) 
             raise FieldRequired(Validation.errors, 422)
 
 
 class JsonResponser():
     
     @staticmethod
-    def report_error(message, code):
+    def reportError(message, code):
         """_Report a response error_
 
         Args:
@@ -220,7 +223,7 @@ class JsonResponser():
             media_type= "application/json")
     
     @staticmethod  
-    def report_success(message : str, code):
+    def reportSuccess(message : str, code):
         """_Report a response success message_
 
         Args:

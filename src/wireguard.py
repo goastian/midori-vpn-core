@@ -1,5 +1,5 @@
 import os, subprocess
-from src.expetions import *
+from src.exceptions import *
 
 class WgConfig():
     
@@ -11,60 +11,115 @@ class WgConfig():
         if not os.path.exists(self.config_dir):
             os.mkdir(self.config_dir)
     
-    def get_config_file(self):
+    def getConfigFile(self):
+        """Retrieve the current config file
+
+        Returns:
+            _str_: path of file
+        """
         return self.config_file
     
-    def set_interface(self, private_key: str, net: str, subnet: str, listen_port: str, dns : str = None):
+    def setInterface(self, private_key: str, net: str, subnet: str, address: str, listen_port: str, dns : str = None):
+        """Add a new interface to the config file
+
+        Args:
+            private_key (str): Private key
+            net (str): Physical network interface on the current device
+            subnet (str): Subnet for this virtual wireguard network interface example(192.168.1.0/24)
+            address (str): Gateway for this interface example(192.168.1.1/24)
+            listen_port (str): Port to listen connections on this device
+            dns (str, optional): Dns server. Default is None
+        """
         with open(self.config_file, 'w') as line:
             line.write("[Interface]\n") 
+            line.write(f"Address = {address}\n")
             line.write(f"PrivateKey = {private_key}\n")
-            line.write(f"#PhysicalInterface = {net}\n")
-            line.write(f"#Address = {subnet}\n")
             line.write(f"ListenPort = {listen_port}\n")
+            line.write(f"#Subnet = {subnet}\n")
+            line.write(f"#PhysicalInterface = {net}\n")
             if dns is not None:
                 line.write(f"DNS = {dns}\n\n")
             else:
                 line.write(f"#DNS = \n\n")
                     
-    def get_interface(self):
-        """Get Wireguard Interface
+    def getInterface(self):
+        """Return the current interface
 
         Returns:
-            _type_: list()
+            _type_: _description_
         """
-        head = ['[Interface]', '#PhysicalInterface', '#Address', 'PrivateKey', 'ListenPort', '#DNS','DNS']
+        head = ['[Interface]', '#PhysicalInterface', 'Subnet' ,'Address', 'PrivateKey', 'ListenPort', '#DNS','DNS']
         interface = list()        
-        for line in self.read_file():
+        for line in self.readFile():
             if any(line.startswith(key) for key in head):
                 interface.append(line)
         interface.append('\n')
         return interface
     
-    def get_subnet(self):
-        head = ['#Address']
-        for line in self.read_file():
-            if any(line.startswith(key) for key in head):
-                return line.split('=')[1].strip()
-    
-    def get_physical_interface(self):
-        head = ["#PhysicalInterface"]
-        for line in self.read_file():
+    def getSubnet(self):
+        """Retrieve the subnet
+
+        Returns:
+            _str_: string
+        """
+        head = ['#Subnet']
+        for line in self.readFile():
             if any(line.startswith(key) for key in head):
                 return line.split('=')[1].strip()
             
-    def get_interface_listen_port(self):
-        for line in self.read_file():
+    def getAddress(self):
+        """Retrieve the address
+
+        Returns:
+            _str_: string
+        """
+        head = ['#Address']
+        for line in self.readFile():
+            if any(line.startswith(key) for key in head):
+                return line.split('=')[1].strip()
+    
+    def getPhysicalInterface(self):
+        """Return the current physical interface 
+
+        Returns:
+            _str_: string
+        """
+        head = ["#PhysicalInterface"]
+        for line in self.readFile():
+            if any(line.startswith(key) for key in head):
+                return line.split('=')[1].strip()
+            
+    def getListenPort(self):
+        """Retrieve the Listen port 
+
+        Returns:
+            _str_: string
+        """
+        for line in self.readFile():
             if line.startswith("ListenPort"):
                 return line.split('=')[1].strip()
     
-    def config_file_exists(self):
+    def configFileExists(self):
+        """Verifying existing file
+
+        Returns:
+            str: return the config file
+        """
         return os.path.exists(self.config_file)
     
-    def remove_config_file(self):
-        if self.config_file_exists():
+    def deleteConfigFile(self):
+        """Delete the config file
+        """
+        if self.configFileExists():
             os.remove(self.config_file)
     
-    def add_peer(self, user_id: str, peer:dict):
+    def addPeer(self, user_id: str, peer:dict):
+        """Add a new peer for this virtual wireguard current interface
+
+        Args:
+            user_id (str): user id 
+            peer (dict): dictionary of peer with config keys
+        """
         with open(self.config_file, 'a+') as file: 
             file.write("[Peer]\n")
             file.write(f"#Name = {peer.get('device_name')}\n")
@@ -75,34 +130,43 @@ class WgConfig():
             file.write(f"PersistentKeepalive = {peer.get('persistent_keepalive')}\n") 
             file.write(f"Endpoint = {peer.get('endpoint')}\n\n") 
         
-    def remove_peer(self, value: str):       
-        """Remove peers 
+    def deletePeer(self, public_key: str): 
+        """Delete peer of the system
+
         Args:
-            index (_type_): Any
+            public_key (str): public key of the peer
+
+        Returns:
+            _boolean_: True is remove and False does not remove
         """
         content = list()        
-        content.append(self.get_interface())    #Add interface  
-        peers = self.get_peers()        # get peers
+        content.append(self.getInterface())    #Add interface  
+        peers = self.getPeers()        # get peers
                 
-        for peer in self.get_peers():
-            if any(value in line for line in peer) and any('PublicKey' in line for line in peer):
+        for peer in self.getPeers():
+            if any(public_key in line for line in peer) and any('PublicKey' in line for line in peer):
                 peers.remove(peer)          
                 content.extend(peers)
                 
                 with open(self.config_file, 'w') as file:
-                    file.write(self.change_list_to_string(content))                    
+                    file.write(self.changeListToString(content))                    
                 return True
             
         return False
 
-    def read_file(self):
+    def readFile(self):
+        """Read the file content
+
+        Returns:
+            _type_: _description_
+        """
         file_content = list()      
         with open(self.config_file, 'r') as line:
             file_content = line.readlines()
         return file_content  
     
-    def get_peers(self):
-        interface_peers = [key for key in self.read_file() if any(substring in key for substring in ['Peer', 'Name', 'User', 'PublicKey','AllowedIPs', 'Endpoint', 'PersistentKeepalive', 'PresharedKey'])]
+    def getPeers(self):
+        interface_peers = [key for key in self.readFile() if any(substring in key for substring in ['Peer', 'Name', 'User', 'PublicKey','AllowedIPs', 'Endpoint', 'PersistentKeepalive', 'PresharedKey'])]
         
         peers = []
         current_peer = []
@@ -120,39 +184,38 @@ class WgConfig():
         
         return peers
     
-    def peer_exists(self, value: str):
-        for peer in self.get_peers():
+    def peerExists(self, value: str):
+        for peer in self.getPeers():
             if value in ''.join(peer):
                 return True
         return False
         
-    def find_peer(self, value: str):
-        for peer in self.get_peers():
+    def findPeer(self, value: str):
+        for peer in self.getPeers():
             if value in ''.join(peer):
                 return peer
         return False
     
-    def search_peers(self, value: str):         
-        for peer in self.get_peers():
+    def searchPeers(self, value: str):         
+        for peer in self.getPeers():
             if value in ''.join(peer):
                 yield peer
                 
-    def change_list_to_string(self, content: list):
+    def changeListToString(self, content: list):
         data = list()
         for item in content:
             data.append("".join(item))
         return "".join(data)
     
-    def set_dns(self):
+    def setDNS(self):
         pass 
- 
     
-    def get_private_key(self):
+    def getPrivateKey(self):
         pass
     
     
     @staticmethod
-    def load_config_file(config_file):
+    def loadConfigFile(config_file):
         if os.path.exists(config_file): 
             try:
                 subprocess.run(['wg-quick','up', config_file], check= True, capture_output = True).stdout
@@ -161,30 +224,9 @@ class WgConfig():
                 raise RunConfig("Can not run the config file", 403)
     
     @staticmethod
-    def add_iptables_rules(interface_name: str, physical_interface : str):
-        try:
-            subprocess.run(["iptables", "-A", "INPUT", "-i", interface_name , "-j", "ACCEPT"], check=True)
-            subprocess.run(["iptables", "-A", "OUTPUT", "-o", interface_name, "-j", "ACCEPT"], check=True)
-            #subprocess.run(["iptables", "-A", "FORWARD", "-i", interface_name ,"-j", "ACCEPT"], check=True)
-            
-            subprocess.run(["iptables", "-A", "FORWARD", "-i", interface_name, "-o", physical_interface, "-j", "ACCEPT"],check=True)
-            subprocess.run(["iptables","-A" ,"FORWARD", "-i", physical_interface , "-o" , interface_name ,"-m" , "state", "--state", "RELATED,ESTABLISHED", "-j" ,"ACCEPT"],check=True)
-        except subprocess.CalledProcessError as e:
-            pass
+    def cleanNetworkLink(link: str):
+        return link.split("@")[0]
     
     @staticmethod
-    def add_subnet(interface_name:str, subnet: str, listen_port:str):
-        try:
-            # Set the subnet and port
-            subprocess.run(["ip", "address", "add", "dev", interface_name, subnet],check=True)
-            subprocess.run(["wg", "set", interface_name, "listen-port" , listen_port],check=True)
-        except subprocess.CalledProcessError as e:
-            return e
-    
-    @staticmethod
-    def create_interface(interface_name: str):
-        try:
-            subprocess.run(["ip", "link", "add", "dev", interface_name , "type", "wireguard"],check=True)
-        except subprocess.CalledProcessError as e:
-            raise e 
-    
+    def deleteSubnetPrefix(subnet: str):
+        return subnet.split("/")[0]
