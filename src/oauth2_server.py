@@ -19,7 +19,7 @@ class Authorization():
         Raises:
             DenyAccess: _description_
         """
-        API = os.getenv('HOST')
+        API = os.getenv('AUTHORIZATION_SERVER')
         response = requests.get(f"{API}/api/gateway/check-scope",
                                 verify=False,
                                 headers= { 
@@ -47,7 +47,7 @@ class Authorization():
             DenyAccess: _description_
         """
         
-        API = os.getenv('HOST')
+        API = os.getenv('AUTHORIZATION_SERVER')
         response = requests.get(f"{API}/api/gateway/check-scope",
                                 verify=False,
                                 headers= { 
@@ -70,7 +70,7 @@ class Authorization():
         Args:
             token (str): _Bearer token_
         """
-        API = os.getenv('HOST')
+        API = os.getenv('AUTHORIZATION_SERVER')
         response = requests.get(f"{API}/api/gateway/check-authentication",
                                 verify=False,
                                 headers= {'Authorization' : token})
@@ -85,7 +85,7 @@ class Authorization():
     
     @staticmethod
     def get_authenticated_user(token: str):
-        API = os.getenv('HOST')
+        API = os.getenv('AUTHORIZATION_SERVER')
         response = requests.get(f"{API}/api/gateway/user",
                                 verify=False,
                                 headers= {'Authorization' : token})
@@ -96,4 +96,26 @@ class Authorization():
             raise DenyAccess("The client must authenticate itself to get the requested response", 401)
         elif response.status_code == 403:
             raise DenyAccess("The client does not have access rights to the content", 403)
+
+class vpnControl():    
+    
+    @staticmethod
+    def checkNumberOfDevices(token:str):
+        API = os.getenv('CONTROL_SERVER')
+        response = requests.get(f"{API}/api/peers",
+                                verify=False,
+                                headers= { 
+                                        'Authorization' : token,  
+                                        "Accept" : "application/json"
+                                        })
+        
+    
+        if response.status_code == 200:
+            data = response.json()
+            # Working in process
+        elif response.status_code == 401:
+            raise DenyAccess("The client must authenticate itself to get the requested response", 401)
+        elif response.status_code == 403:
+            raise DenyAccess("The client does not have access rights to the content", 403)
+    
     

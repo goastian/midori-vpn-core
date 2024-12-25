@@ -14,7 +14,7 @@ class AuthorizationHeaderRequired(GlobalException):
     
 class BodyRequestIsEmpty(GlobalException):
     pass           
-     
+
 class DeviceUnavailable(GlobalException):
     pass   
                 
@@ -26,10 +26,10 @@ class wireguardInterfaceExists(GlobalException):
         
 class WireguardModuleNotFound(GlobalException):
     pass    
-     
+
 class WireguardConfigExist(GlobalException):
-     pass
- 
+    pass
+
 class PeerNotFound(GlobalException):
     pass   
     
@@ -38,5 +38,3 @@ class PeerExists(GlobalException):
 
 class RunConfig(GlobalException):
     pass
-    
-    

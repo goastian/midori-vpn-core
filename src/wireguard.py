@@ -1,4 +1,4 @@
-import os, subprocess
+import os, subprocess, ipaddress
 from src.exceptions import *
 
 class WgConfig():
@@ -62,10 +62,18 @@ class WgConfig():
         Returns:
             _str_: string
         """
+        #Searching subnet into the config file
         head = ['#Subnet']
         for line in self.readFile():
             if any(line.startswith(key) for key in head):
                 return line.split('=')[1].strip()
+        #Searching subnet using address of interface
+        address = self.getAddress() 
+        split_address = address.split("/")
+        subnet = split_address[0].split(".")
+        subnet[-1] = "0"
+        subnet_process = ".".join(subnet)
+        return f"{subnet_process}/{split_address[1]}"
             
     def getAddress(self):
         """Retrieve the address
@@ -73,7 +81,7 @@ class WgConfig():
         Returns:
             _str_: string
         """
-        head = ['#Address']
+        head = ['#Address', 'Address']
         for line in self.readFile():
             if any(line.startswith(key) for key in head):
                 return line.split('=')[1].strip()
@@ -150,15 +158,11 @@ class WgConfig():
                 
                 with open(self.config_file, 'w') as file:
                     file.write(self.changeListToString(content))                    
-                return True
-            
+                return True            
         return False
 
     def readFile(self):
-        """Read the file content
-
-        Returns:
-            _type_: _description_
+        """Read the file content        
         """
         file_content = list()      
         with open(self.config_file, 'r') as line:
@@ -166,6 +170,8 @@ class WgConfig():
         return file_content  
     
     def getPeers(self):
+        """Retrieve the all peers
+        """
         interface_peers = [key for key in self.readFile() if any(substring in key for substring in ['Peer', 'Name', 'User', 'PublicKey','AllowedIPs', 'Endpoint', 'PersistentKeepalive', 'PresharedKey'])]
         
         peers = []
@@ -185,23 +191,43 @@ class WgConfig():
         return peers
     
     def peerExists(self, value: str):
+        """Checking if it the peer exists in the config file
+
+        Args:
+            value (str): Any value for the peer
+        """
         for peer in self.getPeers():
             if value in ''.join(peer):
                 return True
         return False
         
     def findPeer(self, value: str):
+        """Search peer in the config file
+
+        Args:
+            value (str): Any value for the peer         
+        """
         for peer in self.getPeers():
             if value in ''.join(peer):
                 return peer
         return False
     
-    def searchPeers(self, value: str):         
+    def searchPeers(self, value: str):     
+        """Search peers using a common value like user_id
+        
+        Args:
+            value (str): user id
+        """   
         for peer in self.getPeers():
             if value in ''.join(peer):
                 yield peer
                 
     def changeListToString(self, content: list):
+        """Transform any list to string key
+
+        Args:
+            content (list): list of data
+        """
         data = list()
         for item in content:
             data.append("".join(item))
@@ -215,7 +241,15 @@ class WgConfig():
     
     
     @staticmethod
-    def loadConfigFile(config_file):
+    def loadConfigFile(config_file: str):
+        """Loading and started the wireguard network using a config file
+
+        Args:
+            config_file (_type_): path of the config file
+
+        Raises:
+            RunConfig: run exception if it the config does not exists 
+        """
         if os.path.exists(config_file): 
             try:
                 subprocess.run(['wg-quick','up', config_file], check= True, capture_output = True).stdout
@@ -225,8 +259,9 @@ class WgConfig():
     
     @staticmethod
     def cleanNetworkLink(link: str):
+        """Split the string using @ character and return the first value
+
+        Args:
+            link (str): string to split
+        """
         return link.split("@")[0]
-    
-    @staticmethod
-    def deleteSubnetPrefix(subnet: str):
-        return subnet.split("/")[0]

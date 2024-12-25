@@ -1,34 +1,31 @@
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from src.oauth2_server import   Authorization
-from src.exceptions import *
-from json.decoder import JSONDecodeError
-from src.validation import Validation, JsonResponser 
+from fastapi import FastAPI, Request 
+from src.oauth2_server import Authorization,vpnControl
+from src.exceptions import * 
+from src.validation import Validation, JsonResponser  
 try:
-    from src.core import WgCore, wireguardInterfaceExists
+    from src.core import WgCore 
 except ModuleNotFoundError as e:
     raise WireguardModuleNotFound(f"{ e.msg } . This module is owned by @ELyerr. and is not yet available to the general public.", 404)
-from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates 
     
 app = FastAPI(
     docs_url=None, 
     redoc_url=None,  
     openapi_url=None 
     )
-templates = Jinja2Templates(directory="templates/errors")
-#app.mount("/static", StaticFiles(directory="static"), name="static")
-
+templates = Jinja2Templates(directory="templates") 
 
 @app.exception_handler(GlobalException)
 async def custom_api_exception_handler(request: Request, e: GlobalException):
     return JsonResponser.reportError(e.message,  e.code)
 
-
 @app.exception_handler(404)
 async def custom_404_handler(request: Request, exc):
-    return templates.TemplateResponse("404.html", {"request": request}, status_code=404)
+    return templates.TemplateResponse("errors/404.html", {"request": request}, status_code=404)
 
+@app.exception_handler(405)
+async def custom_404_handler(request: Request, exc):
+    return templates.TemplateResponse("errors/404.html", {"request": request}, status_code=405)
 
 @app.post("/api/wireguard/mount")
 async def mount(request: Request):
@@ -63,7 +60,7 @@ async def umount(request: Request):
     
     #Get body content
     body = await Validation.checkUmountValidation(request)
-    response, code = WgCore.deleteInterface(body)        
+    response, code = WgCore.deleteInterface(body['interface_name'])        
     return JsonResponser.reportSuccess(response, code)    
     
 @app.get("/api/wireguard/down/{interface_name}")
@@ -107,6 +104,8 @@ async def store(request: Request):
     token = Validation.checkAuthorizationHeader(request)           
     Authorization.check_scope(token, 'vpn-free')    
     user_id = Authorization.get_authenticated_user(token).get('id')
+    
+    vpnControl.checkNumberOfDevices(token)
 
     body = await Validation.checkAddPeerValidation(request)       
     response, code =  WgCore.addPeer(user_id, body)    
@@ -115,6 +114,14 @@ async def store(request: Request):
     
 @app.delete("/api/wireguard/peer/delete")
 async def destroy(request: Request):
+    """delete peers
+
+    Args:
+        request (Request): Request
+
+    Returns:
+        _type_: JsonResponser
+    """
     #Checking scopes
     token = Validation.checkAuthorizationHeader(request)        
     Authorization.check_basic_authentication(token)
@@ -141,17 +148,18 @@ async def getInterfaces(request: Request):
 
 @app.post("/api/system/reload-networks")
 async def reloadNetworks(request: Request):
+    """Reload the interface 
+
+    Args:
+        request (Request): Request 
+
+    Returns:
+        _json_: Json response
+    """
     token = Validation.checkAuthorizationHeader(request)        
     Authorization.check_scope(token, 'admin')
     
     body = await request.json() 
-    [response , code ] = WgCore.reloadInterfaces(body['name'])
-    return JsonResponser.reportSuccess(response, code)
-
-@app.post("/api/system/firewall-reset")
-async def firewallReset(request: Request):
-    token = Validation.checkAuthorizationHeader(request)        
-    Authorization.check_scope(token, 'admin')
     
-    [response , code ] = WgCore.prepareFirewall()
+    [response , code ] = WgCore.reloadInterfaces(body['name'])
     return JsonResponser.reportSuccess(response, code)
