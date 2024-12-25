@@ -41,7 +41,7 @@ async def mount(request: Request):
         _type_: _description_
     """
     token = Validation.checkAuthorizationHeader(request)
-    Authorization.check_scope(token,'vpn_admin')
+    Authorization.check_scope(token,'admin')
     
     body = await Validation.checkMountValidation(request)    
     response, code = WgCore.addInterface(body)
@@ -59,7 +59,7 @@ async def umount(request: Request):
     """
     #Checking authorization        
     token = Validation.checkAuthorizationHeader(request)       
-    Authorization.check_scope(token, 'vpn_admin')
+    Authorization.check_scope(token, 'admin')
     
     #Get body content
     body = await Validation.checkUmountValidation(request)
@@ -79,7 +79,7 @@ async def down(interface_name: str, request: Request):
     """
     #Checking authorization        
     token = Validation.checkAuthorizationHeader(request)     
-    Authorization.check_scope(token, 'vpn_admin')   
+    Authorization.check_scope(token, 'admin')   
     
     response, code = WgCore.stopInterface(interface_name)
     return JsonResponser.reportSuccess(response, code)
@@ -88,7 +88,7 @@ async def down(interface_name: str, request: Request):
 @app.get("/api/wireguard/up/{interface_name}")
 async def up(interface_name: str, request: Request):     
     token = Validation.checkAuthorizationHeader(request)   
-    Authorization.check_scope(token, 'vpn_admin')
+    Authorization.check_scope(token, 'admin')
 
     response, code = WgCore.start_interface(interface_name)
     return JsonResponser.reportSuccess(response, code)
@@ -104,8 +104,8 @@ async def store(request: Request):
         _json_: json
     """
     #Checking scopes 
-    token = Validation.checkAuthorizationHeader(request)        
-    Authorization.check_basic_authentication(token)       
+    token = Validation.checkAuthorizationHeader(request)           
+    Authorization.check_scope(token, 'vpn-free')    
     user_id = Authorization.get_authenticated_user(token).get('id')
 
     body = await Validation.checkAddPeerValidation(request)       
@@ -136,13 +136,13 @@ async def getInterfaces(request: Request):
     """
     #Checking authorization    
     token = Validation.checkAuthorizationHeader(request)         
-    Authorization.check_scope(token, 'vpn_admin')
+    Authorization.check_scope(token, 'admin')
     return JsonResponser.reportSuccess(WgCore.listNetworkInterfaces(), 200)
 
 @app.post("/api/system/reload-networks")
 async def reloadNetworks(request: Request):
     token = Validation.checkAuthorizationHeader(request)        
-    Authorization.check_scope(token, 'vpn_admin')
+    Authorization.check_scope(token, 'admin')
     
     body = await request.json() 
     [response , code ] = WgCore.reloadInterfaces(body['name'])
@@ -151,7 +151,7 @@ async def reloadNetworks(request: Request):
 @app.post("/api/system/firewall-reset")
 async def firewallReset(request: Request):
     token = Validation.checkAuthorizationHeader(request)        
-    Authorization.check_scope(token, 'vpn_admin')
+    Authorization.check_scope(token, 'admin')
     
     [response , code ] = WgCore.prepareFirewall()
     return JsonResponser.reportSuccess(response, code)
