@@ -38,7 +38,7 @@ async def mount(request: Request):
         _type_: _description_
     """
     token = Validation.checkAuthorizationHeader(request)
-    Authorization.check_scope(token,'admin')
+    Authorization.check_scope(token,'vpn-full')
     
     body = await Validation.checkMountValidation(request)    
     response, code = WgCore.addInterface(body)
@@ -56,7 +56,7 @@ async def umount(request: Request):
     """
     #Checking authorization        
     token = Validation.checkAuthorizationHeader(request)       
-    Authorization.check_scope(token, 'admin')
+    Authorization.check_scope(token, 'vpn-full')
     
     #Get body content
     body = await Validation.checkUmountValidation(request)
@@ -76,7 +76,7 @@ async def down(interface_name: str, request: Request):
     """
     #Checking authorization        
     token = Validation.checkAuthorizationHeader(request)     
-    Authorization.check_scope(token, 'admin')   
+    Authorization.check_scope(token, 'vpn-full')   
     
     response, code = WgCore.stopInterface(interface_name)
     return JsonResponser.reportSuccess(response, code)
@@ -85,7 +85,7 @@ async def down(interface_name: str, request: Request):
 @app.get("/api/wireguard/up/{interface_name}")
 async def up(interface_name: str, request: Request):     
     token = Validation.checkAuthorizationHeader(request)   
-    Authorization.check_scope(token, 'admin')
+    Authorization.check_scope(token, 'vpn-full')
 
     response, code = WgCore.start_interface(interface_name)
     return JsonResponser.reportSuccess(response, code)
@@ -143,7 +143,7 @@ async def getInterfaces(request: Request):
     """
     #Checking authorization    
     token = Validation.checkAuthorizationHeader(request)         
-    Authorization.check_scope(token, 'admin')
+    Authorization.check_scope(token, 'vpn-full')
     return JsonResponser.reportSuccess(WgCore.listNetworkInterfaces(), 200)
 
 @app.post("/api/system/reload-networks")
@@ -157,7 +157,7 @@ async def reloadNetworks(request: Request):
         _json_: Json response
     """
     token = Validation.checkAuthorizationHeader(request)        
-    Authorization.check_scope(token, 'admin')
+    Authorization.check_scope(token, 'vpn-full')
     
     body = await request.json() 
     
