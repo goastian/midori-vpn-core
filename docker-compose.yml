@@ -4,21 +4,31 @@ services:
   vpn-core:
     image: elyerr/vpn-core:latest
     restart: always
-    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    ulimits:
+      nofile:
+        soft: 51200
+        hard: 51200
+    env_file:
+      - .env
     ports:
-      - "8021:8000/tcp"
-      - "51820-51850:51820-51850/udp"
+       - "50051:50051/tcp"
+       - "51820-51850:51820-51850/udp"
+       - "1080:1080/tcp" 
     volumes:
       - data:/app/config
       - .env:/app/.env
-    command: uvicorn app:app --host 0.0.0.0 --port 8000 --reload
-    environment:
-      - UVICORN_WORKERS=4 
+      - .env:/usr/share/server/.env
+      - database:/app/data
+      - ./ssl:/ssl #
+    command: sh -c "/usr/local/bin/start.sh"
     networks:
       - public-net
-
 volumes:
-  data:
+  data: 
+  database:
 
 networks:
   public-net:
