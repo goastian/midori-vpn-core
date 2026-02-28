@@ -28,7 +28,7 @@ Low-level WireGuard peer management. Protected by shared secret (`X-Core-Token`)
 ### Control API
 User-facing API for managing VPN connections, servers and audit logs. Protected by JWT tokens from Authentik. Enabled automatically when `DATABASE_URL` and `AUTHENTIK_CLIENT_ID` are set.
 
-### Control Frontend (`control/`)
+### Control Frontend (`midori-vpn-control/`)
 Vue 3 + TypeScript SPA with OAuth2/OIDC login flow (PKCE) against `accounts.astian.org`.
 
 ## Requirements
@@ -48,17 +48,6 @@ docker compose -f docker-compose-dev.yml up --build
 # Production (pre-built image)
 docker compose up
 ```
-
-### Frontend development
-
-```bash
-cd control
-npm install
-npm run dev
-# Opens at http://localhost:5173 (proxies API to :8080)
-```
-
-## Environment Variables
 
 ### Core (WireGuard)
 
