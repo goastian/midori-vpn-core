@@ -11,7 +11,6 @@ vendor/
 
 # Config & secrets
 .env
-config/
 tmp/
 
 # IDE
@@ -27,10 +26,10 @@ Thumbs.db
 # Docker
 docker/
 
-# Node / Vue
-frontend/node_modules/
-frontend/dist/
+# Node / Vue (control frontend)
+control/node_modules/
+control/dist/
 
-# Legacy Python
+# Legacy
 __pycache__
 venv/
