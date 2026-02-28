@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,7 +27,33 @@ const (
 	cbResetTimeout       = 30 * time.Second
 )
 
-var coreHTTP = &http.Client{Timeout: coreRequestTimeout}
+var (
+	coreHTTP = &http.Client{Timeout: coreRequestTimeout}
+	coreTLSSkipVerify bool
+)
+
+// InitCoreClient configures the core HTTP client with TLS settings.
+func InitCoreClient(skipVerify bool) {
+	coreTLSSkipVerify = skipVerify
+	coreHTTP = &http.Client{
+		Timeout: coreRequestTimeout,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: skipVerify,
+			},
+		},
+	}
+}
+
+// coreScheme returns "https" if the server port is 443 or the host contains
+// a scheme hint, otherwise "http". Servers can opt-in to TLS by setting
+// their API port to 443 or by prefixing the host with "https://".
+func coreScheme(server *models.VPNServer) string {
+	if server.Port == 443 {
+		return "https"
+	}
+	return "http"
+}
 
 // --- Circuit breaker (per server host) ---
 
@@ -167,7 +194,7 @@ func callCoreAddPeer(server *models.VPNServer, pubkey string) (*CoreAddPeerRespo
 		"keepalive":  25,
 	})
 
-	coreURL := fmt.Sprintf("http://%s:%d/api/v1/peers", server.Host, server.Port)
+	coreURL := fmt.Sprintf("%s://%s:%d/api/v1/peers", coreScheme(server), server.Host, server.Port)
 	req, err := http.NewRequest(http.MethodPost, coreURL, nil)
 	if err != nil {
 		return nil, err
@@ -202,7 +229,7 @@ func callCoreAddPeer(server *models.VPNServer, pubkey string) (*CoreAddPeerRespo
 
 func callCoreRemovePeer(server *models.VPNServer, pubkey string) error {
 	encodedKey := url.PathEscape(pubkey)
-	coreURL := fmt.Sprintf("http://%s:%d/api/v1/peers/%s", server.Host, server.Port, encodedKey)
+	coreURL := fmt.Sprintf("%s://%s:%d/api/v1/peers/%s", coreScheme(server), server.Host, server.Port, encodedKey)
 
 	req, err := http.NewRequest(http.MethodDelete, coreURL, nil)
 	if err != nil {
@@ -226,7 +253,7 @@ func callCoreRemovePeer(server *models.VPNServer, pubkey string) error {
 
 func callCoreGetPeerStats(server *models.VPNServer, pubkey string) (*CorePeerStatsResponse, error) {
 	encodedKey := url.PathEscape(pubkey)
-	coreURL := fmt.Sprintf("http://%s:%d/api/v1/peers/%s/stats", server.Host, server.Port, encodedKey)
+	coreURL := fmt.Sprintf("%s://%s:%d/api/v1/peers/%s/stats", coreScheme(server), server.Host, server.Port, encodedKey)
 
 	req, err := http.NewRequest(http.MethodGet, coreURL, nil)
 	if err != nil {
@@ -258,7 +285,7 @@ func callCoreGetPeerStats(server *models.VPNServer, pubkey string) (*CorePeerSta
 }
 
 func callCoreListPeers(server *models.VPNServer) ([]CorePeerStatsResponse, error) {
-	coreURL := fmt.Sprintf("http://%s:%d/api/v1/peers", server.Host, server.Port)
+	coreURL := fmt.Sprintf("%s://%s:%d/api/v1/peers", coreScheme(server), server.Host, server.Port)
 
 	req, err := http.NewRequest(http.MethodGet, coreURL, nil)
 	if err != nil {
