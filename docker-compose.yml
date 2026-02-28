@@ -17,11 +17,45 @@ services:
       - "51820:51820/udp"
     volumes:
       - wg-config:/etc/wireguard
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - vpn-net
+
+  postgres:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: midori
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-midori}
+      POSTGRES_DB: midori_vpn
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U midori -d midori_vpn"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - vpn-net
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     networks:
       - vpn-net
 
 volumes:
   wg-config:
+  pg-data:
 
 networks:
   vpn-net:
