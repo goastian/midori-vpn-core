@@ -25,7 +25,7 @@ func main() {
 	router := api.NewRouter(cfg, manager)
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
-	log.Printf("astian-vpn-core listening on %s", addr)
+	log.Printf("MidoriVPN listening on %s", addr)
 
 	srv := &http.Server{
 		Addr:    addr,

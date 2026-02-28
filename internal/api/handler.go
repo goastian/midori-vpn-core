@@ -7,9 +7,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/goastian/astian-vpn-core/internal/config"
-	"github.com/goastian/astian-vpn-core/internal/crypto"
-	"github.com/goastian/astian-vpn-core/internal/wg"
+	"github.com/goastian/midori-vpn-core/internal/config"
+	"github.com/goastian/midori-vpn-core/internal/crypto"
+	"github.com/goastian/midori-vpn-core/internal/wg"
 )
 
 type Handler struct {

@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/goastian/astian-vpn-core/internal/config"
-	"github.com/goastian/astian-vpn-core/internal/crypto"
-	"github.com/goastian/astian-vpn-core/internal/ippool"
+	"github.com/goastian/midori-vpn-core/internal/config"
+	"github.com/goastian/midori-vpn-core/internal/crypto"
+	"github.com/goastian/midori-vpn-core/internal/ippool"
 
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"

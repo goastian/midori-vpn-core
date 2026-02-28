@@ -71,7 +71,7 @@ sudo WG_INTERFACE=wg0 VPN_CORE_TOKEN=secret ./vpn-core
 ```bash
 # 1. Deploy with docker compose
 ssh root@your-vps
-git clone <repo> && cd astian-vpn-core
+git clone <repo> && cd midori-vpn-core
 cp .env.default .env && vim .env
 docker compose -f docker-compose-dev.yml up --build -d
 

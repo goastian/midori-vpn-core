@@ -4,8 +4,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"github.com/goastian/astian-vpn-core/internal/config"
-	"github.com/goastian/astian-vpn-core/internal/wg"
+	"github.com/goastian/midori-vpn-core/internal/config"
+	"github.com/goastian/midori-vpn-core/internal/wg"
 )
 
 func NewRouter(cfg *config.Config, mgr *wg.Manager) *chi.Mux {
