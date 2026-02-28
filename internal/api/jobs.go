@@ -74,24 +74,21 @@ func StartStatsSync(pool *pgxpool.Pool, hub *WSHub) {
 		// Broadcast updated stats to WS clients
 		if hub != nil && hub.ClientCount() > 0 {
 			userRepo := repo.NewUserRepo(pool)
-			subRepo := repo.NewSubscriptionRepo(pool)
 
 			totalUsers, _ := userRepo.Count(ctx)
 			totalServers, activeServers, _ := serverRepo.Count(ctx)
 			totalPeers, activePeers, _ := peerRepo.CountAll(ctx)
-			totalSubs, _ := subRepo.CountActive(ctx)
 			bytesSent, bytesRecv, _ := peerRepo.TotalTraffic(ctx)
 
 			hub.Broadcast(map[string]interface{}{
 				"type": "stats",
 				"data": map[string]interface{}{
-					"total_users":         totalUsers,
-					"total_servers":       totalServers,
-					"active_servers":      activeServers,
-					"total_peers":         totalPeers,
-					"active_peers":        activePeers,
-					"total_subscriptions": totalSubs,
-					"total_bytes_sent":    bytesSent,
+					"total_users":          totalUsers,
+					"total_servers":        totalServers,
+					"active_servers":       activeServers,
+					"total_peers":          totalPeers,
+					"active_peers":         activePeers,
+					"total_bytes_sent":     bytesSent,
 					"total_bytes_received": bytesRecv,
 				},
 			})

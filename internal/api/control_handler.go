@@ -20,7 +20,6 @@ type ControlHandler struct {
 	serverRepo *repo.ServerRepo
 	peerRepo   *repo.PeerRepo
 	auditRepo  *repo.AuditRepo
-	subRepo    *repo.SubscriptionRepo
 }
 
 func NewControlHandler(pool *pgxpool.Pool) *ControlHandler {
@@ -29,7 +28,6 @@ func NewControlHandler(pool *pgxpool.Pool) *ControlHandler {
 		serverRepo: repo.NewServerRepo(pool),
 		peerRepo:   repo.NewPeerRepo(pool),
 		auditRepo:  repo.NewAuditRepo(pool),
-		subRepo:    repo.NewSubscriptionRepo(pool),
 	}
 }
 
@@ -43,10 +41,7 @@ func (h *ControlHandler) Me(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "not authenticated", http.StatusUnauthorized)
 		return
 	}
-	sub, _ := h.subRepo.EnsureFree(r.Context(), user.ID)
-	jsonOK(w, map[string]interface{}{
-		"user":         user,
-	}, http.StatusOK)
+	jsonOK(w, user, http.StatusOK)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -91,18 +86,7 @@ func (h *ControlHandler) Connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Validate device limit
-	activeCount, err := h.peerRepo.CountByUser(r.Context(), user.ID)
-	if err != nil {
-		jsonError(w, "device count failed", http.StatusInternalServerError)
-		return
-	}
-	if activeCount >= sub.MaxDevices {
-		jsonError(w, fmt.Sprintf("device limit reached (%d/%d)", activeCount, sub.MaxDevices), http.StatusConflict)
-		return
-	}
-
-	// 3. Select server (explicit or least loaded)
+	// 2. Select server (explicit or least loaded)
 	var server *models.VPNServer
 	if req.ServerID != "" {
 		serverID, err := uuid.Parse(req.ServerID)
@@ -110,21 +94,23 @@ func (h *ControlHandler) Connect(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "invalid server_id", http.StatusBadRequest)
 			return
 		}
-		server, err = h.serverRepo.GetByID(r.Context(), serverID)
+		s, err := h.serverRepo.GetByID(r.Context(), serverID)
 		if err != nil {
 			jsonError(w, "server not found", http.StatusNotFound)
 			return
 		}
-		if !server.IsActive || server.CurrentPeers >= server.MaxPeers {
+		if !s.IsActive || s.CurrentPeers >= s.MaxPeers {
 			jsonError(w, "server is full or inactive", http.StatusConflict)
 			return
 		}
+		server = s
 	} else {
-		server, err = h.serverRepo.LeastLoaded(r.Context())
+		s, err := h.serverRepo.LeastLoaded(r.Context())
 		if err != nil {
 			jsonError(w, "no available servers", http.StatusServiceUnavailable)
 			return
 		}
+		server = s
 	}
 
 	// 4+5. Call vpn-core to add peer (core assigns IP from pool)
@@ -238,18 +224,16 @@ func (h *ControlHandler) AdminDashboardStats(w http.ResponseWriter, r *http.Requ
 	totalUsers, _ := h.userRepo.Count(ctx)
 	totalServers, activeServers, _ := h.serverRepo.Count(ctx)
 	totalPeers, activePeers, _ := h.peerRepo.CountAll(ctx)
-	totalSubs, _ := h.subRepo.CountActive(ctx)
 	bytesSent, bytesRecv, _ := h.peerRepo.TotalTraffic(ctx)
 
 	stats := models.AdminStats{
-		TotalUsers:         totalUsers,
-		TotalServers:       totalServers,
-		ActiveServers:      activeServers,
-		TotalPeers:         totalPeers,
-		ActivePeers:        activePeers,
-		TotalSubscriptions: totalSubs,
-		TotalBytesSent:     bytesSent,
-		TotalBytesRecv:     bytesRecv,
+		TotalUsers:     totalUsers,
+		TotalServers:   totalServers,
+		ActiveServers:  activeServers,
+		TotalPeers:     totalPeers,
+		ActivePeers:    activePeers,
+		TotalBytesSent: bytesSent,
+		TotalBytesRecv: bytesRecv,
 	}
 	jsonOK(w, stats, http.StatusOK)
 }
@@ -278,12 +262,10 @@ func (h *ControlHandler) AdminGetUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	peers, _ := h.peerRepo.ListByUser(r.Context(), id)
-	sub, _ := h.subRepo.GetActiveByUser(r.Context(), id)
 
 	jsonOK(w, map[string]interface{}{
-		"user":         user,
-		"peers":        peers,
-		"subscription": sub,
+		"user":  user,
+		"peers": peers,
 	}, http.StatusOK)
 }
 
@@ -319,8 +301,6 @@ func (h *ControlHandler) AdminCreateUser(w http.ResponseWriter, r *http.Request)
 		jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	_ = h.subRepo.EnsureFree(r.Context(), user.ID)
 
 	admin := auth.GetUser(r)
 	h.auditRepo.Log(r.Context(), &admin.ID, "admin.user.create",
