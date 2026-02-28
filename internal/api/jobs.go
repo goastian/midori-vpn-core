@@ -12,7 +12,7 @@ import (
 
 // StartStatsSync runs every 60s: syncs peer stats from all cores via REST
 // and broadcasts updated stats to WebSocket clients.
-func StartStatsSync(pool *pgxpool.Pool, hub *WSHub) {
+func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub) {
 	serverRepo := repo.NewServerRepo(pool)
 	peerRepo := repo.NewPeerRepo(pool)
 
@@ -21,8 +21,14 @@ func StartStatsSync(pool *pgxpool.Pool, hub *WSHub) {
 
 	log.Println("job: stats-sync started (interval=60s)")
 
-	for range ticker.C {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	for {
+		select {
+		case <-parentCtx.Done():
+			log.Println("job: stats-sync stopped")
+			return
+		case <-ticker.C:
+		}
+		ctx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
 
 		servers, err := serverRepo.ListAll(ctx)
 		if err != nil {
@@ -100,7 +106,7 @@ func StartStatsSync(pool *pgxpool.Pool, hub *WSHub) {
 
 // StartPeerCleanup runs every 5min: deactivates expired peers or peers
 // without a handshake in the last 30 minutes.
-func StartPeerCleanup(pool *pgxpool.Pool) {
+func StartPeerCleanup(parentCtx context.Context, pool *pgxpool.Pool) {
 	serverRepo := repo.NewServerRepo(pool)
 	peerRepo := repo.NewPeerRepo(pool)
 	auditRepo := repo.NewAuditRepo(pool)
@@ -110,8 +116,14 @@ func StartPeerCleanup(pool *pgxpool.Pool) {
 
 	log.Println("job: peer-cleanup started (interval=5min, stale_threshold=30min)")
 
-	for range ticker.C {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	for {
+		select {
+		case <-parentCtx.Done():
+			log.Println("job: peer-cleanup stopped")
+			return
+		case <-ticker.C:
+		}
+		ctx, cancel := context.WithTimeout(parentCtx, 60*time.Second)
 
 		stalePeers, err := peerRepo.ListStale(ctx, 30*time.Minute)
 		if err != nil {

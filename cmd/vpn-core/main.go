@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/goastian/midori-vpn-core/internal/api"
 	"github.com/goastian/midori-vpn-core/internal/auth"
@@ -17,6 +19,9 @@ import (
 
 func main() {
 	cfg := config.Load()
+
+	// Initialize core HTTP client with TLS settings
+	api.InitCoreClient(cfg.CoreTLSSkipVerify)
 
 	manager, err := wg.NewManager(cfg)
 	if err != nil {
@@ -63,10 +68,20 @@ func main() {
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
 		log.Println("shutting down...")
-		srv.Close()
+
+		// Cancel background jobs first
+		api.CancelJobs()
+
+		// Give in-flight requests up to 15s to complete
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("graceful shutdown error: %v", err)
+		}
 	}()
 
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("server error: %v", err)
 	}
+	log.Println("server stopped")
 }
