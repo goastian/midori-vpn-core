@@ -1,8 +1,36 @@
-__pycache__
-test*
-config
-validate.py
-WG.py
+# Go
+/vpn-core
+/vpn-core.exe
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# Config & secrets
 .env
-tmp
-docker
+config/
+tmp/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker/
+
+# Node / Vue
+frontend/node_modules/
+frontend/dist/
+
+# Legacy Python
+__pycache__
+venv/
