@@ -21,24 +21,24 @@ func NewPeerRepo(pool *pgxpool.Pool) *PeerRepo {
 
 func (r *PeerRepo) Create(ctx context.Context, p *models.Peer) error {
 	query := `
-		INSERT INTO peers (user_id, server_id, public_key, assigned_ip)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO peers (user_id, server_id, public_key, assigned_ip, device_name)
+		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id, is_active, created_at
 	`
 	return r.pool.QueryRow(ctx, query,
-		p.UserID, p.ServerID, p.PublicKey, p.AssignedIP,
+		p.UserID, p.ServerID, p.PublicKey, p.AssignedIP, p.DeviceName,
 	).Scan(&p.ID, &p.IsActive, &p.CreatedAt)
 }
 
 func (r *PeerRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.Peer, error) {
 	query := `
-		SELECT id, user_id, server_id, public_key, assigned_ip, is_active,
+		SELECT id, user_id, server_id, public_key, assigned_ip, is_active, device_name,
 		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
 		FROM peers WHERE id = $1
 	`
 	var p models.Peer
 	err := r.pool.QueryRow(ctx, query, id).Scan(
-		&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.AssignedIP, &p.IsActive,
+		&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.AssignedIP, &p.IsActive, &p.DeviceName,
 		&p.LastHandshake, &p.BytesSent, &p.BytesReceived, &p.CreatedAt, &p.ExpiresAt,
 	)
 	if err != nil {
@@ -49,7 +49,7 @@ func (r *PeerRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.Peer, err
 
 func (r *PeerRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]models.Peer, error) {
 	query := `
-		SELECT id, user_id, server_id, public_key, assigned_ip, is_active,
+		SELECT id, user_id, server_id, public_key, assigned_ip, is_active, device_name,
 		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
 		FROM peers WHERE user_id = $1 ORDER BY created_at DESC
 	`
@@ -63,7 +63,7 @@ func (r *PeerRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]models.P
 	for rows.Next() {
 		var p models.Peer
 		if err := rows.Scan(
-			&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.AssignedIP, &p.IsActive,
+			&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.AssignedIP, &p.IsActive, &p.DeviceName,
 			&p.LastHandshake, &p.BytesSent, &p.BytesReceived, &p.CreatedAt, &p.ExpiresAt,
 		); err != nil {
 			return nil, err
@@ -75,7 +75,7 @@ func (r *PeerRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]models.P
 
 func (r *PeerRepo) ListByServer(ctx context.Context, serverID uuid.UUID) ([]models.Peer, error) {
 	query := `
-		SELECT id, user_id, server_id, public_key, assigned_ip, is_active,
+		SELECT id, user_id, server_id, public_key, assigned_ip, is_active, device_name,
 		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
 		FROM peers WHERE server_id = $1 ORDER BY created_at DESC
 	`
@@ -89,7 +89,7 @@ func (r *PeerRepo) ListByServer(ctx context.Context, serverID uuid.UUID) ([]mode
 	for rows.Next() {
 		var p models.Peer
 		if err := rows.Scan(
-			&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.AssignedIP, &p.IsActive,
+			&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.AssignedIP, &p.IsActive, &p.DeviceName,
 			&p.LastHandshake, &p.BytesSent, &p.BytesReceived, &p.CreatedAt, &p.ExpiresAt,
 		); err != nil {
 			return nil, err
