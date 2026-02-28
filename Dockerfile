@@ -1,25 +1,28 @@
+# ── Stage 1: Build ──
+FROM golang:1.22-alpine AS builder
+
+RUN apk add --no-cache git
+
+WORKDIR /src
+COPY . .
+RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -o /vpn-core ./cmd/vpn-core
+
+# ── Stage 2: Runtime ──
 FROM alpine:3.20
 
-WORKDIR /app
-
 RUN apk add --no-cache \
-    python3 \
-    py3-pip \
-    wireguard-tools  \
-    wireguard-tools-bash-completion \ 
+    wireguard-tools \
     wireguard-tools-wg \
     wireguard-tools-wg-quick \
     iproute2 \
-    net-tools \
     iptables \
-    vim 
+    ip6tables
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt --break-system-packages
+COPY --from=builder /vpn-core /usr/local/bin/vpn-core
 
-COPY . .
+RUN mkdir -p /etc/wireguard
 
-EXPOSE 8000
+EXPOSE 8080/tcp
+EXPOSE 51820/udp
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
-
+ENTRYPOINT ["/usr/local/bin/vpn-core"]

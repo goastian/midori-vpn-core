@@ -2,34 +2,29 @@ name: vpn-core-dev
 
 services:
   vpn-core:
-    image: elyerr/vpn-core:dev
-    restart: always
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
-    ulimits:
-      nofile:
-        soft: 51200
-        hard: 51200
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
     env_file:
       - .env
     ports:
-       - "50051:50051/tcp"
-       - "51820-51850:51820-51850/udp"
-       - "1080:1080/tcp" 
+      - "8080:8080/tcp"
+      - "51820:51820/udp"
     volumes:
-      - data:/app/config
-      - .env:/app/.env
-      - .env:/usr/share/server/.env
-      - database:/app/data
-      - ./ssl:/ssl #
-    command: sh -c "/usr/local/bin/start.sh"
+      - wg-config:/etc/wireguard
     networks:
-      - public-net
+      - vpn-net
+
 volumes:
-  data:
-  database:
+  wg-config:
 
 networks:
-  public-net:
+  vpn-net:
     driver: bridge
