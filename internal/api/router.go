@@ -54,22 +54,63 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 		r.Get("/auth/config", oauthH.OIDCConfig)
 
 		ch := NewControlHandler(pool)
+		jwtMW := auth.JWTMiddleware(cfg, pool, jwks)
 
+		// User-facing routes
 		r.Route("/api/v1/control", func(r chi.Router) {
-			r.Use(auth.JWTMiddleware(cfg, pool, jwks))
+			r.Use(jwtMW)
 
 			r.Get("/me", ch.Me)
-
 			r.Get("/servers", ch.ListServers)
-			r.Post("/servers", ch.CreateServer)
-			r.Delete("/servers/{id}", ch.DeleteServer)
 
-			r.Get("/peers", ch.ListMyPeers)
-			r.Post("/peers", ch.ConnectPeer)
-			r.Delete("/peers/{id}", ch.DisconnectPeer)
+			// Connections
+			r.Post("/connections", ch.Connect)
+			r.Get("/connections", ch.ListMyConnections)
+			r.Delete("/connections/{id}", ch.Disconnect)
 
 			r.Get("/audit", ch.MyAuditLogs)
 		})
+
+		// Admin routes
+		r.Route("/api/v1/admin", func(r chi.Router) {
+			r.Use(jwtMW)
+			r.Use(AdminOnly)
+
+			// Dashboard
+			r.Get("/dashboard/stats", ch.AdminDashboardStats)
+
+			// Users
+			r.Get("/users", ch.AdminListUsers)
+			r.Post("/users", ch.AdminCreateUser)
+			r.Get("/users/{id}", ch.AdminGetUser)
+			r.Put("/users/{id}", ch.AdminUpdateUser)
+			r.Delete("/users/{id}", ch.AdminDeleteUser)
+			r.Post("/users/{id}/ban", ch.AdminBanUser)
+
+			// Servers
+			r.Get("/servers", ch.AdminListServers)
+			r.Post("/servers", ch.AdminCreateServer)
+			r.Put("/servers/{id}", ch.AdminUpdateServer)
+			r.Delete("/servers/{id}", ch.AdminDeleteServer)
+
+			// Peers
+			r.Get("/peers", ch.AdminListPeers)
+			r.Delete("/peers/{id}", ch.AdminForceDisconnectPeer)
+
+			// Audit
+			r.Get("/audit-logs", ch.AdminListAuditLogs)
+		})
+
+		// WebSocket for real-time stats
+		wsHub := NewWSHub()
+		go wsHub.Run()
+		r.Get("/ws", func(w http.ResponseWriter, req *http.Request) {
+			wsHub.HandleWS(w, req)
+		})
+
+		// Start background jobs
+		go StartStatsSync(pool, wsHub)
+		go StartPeerCleanup(pool)
 	}
 
 	return r
