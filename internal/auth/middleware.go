@@ -5,8 +5,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
-	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwt"
 
 	"github.com/goastian/midori-vpn-core/internal/config"
@@ -43,7 +43,7 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 				[]byte(tokenStr),
 				jwt.WithKeySet(keySet),
 				jwt.WithValidate(true),
-				jwt.WithAcceptableSkew(30),
+				jwt.WithAcceptableSkew(30*time.Second),
 			)
 			if err != nil {
 				log.Printf("JWT validation failed: %v", err)
@@ -124,4 +124,22 @@ func getStringSliceClaim(token jwt.Token, key string) []string {
 	}
 }
 
-var _ = jwa.RS256
+// ValidateTokenOnly checks if a JWT is valid without extracting user info.
+// Used for WebSocket authentication via query parameter.
+func ValidateTokenOnly(cfg *config.Config, jwks *JWKSProvider, tokenStr string) bool {
+	keySet := jwks.KeySet()
+	token, err := jwt.Parse(
+		[]byte(tokenStr),
+		jwt.WithKeySet(keySet),
+		jwt.WithValidate(true),
+		jwt.WithAcceptableSkew(30*time.Second),
+	)
+	if err != nil {
+		log.Printf("WS JWT validation failed: %v", err)
+		return false
+	}
+	if token.Issuer() != cfg.AuthentikIssuer {
+		return false
+	}
+	return true
+}
