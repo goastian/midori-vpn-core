@@ -44,6 +44,40 @@ func (r *AuditRepo) ListByUser(ctx context.Context, userID uuid.UUID, limit, off
 	}
 	defer rows.Close()
 
+	return scanAuditRows(rows)
+}
+
+func (r *AuditRepo) ListAll(ctx context.Context, limit, offset int, action string) ([]models.AuditLog, error) {
+	var query string
+	var args []interface{}
+
+	if action != "" {
+		query = `
+			SELECT id, user_id, action, metadata, ip_address, created_at
+			FROM audit_logs WHERE action = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3
+		`
+		args = []interface{}{action, limit, offset}
+	} else {
+		query = `
+			SELECT id, user_id, action, metadata, ip_address, created_at
+			FROM audit_logs ORDER BY created_at DESC LIMIT $1 OFFSET $2
+		`
+		args = []interface{}{limit, offset}
+	}
+
+	rows, err := r.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list all audit logs: %w", err)
+	}
+	defer rows.Close()
+
+	return scanAuditRows(rows)
+}
+
+func scanAuditRows(rows interface {
+	Next() bool
+	Scan(dest ...interface{}) error
+}) ([]models.AuditLog, error) {
 	var logs []models.AuditLog
 	for rows.Next() {
 		var l models.AuditLog
