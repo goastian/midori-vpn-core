@@ -68,7 +68,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 			r.Get("/connections", ch.ListMyConnections)
 			r.Delete("/connections/{id}", ch.Disconnect)
 
-			r.Get("/audit", ch.MyAuditLogs)
+			r.Get("/audit-logs", ch.MyAuditLogs)
 		})
 
 		// Admin routes

@@ -70,11 +70,11 @@ type ConnectionConfig struct {
 }
 
 type AdminStats struct {
-	TotalUsers        int   `json:"total_users"`
-	TotalServers      int   `json:"total_servers"`
-	ActiveServers     int   `json:"active_servers"`
-	TotalPeers        int   `json:"total_peers"`
-	ActivePeers       int   `json:"active_peers"`
-	TotalBytesSent    int64 `json:"total_bytes_sent"`
-	TotalBytesRecv    int64 `json:"total_bytes_received"`
+	TotalUsers         int   `json:"total_users"`
+	TotalServers       int   `json:"total_servers"`
+	ActiveServers      int   `json:"active_servers"`
+	TotalPeers         int   `json:"total_peers"`
+	ActivePeers        int   `json:"active_peers"`
+	TotalBytesSent     int64 `json:"total_bytes_sent"`
+	TotalBytesRecv     int64 `json:"total_bytes_received"`
 }
