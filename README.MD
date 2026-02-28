@@ -1,38 +1,66 @@
 # Astian VPN Core
 
-WireGuard VPN management daemon written in **Go** with a REST API.
+WireGuard VPN management daemon + control panel API written in **Go**, with a **Vue 3** frontend.
 
 ## Architecture
 
 ```
-cmd/vpn-core/main.go      → entrypoint
+cmd/vpn-core/main.go        → entrypoint (WireGuard + Control API)
 internal/
-  api/                     → chi router, handlers, middleware, responses
-  config/                  → environment-based configuration
-  crypto/                  → Curve25519 keypair generation
-  ippool/                  → automatic IP allocation in 10.8.0.0/16
-  wg/                      → WireGuard manager (wgctrl + netlink)
+  api/                       → chi router, WireGuard handlers, control handlers, OAuth
+  auth/                      → JWT/JWKS validation (Authentik), JIT user provisioning
+  config/                    → environment-based configuration
+  crypto/                    → Curve25519 keypair generation
+  db/                        → PostgreSQL connection pool (pgx) + migrations
+  ippool/                    → automatic IP allocation in 10.8.0.0/16
+  models/                    → data models (User, VPNServer, Peer, AuditLog)
+  repo/                      → repository pattern for DB access
+  wg/                        → WireGuard manager (wgctrl + netlink)
+migrations/                  → PostgreSQL schema migrations
+control/                     → Vue 3 + TypeScript frontend (panel de control)
 ```
+
+## Components
+
+### VPN Core API
+Low-level WireGuard peer management. Protected by shared secret (`X-Core-Token`).
+
+### Control API
+User-facing API for managing VPN connections, servers and audit logs. Protected by JWT tokens from Authentik. Enabled automatically when `DATABASE_URL` and `AUTHENTIK_CLIENT_ID` are set.
+
+### Control Frontend (`control/`)
+Vue 3 + TypeScript SPA with OAuth2/OIDC login flow (PKCE) against `accounts.astian.org`.
 
 ## Requirements
 
 - **Docker** (recommended) — builds and runs everything in containers
-- Or: **Go 1.22+** and a Linux host with WireGuard kernel module
+- Or: **Go 1.22+**, **Node.js 20+**, PostgreSQL 16+, Redis 7+, Linux with WireGuard
 
 ## Quick Start (Docker)
 
 ```bash
 cp .env.default .env
-# Edit .env — set VPN_CORE_TOKEN and WG_ENDPOINT
+# Edit .env — set VPN_CORE_TOKEN, WG_ENDPOINT, AUTHENTIK_CLIENT_ID
 
-# Development (builds from source)
+# Development (builds from source, includes PostgreSQL + Redis)
 docker compose -f docker-compose-dev.yml up --build
 
 # Production (pre-built image)
 docker compose up
 ```
 
+### Frontend development
+
+```bash
+cd control
+npm install
+npm run dev
+# Opens at http://localhost:5173 (proxies API to :8080)
+```
+
 ## Environment Variables
+
+### Core (WireGuard)
 
 | Variable | Default | Description |
 |---|---|---|
@@ -44,51 +72,45 @@ docker compose up
 | `WG_CONFIG_DIR` | `/etc/wireguard` | Config persistence directory |
 | `WG_ENDPOINT` | *(empty)* | Public IP/hostname for peer configs |
 
+### Control API (optional — enables user management)
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | *(empty)* | PostgreSQL connection string |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection string |
+| `AUTHENTIK_ISSUER` | `https://accounts.astian.org/application/o/midorivpn` | OIDC issuer URL |
+| `AUTHENTIK_CLIENT_ID` | *(empty)* | Authentik OAuth2 client ID |
+| `AUTHENTIK_JWKS_URL` | *(auto from issuer)* | JWKS endpoint URL |
+
 ## API Endpoints
 
-All `/api/v1/*` routes require header: `X-Core-Token: <your-token>`
+### Core API (`X-Core-Token` protected)
 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/health` | Healthcheck (no auth) |
-| `POST` | `/api/v1/peers` | Add peer `{"public_key":"...","keepalive":25}` |
+| `POST` | `/api/v1/peers` | Add peer |
 | `DELETE` | `/api/v1/peers/:pubkey` | Remove peer |
-| `PUT` | `/api/v1/peers/:pubkey` | Update peer `{"keepalive":30}` |
-| `GET` | `/api/v1/peers/:pubkey/stats` | Peer stats (tx/rx, handshake) |
+| `PUT` | `/api/v1/peers/:pubkey` | Update peer |
+| `GET` | `/api/v1/peers/:pubkey/stats` | Peer stats |
 | `GET` | `/api/v1/peers` | List all peers |
-| `POST` | `/api/v1/keypair` | Generate Curve25519 keypair |
-| `GET` | `/api/v1/stats` | Server-wide stats |
+| `POST` | `/api/v1/keypair` | Generate keypair |
+| `GET` | `/api/v1/stats` | Server stats |
 
-## Build Locally (Linux only)
+### Control API (JWT Bearer protected)
 
-```bash
-go build -o vpn-core ./cmd/vpn-core
-sudo WG_INTERFACE=wg0 VPN_CORE_TOKEN=secret ./vpn-core
-```
-
-## Integration Test on VPS
-
-```bash
-# 1. Deploy with docker compose
-ssh root@your-vps
-git clone <repo> && cd midori-vpn-core
-cp .env.default .env && vim .env
-docker compose -f docker-compose-dev.yml up --build -d
-
-# 2. Health check
-curl http://localhost:8080/health
-
-# 3. Generate keypair
-curl -H "X-Core-Token: your-token" -X POST http://localhost:8080/api/v1/keypair
-
-# 4. Add peer
-curl -H "X-Core-Token: your-token" -H "Content-Type: application/json" \
-  -X POST http://localhost:8080/api/v1/peers \
-  -d '{"public_key":"<client-pubkey>","keepalive":25}'
-
-# 5. Check stats
-curl -H "X-Core-Token: your-token" http://localhost:8080/api/v1/stats
-```
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/auth/config` | OIDC configuration for frontend |
+| `POST` | `/auth/callback` | Exchange auth code for tokens |
+| `GET` | `/api/v1/control/me` | Current user profile |
+| `GET` | `/api/v1/control/servers` | List active VPN servers |
+| `POST` | `/api/v1/control/servers` | Create server (admin) |
+| `DELETE` | `/api/v1/control/servers/:id` | Delete server (admin) |
+| `GET` | `/api/v1/control/peers` | List my VPN connections |
+| `POST` | `/api/v1/control/peers` | Connect to a server |
+| `DELETE` | `/api/v1/control/peers/:id` | Disconnect from a server |
+| `GET` | `/api/v1/control/audit` | My audit logs |
 
 ## License
 
