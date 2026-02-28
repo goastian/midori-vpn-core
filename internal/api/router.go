@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -22,7 +24,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.SetHeader("Content-Type", "application/json"))
-	r.Use(CORSMiddleware)
+	r.Use(CORSMiddleware(cfg))
 
 	h := NewHandler(cfg, mgr)
 
@@ -101,33 +103,119 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 			r.Get("/audit-logs", ch.AdminListAuditLogs)
 		})
 
-		// WebSocket for real-time stats
+		// WebSocket for real-time stats (JWT protected via query param)
 		wsHub := NewWSHub()
 		go wsHub.Run()
 		r.Get("/ws", func(w http.ResponseWriter, req *http.Request) {
+			// Validate JWT from query param ?token=<jwt>
+			tokenStr := req.URL.Query().Get("token")
+			if tokenStr == "" {
+				jsonError(w, "missing token query parameter", http.StatusUnauthorized)
+				return
+			}
+			if !auth.ValidateTokenOnly(cfg, jwks, tokenStr) {
+				jsonError(w, "invalid token", http.StatusUnauthorized)
+				return
+			}
 			wsHub.HandleWS(w, req)
 		})
 
-		// Start background jobs
-		go StartStatsSync(pool, wsHub)
-		go StartPeerCleanup(pool)
+		// Start background jobs with cancellation support
+		jobCtx, jobCancel := context.WithCancel(context.Background())
+		go StartStatsSync(jobCtx, pool, wsHub)
+		go StartPeerCleanup(jobCtx, pool)
+		// Store cancel func for graceful shutdown
+		r.Get("/__internal_job_cancel", func(w http.ResponseWriter, req *http.Request) {
+			// This route is never exposed; jobCancel is stored via closure
+			w.WriteHeader(http.StatusNotFound)
+		})
+		// Expose jobCancel via package-level var for main.go shutdown
+		SetJobCancel(jobCancel)
 	}
 
 	return r
 }
 
-func CORSMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Core-Token")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+// jobCancelFunc stores the cancel function for background jobs
+var jobCancelFunc context.CancelFunc
 
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(204)
-			return
+func SetJobCancel(cancel context.CancelFunc) {
+	jobCancelFunc = cancel
+}
+
+func CancelJobs() {
+	if jobCancelFunc != nil {
+		jobCancelFunc()
+	}
+}
+
+func CORSMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
+	allowedOrigins := parseAllowedOrigins(cfg.CORSAllowedOrigins)
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+			if origin != "" && isOriginAllowed(origin, allowedOrigins) {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Core-Token")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+				w.Header().Set("Vary", "Origin")
+			}
+
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(204)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func parseAllowedOrigins(raw string) []string {
+	parts := strings.Split(raw, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
 		}
+	}
+	return result
+}
 
-		next.ServeHTTP(w, r)
-	})
+func isOriginAllowed(origin string, allowed []string) bool {
+	for _, pattern := range allowed {
+		if pattern == origin {
+			return true
+		}
+		// Support wildcard subdomain patterns like https://*.astian.org
+		if strings.Contains(pattern, "*") {
+			// Split pattern: "https://*.astian.org" -> scheme "https://" + "*.astian.org"
+			if idx := strings.Index(pattern, "://"); idx != -1 {
+				pScheme := pattern[:idx+3]
+				pHost := pattern[idx+3:]
+				oIdx := strings.Index(origin, "://")
+				if oIdx == -1 {
+					continue
+				}
+				oScheme := origin[:oIdx+3]
+				oHost := origin[oIdx+3:]
+
+				if pScheme != oScheme {
+					continue
+				}
+
+				// "*.astian.org" matches "vpn.astian.org" and "sub.vpn.astian.org"
+				if strings.HasPrefix(pHost, "*.") {
+					suffix := pHost[1:] // ".astian.org"
+					if strings.HasSuffix(oHost, suffix) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
 }

@@ -10,6 +10,9 @@ type Config struct {
 	Port      string
 	AuthToken string // X-Core-Token shared secret (core ↔ core API)
 
+	// CORS
+	CORSAllowedOrigins string // comma-separated list of allowed origins
+
 	// WireGuard
 	WGInterface string
 	WGPort      int
@@ -27,6 +30,9 @@ type Config struct {
 	AuthentikIssuer   string
 	AuthentikClientID string
 	AuthentikJWKSURL  string
+
+	// Core-to-core TLS
+	CoreTLSSkipVerify bool // skip TLS cert verification for self-signed certs
 }
 
 func Load() *Config {
@@ -46,11 +52,15 @@ func Load() *Config {
 		ConfigDir:   getEnv("WG_CONFIG_DIR", "/etc/wireguard"),
 		Endpoint:    getEnv("WG_ENDPOINT", ""),
 
+		CORSAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "https://*.astian.org,http://localhost:5173,http://localhost:3000"),
+
 		DatabaseURL:       getEnv("DATABASE_URL", ""),
 		RedisURL:          getEnv("REDIS_URL", ""),
 		AuthentikIssuer:   issuer,
 		AuthentikClientID: getEnv("AUTHENTIK_CLIENT_ID", ""),
 		AuthentikJWKSURL:  jwksURL,
+
+		CoreTLSSkipVerify: getEnv("CORE_TLS_SKIP_VERIFY", "false") == "true",
 	}
 
 	if cfg.AuthToken == "" {
