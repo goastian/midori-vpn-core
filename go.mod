@@ -4,6 +4,11 @@ go 1.22
 
 require (
 	github.com/go-chi/chi/v5 v5.1.0
+	github.com/golang-migrate/migrate/v4 v4.17.1
+	github.com/google/uuid v1.6.0
+	github.com/jackc/pgx/v5 v5.6.0
+	github.com/lestrrat-go/jwx/v2 v2.1.0
+	github.com/redis/go-redis/v9 v9.5.3
 	golang.org/x/crypto v0.25.0
 	golang.zx2c4.com/wireguard/wgctrl v0.0.0-20230429144221-925a1e7659e6
 )
