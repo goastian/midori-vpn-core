@@ -75,7 +75,6 @@ type AdminStats struct {
 	ActiveServers     int   `json:"active_servers"`
 	TotalPeers        int   `json:"total_peers"`
 	ActivePeers       int   `json:"active_peers"`
-	TotalSubscriptions int  `json:"total_subscriptions"`
 	TotalBytesSent    int64 `json:"total_bytes_sent"`
 	TotalBytesRecv    int64 `json:"total_bytes_received"`
 }
