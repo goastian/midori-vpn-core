@@ -16,9 +16,12 @@ RUN apk add --no-cache \
     wireguard-tools-wg-quick \
     iproute2 \
     iptables \
-    ip6tables
+    ip6tables \
+    ca-certificates \
+    tzdata
 
 COPY --from=builder /vpn-core /usr/local/bin/vpn-core
+COPY migrations /migrations
 
 RUN mkdir -p /etc/wireguard
 
