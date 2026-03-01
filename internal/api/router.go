@@ -124,12 +124,6 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 		jobCtx, jobCancel := context.WithCancel(context.Background())
 		go StartStatsSync(jobCtx, pool, wsHub)
 		go StartPeerCleanup(jobCtx, pool)
-		// Store cancel func for graceful shutdown
-		r.Get("/__internal_job_cancel", func(w http.ResponseWriter, req *http.Request) {
-			// This route is never exposed; jobCancel is stored via closure
-			w.WriteHeader(http.StatusNotFound)
-		})
-		// Expose jobCancel via package-level var for main.go shutdown
 		SetJobCancel(jobCancel)
 	}
 
