@@ -13,6 +13,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/control"
 	"github.com/goastian/midori-vpn-core/internal/core"
+	"github.com/goastian/midori-vpn-core/internal/respond"
 	"github.com/goastian/midori-vpn-core/internal/wg"
 )
 
@@ -112,11 +113,11 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 			// Validate JWT from query param ?token=<jwt>
 			tokenStr := req.URL.Query().Get("token")
 			if tokenStr == "" {
-				JsonError(w, "missing token query parameter", http.StatusUnauthorized)
+				respond.JsonError(w, "missing token query parameter", http.StatusUnauthorized)
 				return
 			}
 			if !auth.ValidateTokenOnly(cfg, jwks, tokenStr) {
-				JsonError(w, "invalid token", http.StatusUnauthorized)
+				respond.JsonError(w, "invalid token", http.StatusUnauthorized)
 				return
 			}
 			wsHub.HandleWS(w, req)
