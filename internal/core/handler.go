@@ -1,12 +1,14 @@
-package api
+package core
 
 import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/goastian/midori-vpn-core/internal/api"
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/crypto"
 	"github.com/goastian/midori-vpn-core/internal/wg"
@@ -24,7 +26,7 @@ func NewHandler(cfg *config.Config, mgr *wg.Manager) *Handler {
 // --- Health ---
 
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
-	jsonOK(w, map[string]string{"status": "ok"}, http.StatusOK)
+	api.JsonOK(w, map[string]string{"status": "ok"}, http.StatusOK)
 }
 
 // --- Peers ---
@@ -43,12 +45,12 @@ type AddPeerResponse struct {
 func (h *Handler) AddPeer(w http.ResponseWriter, r *http.Request) {
 	var req AddPeerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonError(w, "invalid JSON body", http.StatusBadRequest)
+		api.JsonError(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
 
 	if req.PublicKey == "" {
-		jsonError(w, "public_key is required", http.StatusBadRequest)
+		api.JsonError(w, "public_key is required", http.StatusBadRequest)
 		return
 	}
 
@@ -58,16 +60,16 @@ func (h *Handler) AddPeer(w http.ResponseWriter, r *http.Request) {
 
 	ip, err := h.mgr.AddPeer(req.PublicKey, req.Keepalive)
 	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
+		api.JsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	endpoint := h.cfg.Endpoint
 	if endpoint != "" {
-		endpoint = endpoint + ":" + itoa(h.cfg.WGPort)
+		endpoint = endpoint + ":" + strconv.Itoa(h.cfg.WGPort)
 	}
 
-	jsonOK(w, AddPeerResponse{
+	api.JsonOK(w, AddPeerResponse{
 		PublicKey:  req.PublicKey,
 		AllowedIP: ip,
 		Endpoint:  endpoint,
@@ -77,16 +79,16 @@ func (h *Handler) AddPeer(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) RemovePeer(w http.ResponseWriter, r *http.Request) {
 	pubkey, err := url.PathUnescape(chi.URLParam(r, "pubkey"))
 	if err != nil {
-		jsonError(w, "invalid pubkey in URL", http.StatusBadRequest)
+		api.JsonError(w, "invalid pubkey in URL", http.StatusBadRequest)
 		return
 	}
 
 	if err := h.mgr.RemovePeer(pubkey); err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
+		api.JsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	jsonOK(w, map[string]string{"removed": pubkey}, http.StatusOK)
+	api.JsonOK(w, map[string]string{"removed": pubkey}, http.StatusOK)
 }
 
 type UpdatePeerRequest struct {
@@ -96,13 +98,13 @@ type UpdatePeerRequest struct {
 func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	pubkey, err := url.PathUnescape(chi.URLParam(r, "pubkey"))
 	if err != nil {
-		jsonError(w, "invalid pubkey in URL", http.StatusBadRequest)
+		api.JsonError(w, "invalid pubkey in URL", http.StatusBadRequest)
 		return
 	}
 
 	var req UpdatePeerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonError(w, "invalid JSON body", http.StatusBadRequest)
+		api.JsonError(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
 
@@ -112,37 +114,37 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.mgr.UpdatePeer(pubkey, keepalive); err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
+		api.JsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	jsonOK(w, map[string]string{"updated": pubkey}, http.StatusOK)
+	api.JsonOK(w, map[string]string{"updated": pubkey}, http.StatusOK)
 }
 
 func (h *Handler) PeerStats(w http.ResponseWriter, r *http.Request) {
 	pubkey, err := url.PathUnescape(chi.URLParam(r, "pubkey"))
 	if err != nil {
-		jsonError(w, "invalid pubkey in URL", http.StatusBadRequest)
+		api.JsonError(w, "invalid pubkey in URL", http.StatusBadRequest)
 		return
 	}
 
 	stats, err := h.mgr.PeerStats(pubkey)
 	if err != nil {
-		jsonError(w, err.Error(), http.StatusNotFound)
+		api.JsonError(w, err.Error(), http.StatusNotFound)
 		return
 	}
 
-	jsonOK(w, stats, http.StatusOK)
+	api.JsonOK(w, stats, http.StatusOK)
 }
 
 func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {
 	peers, err := h.mgr.ListPeers()
 	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
+		api.JsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	jsonOK(w, peers, http.StatusOK)
+	api.JsonOK(w, peers, http.StatusOK)
 }
 
 // --- Keypair ---
@@ -150,11 +152,11 @@ func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GenerateKeypair(w http.ResponseWriter, r *http.Request) {
 	kp, err := crypto.GenerateKeypair()
 	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
+		api.JsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	jsonOK(w, kp, http.StatusCreated)
+	api.JsonOK(w, kp, http.StatusCreated)
 }
 
 // --- Stats ---
@@ -162,26 +164,10 @@ func (h *Handler) GenerateKeypair(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ServerStats(w http.ResponseWriter, r *http.Request) {
 	stats, err := h.mgr.ServerStats()
 	if err != nil {
-		jsonError(w, err.Error(), http.StatusInternalServerError)
+		api.JsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	jsonOK(w, stats, http.StatusOK)
+	api.JsonOK(w, stats, http.StatusOK)
 }
 
-// helper
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	buf := make([]byte, 0, 6)
-	for n > 0 {
-		buf = append(buf, byte('0'+n%10))
-		n /= 10
-	}
-	// reverse
-	for i, j := 0, len(buf)-1; i < j; i, j = i+1, j-1 {
-		buf[i], buf[j] = buf[j], buf[i]
-	}
-	return string(buf)
-}

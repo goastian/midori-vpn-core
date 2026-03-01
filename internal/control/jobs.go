@@ -1,4 +1,4 @@
-package api
+package control
 
 import (
 	"context"
@@ -42,7 +42,7 @@ func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub) {
 				continue
 			}
 
-			corePeers, err := callCoreListPeers(&server)
+			corePeers, err := CallCoreListPeers(&server)
 			if err != nil {
 				log.Printf("job: stats-sync core %s (%s) error: %v", server.Name, server.Host, err)
 				continue
@@ -142,7 +142,7 @@ func StartPeerCleanup(parentCtx context.Context, pool *pgxpool.Pool) {
 		for _, peer := range stalePeers {
 			server, err := serverRepo.GetByID(ctx, peer.ServerID)
 			if err == nil {
-				_ = callCoreRemovePeer(server, peer.PublicKey)
+				_ = CallCoreRemovePeer(server, peer.PublicKey)
 				_ = serverRepo.UpdatePeerCount(ctx, peer.ServerID, -1)
 			}
 

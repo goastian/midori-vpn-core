@@ -11,6 +11,8 @@ import (
 
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/config"
+	"github.com/goastian/midori-vpn-core/internal/control"
+	"github.com/goastian/midori-vpn-core/internal/core"
 	"github.com/goastian/midori-vpn-core/internal/wg"
 )
 
@@ -26,14 +28,14 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 	r.Use(middleware.SetHeader("Content-Type", "application/json"))
 	r.Use(CORSMiddleware(cfg))
 
-	h := NewHandler(cfg, mgr)
+	h := core.NewHandler(cfg, mgr)
 
 	// Public
 	r.Get("/health", h.Health)
 
 	// WireGuard core API (X-Core-Token protected)
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Use(AuthMiddleware(cfg.AuthToken))
+		r.Use(core.AuthMiddleware(cfg.AuthToken))
 
 		// Peers (core)
 		r.Post("/peers", h.AddPeer)
@@ -51,11 +53,11 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 
 	// Control API (JWT/Authentik protected) — only if DB is available
 	if pool != nil && jwks != nil {
-		oauthH := NewOAuthHandler(cfg)
+		oauthH := control.NewOAuthHandler(cfg)
 		r.Post("/auth/callback", oauthH.Callback)
 		r.Get("/auth/config", oauthH.OIDCConfig)
 
-		ch := NewControlHandler(pool)
+		ch := control.NewHandler(pool)
 		jwtMW := auth.JWTMiddleware(cfg, pool, jwks)
 
 		// User-facing routes
@@ -76,7 +78,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 		// Admin routes
 		r.Route("/api/v1/admin", func(r chi.Router) {
 			r.Use(jwtMW)
-			r.Use(AdminOnly)
+			r.Use(control.AdminOnly)
 
 			// Dashboard
 			r.Get("/dashboard/stats", ch.AdminDashboardStats)
@@ -104,17 +106,17 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 		})
 
 		// WebSocket for real-time stats (JWT protected via query param)
-		wsHub := NewWSHub()
+		wsHub := control.NewWSHub()
 		go wsHub.Run()
 		r.Get("/ws", func(w http.ResponseWriter, req *http.Request) {
 			// Validate JWT from query param ?token=<jwt>
 			tokenStr := req.URL.Query().Get("token")
 			if tokenStr == "" {
-				jsonError(w, "missing token query parameter", http.StatusUnauthorized)
+				JsonError(w, "missing token query parameter", http.StatusUnauthorized)
 				return
 			}
 			if !auth.ValidateTokenOnly(cfg, jwks, tokenStr) {
-				jsonError(w, "invalid token", http.StatusUnauthorized)
+				JsonError(w, "invalid token", http.StatusUnauthorized)
 				return
 			}
 			wsHub.HandleWS(w, req)
@@ -122,8 +124,8 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 
 		// Start background jobs with cancellation support
 		jobCtx, jobCancel := context.WithCancel(context.Background())
-		go StartStatsSync(jobCtx, pool, wsHub)
-		go StartPeerCleanup(jobCtx, pool)
+		go control.StartStatsSync(jobCtx, pool, wsHub)
+		go control.StartPeerCleanup(jobCtx, pool)
 		SetJobCancel(jobCancel)
 	}
 

@@ -11,12 +11,13 @@ type Response struct {
 	Error   string      `json:"error,omitempty"`
 }
 
-func jsonOK(w http.ResponseWriter, data interface{}, code int) {
+func JsonOK(w http.ResponseWriter, data interface{}, code int) {
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(Response{OK: true, Data: data})
 }
 
-func jsonError(w http.ResponseWriter, msg string, code int) {
+func JsonError(w http.ResponseWriter, msg string, code int) {
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(Response{OK: false, Error: msg})
 }
+

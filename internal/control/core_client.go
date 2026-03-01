@@ -1,4 +1,4 @@
-package api
+package control
 
 import (
 	"bytes"
@@ -188,7 +188,7 @@ type coreAPIResponse struct {
 
 // --- Core API calls ---
 
-func callCoreAddPeer(server *models.VPNServer, pubkey string) (*CoreAddPeerResponse, error) {
+func CallCoreAddPeer(server *models.VPNServer, pubkey string) (*CoreAddPeerResponse, error) {
 	payload, _ := json.Marshal(map[string]interface{}{
 		"public_key": pubkey,
 		"keepalive":  25,
@@ -227,7 +227,7 @@ func callCoreAddPeer(server *models.VPNServer, pubkey string) (*CoreAddPeerRespo
 	return &result, nil
 }
 
-func callCoreRemovePeer(server *models.VPNServer, pubkey string) error {
+func CallCoreRemovePeer(server *models.VPNServer, pubkey string) error {
 	encodedKey := url.PathEscape(pubkey)
 	coreURL := fmt.Sprintf("%s://%s:%d/api/v1/peers/%s", coreScheme(server), server.Host, server.Port, encodedKey)
 
@@ -251,7 +251,7 @@ func callCoreRemovePeer(server *models.VPNServer, pubkey string) error {
 	return nil
 }
 
-func callCoreGetPeerStats(server *models.VPNServer, pubkey string) (*CorePeerStatsResponse, error) {
+func CallCoreGetPeerStats(server *models.VPNServer, pubkey string) (*CorePeerStatsResponse, error) {
 	encodedKey := url.PathEscape(pubkey)
 	coreURL := fmt.Sprintf("%s://%s:%d/api/v1/peers/%s/stats", coreScheme(server), server.Host, server.Port, encodedKey)
 
@@ -284,7 +284,7 @@ func callCoreGetPeerStats(server *models.VPNServer, pubkey string) (*CorePeerSta
 	return &result, nil
 }
 
-func callCoreListPeers(server *models.VPNServer) ([]CorePeerStatsResponse, error) {
+func CallCoreListPeers(server *models.VPNServer) ([]CorePeerStatsResponse, error) {
 	coreURL := fmt.Sprintf("%s://%s:%d/api/v1/peers", coreScheme(server), server.Host, server.Port)
 
 	req, err := http.NewRequest(http.MethodGet, coreURL, nil)

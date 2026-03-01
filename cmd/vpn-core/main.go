@@ -13,6 +13,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/api"
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/config"
+	"github.com/goastian/midori-vpn-core/internal/control"
 	"github.com/goastian/midori-vpn-core/internal/db"
 	"github.com/goastian/midori-vpn-core/internal/wg"
 )
@@ -21,7 +22,7 @@ func main() {
 	cfg := config.Load()
 
 	// Initialize core HTTP client with TLS settings
-	api.InitCoreClient(cfg.CoreTLSSkipVerify)
+	control.InitCoreClient(cfg.CoreTLSSkipVerify)
 
 	manager, err := wg.NewManager(cfg)
 	if err != nil {

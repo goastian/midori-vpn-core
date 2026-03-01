@@ -1,4 +1,4 @@
-package api
+package control
 
 import (
 	"encoding/json"
@@ -11,20 +11,21 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/goastian/midori-vpn-core/internal/api"
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/models"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 )
 
-type ControlHandler struct {
+type Handler struct {
 	userRepo   *repo.UserRepo
 	serverRepo *repo.ServerRepo
 	peerRepo   *repo.PeerRepo
 	auditRepo  *repo.AuditRepo
 }
 
-func NewControlHandler(pool *pgxpool.Pool) *ControlHandler {
-	return &ControlHandler{
+func NewHandler(pool *pgxpool.Pool) *Handler {
+	return &Handler{
 		userRepo:   repo.NewUserRepo(pool),
 		serverRepo: repo.NewServerRepo(pool),
 		peerRepo:   repo.NewPeerRepo(pool),
@@ -36,27 +37,27 @@ func NewControlHandler(pool *pgxpool.Pool) *ControlHandler {
 // User profile
 // ═══════════════════════════════════════════════════════════════════════════
 
-func (h *ControlHandler) Me(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r)
 	if user == nil {
-		jsonError(w, "not authenticated", http.StatusUnauthorized)
+		api.JsonError(w, "not authenticated", http.StatusUnauthorized)
 		return
 	}
-	jsonOK(w, user, http.StatusOK)
+	api.JsonOK(w, user, http.StatusOK)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Servers (user-facing: list active only)
 // ═══════════════════════════════════════════════════════════════════════════
 
-func (h *ControlHandler) ListServers(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) ListServers(w http.ResponseWriter, r *http.Request) {
 	servers, err := h.serverRepo.ListActive(r.Context())
 	if err != nil {
 		log.Printf("list servers error: %v", err)
-		jsonError(w, "failed to list servers", http.StatusInternalServerError)
+		api.JsonError(w, "failed to list servers", http.StatusInternalServerError)
 		return
 	}
-	jsonOK(w, servers, http.StatusOK)
+	api.JsonOK(w, servers, http.StatusOK)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -69,22 +70,22 @@ type ConnectRequest struct {
 	DeviceName string `json:"device_name"`
 }
 
-func (h *ControlHandler) Connect(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r)
 
 	// 1. Validate banned
 	if user.IsBanned {
-		jsonError(w, "account is banned", http.StatusForbidden)
+		api.JsonError(w, "account is banned", http.StatusForbidden)
 		return
 	}
 
 	var req ConnectRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonError(w, "invalid JSON body", http.StatusBadRequest)
+		api.JsonError(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
 	if req.PublicKey == "" {
-		jsonError(w, "public_key is required", http.StatusBadRequest)
+		api.JsonError(w, "public_key is required", http.StatusBadRequest)
 		return
 	}
 
@@ -93,33 +94,33 @@ func (h *ControlHandler) Connect(w http.ResponseWriter, r *http.Request) {
 	if req.ServerID != "" {
 		serverID, err := uuid.Parse(req.ServerID)
 		if err != nil {
-			jsonError(w, "invalid server_id", http.StatusBadRequest)
+			api.JsonError(w, "invalid server_id", http.StatusBadRequest)
 			return
 		}
 		s, err := h.serverRepo.GetByID(r.Context(), serverID)
 		if err != nil {
-			jsonError(w, "server not found", http.StatusNotFound)
+			api.JsonError(w, "server not found", http.StatusNotFound)
 			return
 		}
 		if !s.IsActive || s.CurrentPeers >= s.MaxPeers {
-			jsonError(w, "server is full or inactive", http.StatusConflict)
+			api.JsonError(w, "server is full or inactive", http.StatusConflict)
 			return
 		}
 		server = s
 	} else {
 		s, err := h.serverRepo.LeastLoaded(r.Context())
 		if err != nil {
-			jsonError(w, "no available servers", http.StatusServiceUnavailable)
+			api.JsonError(w, "no available servers", http.StatusServiceUnavailable)
 			return
 		}
 		server = s
 	}
 
 	// 4+5. Call vpn-core to add peer (core assigns IP from pool)
-	coreResp, err := callCoreAddPeer(server, req.PublicKey)
+	coreResp, err := CallCoreAddPeer(server, req.PublicKey)
 	if err != nil {
 		log.Printf("core add peer error: %v", err)
-		jsonError(w, "failed to connect to VPN server", http.StatusBadGateway)
+		api.JsonError(w, "failed to connect to VPN server", http.StatusBadGateway)
 		return
 	}
 
@@ -132,9 +133,9 @@ func (h *ControlHandler) Connect(w http.ResponseWriter, r *http.Request) {
 		DeviceName: req.DeviceName,
 	}
 	if err := h.peerRepo.Create(r.Context(), peer); err != nil {
-		_ = callCoreRemovePeer(server, req.PublicKey)
+		_ = CallCoreRemovePeer(server, req.PublicKey)
 		log.Printf("create peer error: %v", err)
-		jsonError(w, "failed to save connection", http.StatusInternalServerError)
+		api.JsonError(w, "failed to save connection", http.StatusInternalServerError)
 		return
 	}
 
@@ -158,32 +159,32 @@ func (h *ControlHandler) Connect(w http.ResponseWriter, r *http.Request) {
 		AllowedIPs:      "0.0.0.0/0, ::/0",
 	}
 
-	jsonOK(w, config, http.StatusCreated)
+	api.JsonOK(w, config, http.StatusCreated)
 }
 
-func (h *ControlHandler) Disconnect(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) Disconnect(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r)
 
 	peerID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		jsonError(w, "invalid peer id", http.StatusBadRequest)
+		api.JsonError(w, "invalid peer id", http.StatusBadRequest)
 		return
 	}
 
 	peer, err := h.peerRepo.GetByID(r.Context(), peerID)
 	if err != nil {
-		jsonError(w, "peer not found", http.StatusNotFound)
+		api.JsonError(w, "peer not found", http.StatusNotFound)
 		return
 	}
 
-	if peer.UserID != user.ID && !isAdmin(user) {
-		jsonError(w, "not your peer", http.StatusForbidden)
+	if peer.UserID != user.ID && !IsAdmin(user) {
+		api.JsonError(w, "not your peer", http.StatusForbidden)
 		return
 	}
 
 	server, err := h.serverRepo.GetByID(r.Context(), peer.ServerID)
 	if err == nil {
-		_ = callCoreRemovePeer(server, peer.PublicKey)
+		_ = CallCoreRemovePeer(server, peer.PublicKey)
 		_ = h.serverRepo.UpdatePeerCount(r.Context(), peer.ServerID, -1)
 	}
 
@@ -192,40 +193,40 @@ func (h *ControlHandler) Disconnect(w http.ResponseWriter, r *http.Request) {
 	h.auditRepo.Log(r.Context(), &user.ID, "peer.disconnect",
 		map[string]interface{}{"peer_id": peerID, "server_id": peer.ServerID}, r.RemoteAddr)
 
-	jsonOK(w, map[string]string{"status": "disconnected"}, http.StatusOK)
+	api.JsonOK(w, map[string]string{"status": "disconnected"}, http.StatusOK)
 }
 
-func (h *ControlHandler) ListMyConnections(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) ListMyConnections(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r)
 	peers, err := h.peerRepo.ListByUser(r.Context(), user.ID)
 	if err != nil {
 		log.Printf("list connections error: %v", err)
-		jsonError(w, "failed to list connections", http.StatusInternalServerError)
+		api.JsonError(w, "failed to list connections", http.StatusInternalServerError)
 		return
 	}
-	jsonOK(w, peers, http.StatusOK)
+	api.JsonOK(w, peers, http.StatusOK)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // User audit
 // ═══════════════════════════════════════════════════════════════════════════
 
-func (h *ControlHandler) MyAuditLogs(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) MyAuditLogs(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r)
 	logs, err := h.auditRepo.ListByUser(r.Context(), user.ID, 50, 0)
 	if err != nil {
 		log.Printf("list audit logs error: %v", err)
-		jsonError(w, "failed to list audit logs", http.StatusInternalServerError)
+		api.JsonError(w, "failed to list audit logs", http.StatusInternalServerError)
 		return
 	}
-	jsonOK(w, logs, http.StatusOK)
+	api.JsonOK(w, logs, http.StatusOK)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Admin API
 // ═══════════════════════════════════════════════════════════════════════════
 
-func (h *ControlHandler) AdminDashboardStats(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) AdminDashboardStats(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	totalUsers, _ := h.userRepo.Count(ctx)
 	totalServers, activeServers, _ := h.serverRepo.Count(ctx)
@@ -241,36 +242,36 @@ func (h *ControlHandler) AdminDashboardStats(w http.ResponseWriter, r *http.Requ
 		TotalBytesSent: bytesSent,
 		TotalBytesRecv: bytesRecv,
 	}
-	jsonOK(w, stats, http.StatusOK)
+	api.JsonOK(w, stats, http.StatusOK)
 }
 
-func (h *ControlHandler) AdminListUsers(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) AdminListUsers(w http.ResponseWriter, r *http.Request) {
 	limit, offset := paginationParams(r)
 	users, err := h.userRepo.List(r.Context(), limit, offset)
 	if err != nil {
 		log.Printf("admin list users error: %v", err)
-		jsonError(w, "failed to list users", http.StatusInternalServerError)
+		api.JsonError(w, "failed to list users", http.StatusInternalServerError)
 		return
 	}
-	jsonOK(w, users, http.StatusOK)
+	api.JsonOK(w, users, http.StatusOK)
 }
 
-func (h *ControlHandler) AdminGetUser(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) AdminGetUser(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		jsonError(w, "invalid user id", http.StatusBadRequest)
+		api.JsonError(w, "invalid user id", http.StatusBadRequest)
 		return
 	}
 
 	user, err := h.userRepo.GetByID(r.Context(), id)
 	if err != nil {
-		jsonError(w, "user not found", http.StatusNotFound)
+		api.JsonError(w, "user not found", http.StatusNotFound)
 		return
 	}
 
 	peers, _ := h.peerRepo.ListByUser(r.Context(), id)
 
-	jsonOK(w, map[string]interface{}{
+	api.JsonOK(w, map[string]interface{}{
 		"user":  user,
 		"peers": peers,
 	}, http.StatusOK)
@@ -283,14 +284,14 @@ type AdminCreateUserRequest struct {
 	Groups       []string `json:"groups"`
 }
 
-func (h *ControlHandler) AdminCreateUser(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	var req AdminCreateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonError(w, "invalid JSON body", http.StatusBadRequest)
+		api.JsonError(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
 	if req.AuthentikUID == "" || req.Email == "" {
-		jsonError(w, "authentik_uid and email are required", http.StatusBadRequest)
+		api.JsonError(w, "authentik_uid and email are required", http.StatusBadRequest)
 		return
 	}
 
@@ -306,7 +307,7 @@ func (h *ControlHandler) AdminCreateUser(w http.ResponseWriter, r *http.Request)
 
 	if err := h.userRepo.Create(r.Context(), user); err != nil {
 		log.Printf("admin create user error: %v", err)
-		jsonError(w, "failed to create user", http.StatusInternalServerError)
+		api.JsonError(w, "failed to create user", http.StatusInternalServerError)
 		return
 	}
 
@@ -314,7 +315,7 @@ func (h *ControlHandler) AdminCreateUser(w http.ResponseWriter, r *http.Request)
 	h.auditRepo.Log(r.Context(), &admin.ID, "admin.user.create",
 		map[string]interface{}{"target_user_id": user.ID}, r.RemoteAddr)
 
-	jsonOK(w, user, http.StatusCreated)
+	api.JsonOK(w, user, http.StatusCreated)
 }
 
 type AdminUpdateUserRequest struct {
@@ -323,22 +324,22 @@ type AdminUpdateUserRequest struct {
 	Groups      []string `json:"groups"`
 }
 
-func (h *ControlHandler) AdminUpdateUser(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) AdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		jsonError(w, "invalid user id", http.StatusBadRequest)
+		api.JsonError(w, "invalid user id", http.StatusBadRequest)
 		return
 	}
 
 	user, err := h.userRepo.GetByID(r.Context(), id)
 	if err != nil {
-		jsonError(w, "user not found", http.StatusNotFound)
+		api.JsonError(w, "user not found", http.StatusNotFound)
 		return
 	}
 
 	var req AdminUpdateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonError(w, "invalid JSON body", http.StatusBadRequest)
+		api.JsonError(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
 
@@ -354,7 +355,7 @@ func (h *ControlHandler) AdminUpdateUser(w http.ResponseWriter, r *http.Request)
 
 	if err := h.userRepo.Update(r.Context(), user); err != nil {
 		log.Printf("admin update user %s error: %v", user.ID, err)
-		jsonError(w, "failed to update user", http.StatusInternalServerError)
+		api.JsonError(w, "failed to update user", http.StatusInternalServerError)
 		return
 	}
 
@@ -362,48 +363,48 @@ func (h *ControlHandler) AdminUpdateUser(w http.ResponseWriter, r *http.Request)
 	h.auditRepo.Log(r.Context(), &admin.ID, "admin.user.update",
 		map[string]interface{}{"target_user_id": id}, r.RemoteAddr)
 
-	jsonOK(w, user, http.StatusOK)
+	api.JsonOK(w, user, http.StatusOK)
 }
 
-func (h *ControlHandler) AdminDeleteUser(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) AdminDeleteUser(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		jsonError(w, "invalid user id", http.StatusBadRequest)
+		api.JsonError(w, "invalid user id", http.StatusBadRequest)
 		return
 	}
 
 	admin := auth.GetUser(r)
 	if admin.ID == id {
-		jsonError(w, "cannot delete your own account", http.StatusForbidden)
+		api.JsonError(w, "cannot delete your own account", http.StatusForbidden)
 		return
 	}
 
 	if err := h.userRepo.Delete(r.Context(), id); err != nil {
 		log.Printf("admin delete user %s error: %v", id, err)
-		jsonError(w, "failed to delete user", http.StatusInternalServerError)
+		api.JsonError(w, "failed to delete user", http.StatusInternalServerError)
 		return
 	}
 
 	h.auditRepo.Log(r.Context(), &admin.ID, "admin.user.delete",
 		map[string]interface{}{"target_user_id": id}, r.RemoteAddr)
 
-	jsonOK(w, map[string]string{"deleted": id.String()}, http.StatusOK)
+	api.JsonOK(w, map[string]string{"deleted": id.String()}, http.StatusOK)
 }
 
 type BanRequest struct {
 	Reason string `json:"reason"`
 }
 
-func (h *ControlHandler) AdminBanUser(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) AdminBanUser(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		jsonError(w, "invalid user id", http.StatusBadRequest)
+		api.JsonError(w, "invalid user id", http.StatusBadRequest)
 		return
 	}
 
 	admin := auth.GetUser(r)
 	if admin.ID == id {
-		jsonError(w, "cannot ban your own account", http.StatusForbidden)
+		api.JsonError(w, "cannot ban your own account", http.StatusForbidden)
 		return
 	}
 
@@ -412,7 +413,7 @@ func (h *ControlHandler) AdminBanUser(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.userRepo.Ban(r.Context(), id, req.Reason); err != nil {
 		log.Printf("admin ban user %s error: %v", id, err)
-		jsonError(w, "failed to ban user", http.StatusInternalServerError)
+		api.JsonError(w, "failed to ban user", http.StatusInternalServerError)
 		return
 	}
 
@@ -424,7 +425,7 @@ func (h *ControlHandler) AdminBanUser(w http.ResponseWriter, r *http.Request) {
 		}
 		server, err := h.serverRepo.GetByID(r.Context(), p.ServerID)
 		if err == nil {
-			_ = callCoreRemovePeer(server, p.PublicKey)
+			_ = CallCoreRemovePeer(server, p.PublicKey)
 			_ = h.serverRepo.UpdatePeerCount(r.Context(), p.ServerID, -1)
 		}
 		_ = h.peerRepo.Deactivate(r.Context(), p.ID)
@@ -433,7 +434,7 @@ func (h *ControlHandler) AdminBanUser(w http.ResponseWriter, r *http.Request) {
 	h.auditRepo.Log(r.Context(), &admin.ID, "admin.user.ban",
 		map[string]interface{}{"target_user_id": id, "reason": req.Reason}, r.RemoteAddr)
 
-	jsonOK(w, map[string]string{"status": "banned"}, http.StatusOK)
+	api.JsonOK(w, map[string]string{"status": "banned"}, http.StatusOK)
 }
 
 type CreateServerRequest struct {
@@ -448,24 +449,24 @@ type CreateServerRequest struct {
 	MaxPeers    int    `json:"max_peers"`
 }
 
-func (h *ControlHandler) AdminListServers(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) AdminListServers(w http.ResponseWriter, r *http.Request) {
 	servers, err := h.serverRepo.ListAll(r.Context())
 	if err != nil {
 		log.Printf("admin list servers error: %v", err)
-		jsonError(w, "failed to list servers", http.StatusInternalServerError)
+		api.JsonError(w, "failed to list servers", http.StatusInternalServerError)
 		return
 	}
-	jsonOK(w, servers, http.StatusOK)
+	api.JsonOK(w, servers, http.StatusOK)
 }
 
-func (h *ControlHandler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 	var req CreateServerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonError(w, "invalid JSON body", http.StatusBadRequest)
+		api.JsonError(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
 	if req.Name == "" || req.Host == "" || req.PublicKey == "" || req.CoreToken == "" {
-		jsonError(w, "name, host, public_key and core_token are required", http.StatusBadRequest)
+		api.JsonError(w, "name, host, public_key and core_token are required", http.StatusBadRequest)
 		return
 	}
 	if req.Port == 0 {
@@ -492,7 +493,7 @@ func (h *ControlHandler) AdminCreateServer(w http.ResponseWriter, r *http.Reques
 
 	if err := h.serverRepo.Create(r.Context(), server); err != nil {
 		log.Printf("admin create server error: %v", err)
-		jsonError(w, "failed to create server", http.StatusInternalServerError)
+		api.JsonError(w, "failed to create server", http.StatusInternalServerError)
 		return
 	}
 
@@ -500,7 +501,7 @@ func (h *ControlHandler) AdminCreateServer(w http.ResponseWriter, r *http.Reques
 	h.auditRepo.Log(r.Context(), &admin.ID, "admin.server.create",
 		map[string]interface{}{"server_id": server.ID, "name": server.Name}, r.RemoteAddr)
 
-	jsonOK(w, server, http.StatusCreated)
+	api.JsonOK(w, server, http.StatusCreated)
 }
 
 type UpdateServerRequest struct {
@@ -516,22 +517,22 @@ type UpdateServerRequest struct {
 	IsActive    *bool  `json:"is_active"`
 }
 
-func (h *ControlHandler) AdminUpdateServer(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) AdminUpdateServer(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		jsonError(w, "invalid server id", http.StatusBadRequest)
+		api.JsonError(w, "invalid server id", http.StatusBadRequest)
 		return
 	}
 
 	server, err := h.serverRepo.GetByID(r.Context(), id)
 	if err != nil {
-		jsonError(w, "server not found", http.StatusNotFound)
+		api.JsonError(w, "server not found", http.StatusNotFound)
 		return
 	}
 
 	var req UpdateServerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonError(w, "invalid JSON body", http.StatusBadRequest)
+		api.JsonError(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
 
@@ -568,7 +569,7 @@ func (h *ControlHandler) AdminUpdateServer(w http.ResponseWriter, r *http.Reques
 
 	if err := h.serverRepo.Update(r.Context(), server); err != nil {
 		log.Printf("admin update server %s error: %v", server.ID, err)
-		jsonError(w, "failed to update server", http.StatusInternalServerError)
+		api.JsonError(w, "failed to update server", http.StatusInternalServerError)
 		return
 	}
 
@@ -576,19 +577,19 @@ func (h *ControlHandler) AdminUpdateServer(w http.ResponseWriter, r *http.Reques
 	h.auditRepo.Log(r.Context(), &admin.ID, "admin.server.update",
 		map[string]interface{}{"server_id": id}, r.RemoteAddr)
 
-	jsonOK(w, server, http.StatusOK)
+	api.JsonOK(w, server, http.StatusOK)
 }
 
-func (h *ControlHandler) AdminDeleteServer(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) AdminDeleteServer(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		jsonError(w, "invalid server id", http.StatusBadRequest)
+		api.JsonError(w, "invalid server id", http.StatusBadRequest)
 		return
 	}
 
 	if err := h.serverRepo.Delete(r.Context(), id); err != nil {
 		log.Printf("admin delete server %s error: %v", id, err)
-		jsonError(w, "failed to delete server", http.StatusInternalServerError)
+		api.JsonError(w, "failed to delete server", http.StatusInternalServerError)
 		return
 	}
 
@@ -596,36 +597,36 @@ func (h *ControlHandler) AdminDeleteServer(w http.ResponseWriter, r *http.Reques
 	h.auditRepo.Log(r.Context(), &admin.ID, "admin.server.delete",
 		map[string]interface{}{"server_id": id}, r.RemoteAddr)
 
-	jsonOK(w, map[string]string{"deleted": id.String()}, http.StatusOK)
+	api.JsonOK(w, map[string]string{"deleted": id.String()}, http.StatusOK)
 }
 
-func (h *ControlHandler) AdminListPeers(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) AdminListPeers(w http.ResponseWriter, r *http.Request) {
 	limit, offset := paginationParams(r)
 	peers, err := h.peerRepo.ListAll(r.Context(), limit, offset)
 	if err != nil {
 		log.Printf("admin list peers error: %v", err)
-		jsonError(w, "failed to list peers", http.StatusInternalServerError)
+		api.JsonError(w, "failed to list peers", http.StatusInternalServerError)
 		return
 	}
-	jsonOK(w, peers, http.StatusOK)
+	api.JsonOK(w, peers, http.StatusOK)
 }
 
-func (h *ControlHandler) AdminForceDisconnectPeer(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) AdminForceDisconnectPeer(w http.ResponseWriter, r *http.Request) {
 	peerID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		jsonError(w, "invalid peer id", http.StatusBadRequest)
+		api.JsonError(w, "invalid peer id", http.StatusBadRequest)
 		return
 	}
 
 	peer, err := h.peerRepo.GetByID(r.Context(), peerID)
 	if err != nil {
-		jsonError(w, "peer not found", http.StatusNotFound)
+		api.JsonError(w, "peer not found", http.StatusNotFound)
 		return
 	}
 
 	server, err := h.serverRepo.GetByID(r.Context(), peer.ServerID)
 	if err == nil {
-		_ = callCoreRemovePeer(server, peer.PublicKey)
+		_ = CallCoreRemovePeer(server, peer.PublicKey)
 		_ = h.serverRepo.UpdatePeerCount(r.Context(), peer.ServerID, -1)
 	}
 
@@ -635,26 +636,26 @@ func (h *ControlHandler) AdminForceDisconnectPeer(w http.ResponseWriter, r *http
 	h.auditRepo.Log(r.Context(), &admin.ID, "admin.peer.disconnect",
 		map[string]interface{}{"peer_id": peerID, "user_id": peer.UserID}, r.RemoteAddr)
 
-	jsonOK(w, map[string]string{"status": "disconnected"}, http.StatusOK)
+	api.JsonOK(w, map[string]string{"status": "disconnected"}, http.StatusOK)
 }
 
-func (h *ControlHandler) AdminListAuditLogs(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) AdminListAuditLogs(w http.ResponseWriter, r *http.Request) {
 	limit, offset := paginationParams(r)
 	action := r.URL.Query().Get("action")
 	logs, err := h.auditRepo.ListAll(r.Context(), limit, offset, action)
 	if err != nil {
 		log.Printf("admin list audit logs error: %v", err)
-		jsonError(w, "failed to list audit logs", http.StatusInternalServerError)
+		api.JsonError(w, "failed to list audit logs", http.StatusInternalServerError)
 		return
 	}
-	jsonOK(w, logs, http.StatusOK)
+	api.JsonOK(w, logs, http.StatusOK)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════════════════════
 
-func isAdmin(user *models.User) bool {
+func IsAdmin(user *models.User) bool {
 	if user == nil {
 		return false
 	}
@@ -669,8 +670,8 @@ func isAdmin(user *models.User) bool {
 func AdminOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user := auth.GetUser(r)
-		if !isAdmin(user) {
-			jsonError(w, "admin access required", http.StatusForbidden)
+		if !IsAdmin(user) {
+			api.JsonError(w, "admin access required", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
