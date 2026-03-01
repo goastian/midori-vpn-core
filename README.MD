@@ -8,6 +8,7 @@ WireGuard VPN management daemon + control panel API written in **Go**, with a **
 cmd/vpn-core/main.go        → entrypoint (WireGuard + Control API)
 internal/
   api/                       → chi router (orchestrates core + control), shared response helpers
+  respond/                   → shared JSON response helpers (JsonOK, JsonError)
   core/                      → WireGuard core HTTP handlers + X-Core-Token middleware
   control/                   → Control API handlers, OAuth, core-client, background jobs, WebSocket hub
   auth/                      → JWT/JWKS validation (Authentik), JIT user provisioning
