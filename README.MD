@@ -7,7 +7,9 @@ WireGuard VPN management daemon + control panel API written in **Go**, with a **
 ```
 cmd/vpn-core/main.go        → entrypoint (WireGuard + Control API)
 internal/
-  api/                       → chi router, WireGuard handlers, control handlers, OAuth
+  api/                       → chi router (orchestrates core + control), shared response helpers
+  core/                      → WireGuard core HTTP handlers + X-Core-Token middleware
+  control/                   → Control API handlers, OAuth, core-client, background jobs, WebSocket hub
   auth/                      → JWT/JWKS validation (Authentik), JIT user provisioning
   config/                    → environment-based configuration
   crypto/                    → Curve25519 keypair generation
@@ -17,7 +19,7 @@ internal/
   repo/                      → repository pattern for DB access
   wg/                        → WireGuard manager (wgctrl + netlink)
 migrations/                  → PostgreSQL schema migrations
-control/                     → Vue 3 + TypeScript frontend (panel de control)
+web/                         → Vue 3 + TypeScript frontend (panel de control)
 ```
 
 ## Components
@@ -28,7 +30,7 @@ Low-level WireGuard peer management. Protected by shared secret (`X-Core-Token`)
 ### Control API
 User-facing API for managing VPN connections, servers and audit logs. Protected by JWT tokens from Authentik. Enabled automatically when `DATABASE_URL` and `AUTHENTIK_CLIENT_ID` are set.
 
-### Control Frontend (`midori-vpn-control/`)
+### Control Frontend (`web/`)
 Vue 3 + TypeScript SPA with OAuth2/OIDC login flow (PKCE) against `accounts.astian.org`.
 
 ## Requirements
