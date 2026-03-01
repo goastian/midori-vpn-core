@@ -11,6 +11,6 @@ Dockerfile
 video.mp4
 *.md
 !README.MD
-control/node_modules/
-control/dist/
+web/node_modules/
+web/dist/
 midorivpn-extension/
