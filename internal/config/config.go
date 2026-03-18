@@ -33,6 +33,13 @@ type Config struct {
 
 	// Core-to-core TLS
 	CoreTLSSkipVerify bool // skip TLS cert verification for self-signed certs
+
+	// Rate limiting
+	RateLimitRPS   int // requests per second per IP (0 = disabled)
+	RateLimitBurst int // burst size for rate limiter
+
+	// Device limits
+	MaxDevicesPerUser int // max active connections per user (0 = unlimited)
 }
 
 func Load() *Config {
@@ -61,6 +68,11 @@ func Load() *Config {
 		AuthentikJWKSURL:  jwksURL,
 
 		CoreTLSSkipVerify: getEnv("CORE_TLS_SKIP_VERIFY", "false") == "true",
+
+		RateLimitRPS:   getEnvInt("RATE_LIMIT_RPS", 20),
+		RateLimitBurst: getEnvInt("RATE_LIMIT_BURST", 40),
+
+		MaxDevicesPerUser: getEnvInt("MAX_DEVICES_PER_USER", 5),
 	}
 
 	if cfg.AuthToken == "" {

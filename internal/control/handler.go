@@ -11,25 +11,28 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/goastian/midori-vpn-core/internal/respond"
 	"github.com/goastian/midori-vpn-core/internal/auth"
+	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/models"
 	"github.com/goastian/midori-vpn-core/internal/repo"
+	"github.com/goastian/midori-vpn-core/internal/respond"
 )
 
 type Handler struct {
-	userRepo   *repo.UserRepo
-	serverRepo *repo.ServerRepo
-	peerRepo   *repo.PeerRepo
-	auditRepo  *repo.AuditRepo
+	userRepo          *repo.UserRepo
+	serverRepo        *repo.ServerRepo
+	peerRepo          *repo.PeerRepo
+	auditRepo         *repo.AuditRepo
+	maxDevicesPerUser int
 }
 
-func NewHandler(pool *pgxpool.Pool) *Handler {
+func NewHandler(pool *pgxpool.Pool, cfg *config.Config) *Handler {
 	return &Handler{
-		userRepo:   repo.NewUserRepo(pool),
-		serverRepo: repo.NewServerRepo(pool),
-		peerRepo:   repo.NewPeerRepo(pool),
-		auditRepo:  repo.NewAuditRepo(pool),
+		userRepo:          repo.NewUserRepo(pool),
+		serverRepo:        repo.NewServerRepo(pool),
+		peerRepo:          repo.NewPeerRepo(pool),
+		auditRepo:         repo.NewAuditRepo(pool),
+		maxDevicesPerUser: cfg.MaxDevicesPerUser,
 	}
 }
 
@@ -89,7 +92,21 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Select server (explicit or least loaded)
+	// 2. Enforce device limit
+	if h.maxDevicesPerUser > 0 {
+		activeCount, err := h.peerRepo.CountByUser(r.Context(), user.ID)
+		if err != nil {
+			log.Printf("count devices error: %v", err)
+			respond.JsonError(w, "failed to check device limit", http.StatusInternalServerError)
+			return
+		}
+		if activeCount >= h.maxDevicesPerUser {
+			respond.JsonError(w, fmt.Sprintf("device limit reached (max %d)", h.maxDevicesPerUser), http.StatusConflict)
+			return
+		}
+	}
+
+	// 3. Select server (explicit or least loaded)
 	var server *models.VPNServer
 	if req.ServerID != "" {
 		serverID, err := uuid.Parse(req.ServerID)
@@ -484,7 +501,7 @@ func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 		Host:        req.Host,
 		Port:        req.Port,
 		WGPort:      req.WGPort,
-		PublicKey:    req.PublicKey,
+		PublicKey:   req.PublicKey,
 		CoreToken:   req.CoreToken,
 		Location:    req.Location,
 		CountryCode: req.CountryCode,

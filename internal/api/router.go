@@ -28,6 +28,9 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.SetHeader("Content-Type", "application/json"))
 	r.Use(CORSMiddleware(cfg))
+	if cfg.RateLimitRPS > 0 {
+		r.Use(RateLimitMiddleware(cfg))
+	}
 
 	h := core.NewHandler(cfg, mgr)
 
@@ -58,7 +61,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 		r.Post("/auth/callback", oauthH.Callback)
 		r.Get("/auth/config", oauthH.OIDCConfig)
 
-		ch := control.NewHandler(pool)
+		ch := control.NewHandler(pool, cfg)
 		jwtMW := auth.JWTMiddleware(cfg, pool, jwks)
 
 		// User-facing routes

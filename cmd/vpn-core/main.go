@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/goastian/midori-vpn-core/internal/respond"
+	"github.com/goastian/midori-vpn-core/internal/api"
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/control"
@@ -49,10 +49,10 @@ func main() {
 		}
 
 		log.Println("Control API enabled (PostgreSQL + Authentik)")
-		router = respond.NewRouterWithDB(cfg, manager, pool, jwks)
+		router = api.NewRouterWithDB(cfg, manager, pool, jwks)
 	} else {
 		log.Println("Control API disabled (no DATABASE_URL or AUTHENTIK_CLIENT_ID)")
-		router = respond.NewRouter(cfg, manager)
+		router = api.NewRouter(cfg, manager)
 	}
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
@@ -71,7 +71,7 @@ func main() {
 		log.Println("shutting down...")
 
 		// Cancel background jobs first
-		respond.CancelJobs()
+		api.CancelJobs()
 
 		// Give in-flight requests up to 15s to complete
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
