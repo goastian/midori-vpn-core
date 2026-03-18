@@ -59,6 +59,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 	if pool != nil && jwks != nil {
 		oauthH := control.NewOAuthHandler(cfg)
 		r.Post("/auth/callback", oauthH.Callback)
+		r.Post("/auth/refresh", oauthH.Refresh)
 		r.Get("/auth/config", oauthH.OIDCConfig)
 
 		ch := control.NewHandler(pool, cfg)

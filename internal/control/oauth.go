@@ -8,8 +8,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/goastian/midori-vpn-core/internal/respond"
 	"github.com/goastian/midori-vpn-core/internal/config"
+	"github.com/goastian/midori-vpn-core/internal/respond"
 )
 
 type OAuthHandler struct {
@@ -44,6 +44,57 @@ type TokenResponse struct {
 	ExpiresIn    int    `json:"expires_in"`
 	RefreshToken string `json:"refresh_token,omitempty"`
 	IDToken      string `json:"id_token,omitempty"`
+}
+
+type RefreshRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
+func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
+	var req RefreshRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respond.JsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.RefreshToken == "" {
+		respond.JsonError(w, "refresh_token is required", http.StatusBadRequest)
+		return
+	}
+
+	tokenURL := h.cfg.AuthentikIssuer + "/token/"
+
+	form := url.Values{}
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", req.RefreshToken)
+	form.Set("client_id", h.cfg.AuthentikClientID)
+
+	resp, err := http.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
+	if err != nil {
+		respond.JsonError(w, "token refresh failed", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		respond.JsonError(w, "failed to read token response", http.StatusBadGateway)
+		return
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		w.Write(body)
+		return
+	}
+
+	var tokenResp TokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		respond.JsonError(w, "invalid token response", http.StatusBadGateway)
+		return
+	}
+
+	respond.JsonOK(w, tokenResp, http.StatusOK)
 }
 
 func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
