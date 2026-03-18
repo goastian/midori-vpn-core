@@ -77,6 +77,8 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 			r.Post("/connections", ch.Connect)
 			r.Get("/connections", ch.ListMyConnections)
 			r.Delete("/connections/{id}", ch.Disconnect)
+			r.Get("/connections/{id}/config", ch.ExportConfig)
+			r.Get("/connections/{id}/qr", ch.ExportQR)
 
 			r.Get("/audit-logs", ch.MyAuditLogs)
 		})

@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/config"
@@ -226,6 +227,95 @@ func (h *Handler) Disconnect(w http.ResponseWriter, r *http.Request) {
 		map[string]interface{}{"peer_id": peerID, "server_id": peer.ServerID}, r.RemoteAddr)
 
 	respond.JsonOK(w, map[string]string{"status": "disconnected"}, http.StatusOK)
+}
+
+func (h *Handler) ExportConfig(w http.ResponseWriter, r *http.Request) {
+	user := auth.GetUser(r)
+
+	peerID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		respond.JsonError(w, "invalid peer id", http.StatusBadRequest)
+		return
+	}
+
+	peer, err := h.peerRepo.GetByID(r.Context(), peerID)
+	if err != nil {
+		respond.JsonError(w, "peer not found", http.StatusNotFound)
+		return
+	}
+
+	if peer.UserID != user.ID && !IsAdmin(user) {
+		respond.JsonError(w, "not your peer", http.StatusForbidden)
+		return
+	}
+
+	server, err := h.serverRepo.GetByID(r.Context(), peer.ServerID)
+	if err != nil {
+		respond.JsonError(w, "server not found", http.StatusNotFound)
+		return
+	}
+
+	conf := buildWGConfig(peer, server)
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="wg-%s.conf"`, peer.DeviceName))
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(conf))
+}
+
+func (h *Handler) ExportQR(w http.ResponseWriter, r *http.Request) {
+	user := auth.GetUser(r)
+
+	peerID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		respond.JsonError(w, "invalid peer id", http.StatusBadRequest)
+		return
+	}
+
+	peer, err := h.peerRepo.GetByID(r.Context(), peerID)
+	if err != nil {
+		respond.JsonError(w, "peer not found", http.StatusNotFound)
+		return
+	}
+
+	if peer.UserID != user.ID && !IsAdmin(user) {
+		respond.JsonError(w, "not your peer", http.StatusForbidden)
+		return
+	}
+
+	server, err := h.serverRepo.GetByID(r.Context(), peer.ServerID)
+	if err != nil {
+		respond.JsonError(w, "server not found", http.StatusNotFound)
+		return
+	}
+
+	conf := buildWGConfig(peer, server)
+
+	png, err := qrcode.Encode(conf, qrcode.Medium, 512)
+	if err != nil {
+		log.Printf("qr generation error: %v", err)
+		respond.JsonError(w, "failed to generate QR code", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="wg-%s.png"`, peer.DeviceName))
+	w.WriteHeader(http.StatusOK)
+	w.Write(png)
+}
+
+func buildWGConfig(peer *models.Peer, server *models.VPNServer) string {
+	return fmt.Sprintf(`[Interface]
+PrivateKey = <YOUR_PRIVATE_KEY>
+Address = %s/32
+DNS = 1.1.1.1, 8.8.8.8
+
+[Peer]
+PublicKey = %s
+Endpoint = %s:%d
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+`, peer.AssignedIP, server.PublicKey, server.Host, server.WGPort)
 }
 
 func (h *Handler) ListMyConnections(w http.ResponseWriter, r *http.Request) {
