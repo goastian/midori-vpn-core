@@ -6,6 +6,9 @@ import (
 )
 
 type Config struct {
+	// Application
+	AppEnv string // "production" or "development"
+
 	// HTTP
 	Port      string
 	AuthToken string // X-Core-Token shared secret (core ↔ core API)
@@ -51,6 +54,7 @@ func Load() *Config {
 	}
 
 	cfg := &Config{
+		AppEnv:      getEnv("APP_ENV", "production"),
 		Port:        getEnv("VPN_CORE_PORT", "8080"),
 		AuthToken:   getEnv("VPN_CORE_TOKEN", ""),
 		WGInterface: getEnv("WG_INTERFACE", "wg0"),

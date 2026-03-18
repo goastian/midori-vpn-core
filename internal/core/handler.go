@@ -8,9 +8,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/goastian/midori-vpn-core/internal/respond"
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/crypto"
+	"github.com/goastian/midori-vpn-core/internal/respond"
 	"github.com/goastian/midori-vpn-core/internal/wg"
 )
 
@@ -32,12 +32,12 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 // --- Peers ---
 
 type AddPeerRequest struct {
-	PublicKey  string `json:"public_key"`
+	PublicKey string `json:"public_key"`
 	Keepalive int    `json:"keepalive"`
 }
 
 type AddPeerResponse struct {
-	PublicKey  string `json:"public_key"`
+	PublicKey string `json:"public_key"`
 	AllowedIP string `json:"allowed_ip"`
 	Endpoint  string `json:"endpoint"`
 }
@@ -60,7 +60,7 @@ func (h *Handler) AddPeer(w http.ResponseWriter, r *http.Request) {
 
 	ip, err := h.mgr.AddPeer(req.PublicKey, req.Keepalive)
 	if err != nil {
-		respond.JsonError(w, err.Error(), http.StatusInternalServerError)
+		respond.SafeError(w, "failed to add peer", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -70,7 +70,7 @@ func (h *Handler) AddPeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respond.JsonOK(w, AddPeerResponse{
-		PublicKey:  req.PublicKey,
+		PublicKey: req.PublicKey,
 		AllowedIP: ip,
 		Endpoint:  endpoint,
 	}, http.StatusCreated)
@@ -84,7 +84,7 @@ func (h *Handler) RemovePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.mgr.RemovePeer(pubkey); err != nil {
-		respond.JsonError(w, err.Error(), http.StatusInternalServerError)
+		respond.SafeError(w, "failed to remove peer", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -114,7 +114,7 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.mgr.UpdatePeer(pubkey, keepalive); err != nil {
-		respond.JsonError(w, err.Error(), http.StatusInternalServerError)
+		respond.SafeError(w, "failed to update peer", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -130,7 +130,7 @@ func (h *Handler) PeerStats(w http.ResponseWriter, r *http.Request) {
 
 	stats, err := h.mgr.PeerStats(pubkey)
 	if err != nil {
-		respond.JsonError(w, err.Error(), http.StatusNotFound)
+		respond.SafeError(w, "peer not found", err, http.StatusNotFound)
 		return
 	}
 
@@ -140,7 +140,7 @@ func (h *Handler) PeerStats(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {
 	peers, err := h.mgr.ListPeers()
 	if err != nil {
-		respond.JsonError(w, err.Error(), http.StatusInternalServerError)
+		respond.SafeError(w, "failed to list peers", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -152,7 +152,7 @@ func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GenerateKeypair(w http.ResponseWriter, r *http.Request) {
 	kp, err := crypto.GenerateKeypair()
 	if err != nil {
-		respond.JsonError(w, err.Error(), http.StatusInternalServerError)
+		respond.SafeError(w, "failed to generate keypair", err, http.StatusInternalServerError)
 		return
 	}
 
@@ -164,10 +164,9 @@ func (h *Handler) GenerateKeypair(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ServerStats(w http.ResponseWriter, r *http.Request) {
 	stats, err := h.mgr.ServerStats()
 	if err != nil {
-		respond.JsonError(w, err.Error(), http.StatusInternalServerError)
+		respond.SafeError(w, "failed to get server stats", err, http.StatusInternalServerError)
 		return
 	}
 
 	respond.JsonOK(w, stats, http.StatusOK)
 }
-
