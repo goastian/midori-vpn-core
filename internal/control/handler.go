@@ -13,6 +13,7 @@ import (
 
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/config"
+	vpnCrypto "github.com/goastian/midori-vpn-core/internal/crypto"
 	"github.com/goastian/midori-vpn-core/internal/models"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 	"github.com/goastian/midori-vpn-core/internal/respond"
@@ -47,6 +48,20 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond.JsonOK(w, user, http.StatusOK)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Keypair generation (browser-side)
+// ═══════════════════════════════════════════════════════════════════════════
+
+func (h *Handler) GenerateKeypair(w http.ResponseWriter, r *http.Request) {
+	kp, err := vpnCrypto.GenerateKeypair()
+	if err != nil {
+		log.Printf("keypair generation error: %v", err)
+		respond.JsonError(w, "failed to generate keypair", http.StatusInternalServerError)
+		return
+	}
+	respond.JsonOK(w, kp, http.StatusCreated)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
