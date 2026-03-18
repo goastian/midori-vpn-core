@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -77,6 +79,65 @@ func (h *Handler) ListServers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond.JsonOK(w, servers, http.StatusOK)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Server latency ping
+// ═══════════════════════════════════════════════════════════════════════════
+
+type ServerPingResult struct {
+	ServerID    uuid.UUID `json:"server_id"`
+	Name        string    `json:"name"`
+	Host        string    `json:"host"`
+	Location    string    `json:"location"`
+	CountryCode string    `json:"country_code"`
+	LatencyMs   int64     `json:"latency_ms"`
+	Available   bool      `json:"available"`
+}
+
+func (h *Handler) PingServers(w http.ResponseWriter, r *http.Request) {
+	servers, err := h.serverRepo.ListActive(r.Context())
+	if err != nil {
+		log.Printf("ping servers list error: %v", err)
+		respond.JsonError(w, "failed to list servers", http.StatusInternalServerError)
+		return
+	}
+
+	results := make([]ServerPingResult, len(servers))
+	var wg sync.WaitGroup
+
+	for i, s := range servers {
+		wg.Add(1)
+		go func(idx int, server models.VPNServer) {
+			defer wg.Done()
+			result := ServerPingResult{
+				ServerID:    server.ID,
+				Name:        server.Name,
+				Host:        server.Host,
+				Location:    server.Location,
+				CountryCode: server.CountryCode,
+			}
+
+			healthURL := fmt.Sprintf("%s://%s:%d/health", coreScheme(&server), server.Host, server.Port)
+			start := time.Now()
+			client := &http.Client{Timeout: 5 * time.Second}
+			resp, err := client.Get(healthURL)
+			elapsed := time.Since(start).Milliseconds()
+
+			if err == nil {
+				resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					result.LatencyMs = elapsed
+					result.Available = true
+				}
+			}
+
+			results[idx] = result
+		}(i, s)
+	}
+	wg.Wait()
+
+	respond.JsonOK(w, results, http.StatusOK)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

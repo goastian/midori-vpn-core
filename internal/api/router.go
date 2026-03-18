@@ -72,6 +72,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 			r.Get("/me", ch.Me)
 			r.Post("/keypair", ch.GenerateKeypair)
 			r.Get("/servers", ch.ListServers)
+			r.Get("/servers/ping", ch.PingServers)
 
 			// Connections
 			r.Post("/connections", ch.Connect)
