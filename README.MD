@@ -1,4 +1,4 @@
-# Astian VPN Core
+# Midori VPN Core
 
 WireGuard VPN management daemon + control panel API written in **Go**, with a **Vue 3** frontend.
 
@@ -7,8 +7,8 @@ WireGuard VPN management daemon + control panel API written in **Go**, with a **
 ```
 cmd/vpn-core/main.go        → entrypoint (WireGuard + Control API)
 internal/
-  api/                       → chi router (orchestrates core + control), shared response helpers
-  respond/                   → shared JSON response helpers (JsonOK, JsonError)
+  api/                       → chi router, CORS, rate limiting middleware
+  respond/                   → shared JSON response helpers (JsonOK, JsonError, SafeError)
   core/                      → WireGuard core HTTP handlers + X-Core-Token middleware
   control/                   → Control API handlers, OAuth, core-client, background jobs, WebSocket hub
   auth/                      → JWT/JWKS validation (Authentik), JIT user provisioning
@@ -20,7 +20,7 @@ internal/
   repo/                      → repository pattern for DB access
   wg/                        → WireGuard manager (wgctrl + netlink)
 migrations/                  → PostgreSQL schema migrations
-web/                         → Vue 3 + TypeScript frontend (panel de control)
+midori-vpn-control/          → Vue 3 + TypeScript frontend (panel de control)
 ```
 
 ## Components
@@ -32,7 +32,7 @@ Low-level WireGuard peer management. Protected by shared secret (`X-Core-Token`)
 User-facing API for managing VPN connections, servers and audit logs. Protected by JWT tokens from Authentik. Enabled automatically when `DATABASE_URL` and `AUTHENTIK_CLIENT_ID` are set.
 
 ### Control Frontend (`midori-vpn-control/`)
-Vue 3 + TypeScript SPA with OAuth2/OIDC login flow (PKCE) against `accounts.astian.org`.
+Vue 3 + TypeScript SPA with OAuth2/OIDC login flow (PKCE) against `accounts.astian.org`. Features automatic token refresh and state validation.
 
 ## Requirements
 
@@ -52,6 +52,14 @@ docker compose -f docker-compose-dev.yml up --build
 docker compose up
 ```
 
+## Environment Variables
+
+### Application
+
+| Variable | Default | Description |
+|---|---|---|
+| `APP_ENV` | `production` | `production` hides internal errors, `development` shows them |
+
 ### Core (WireGuard)
 
 | Variable | Default | Description |
@@ -70,9 +78,19 @@ docker compose up
 |---|---|---|
 | `DATABASE_URL` | *(empty)* | PostgreSQL connection string |
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis connection string |
-| `AUTHENTIK_ISSUER` | `https://accounts.astian.org/application/o/midorivpn` | OIDC issuer URL |
+| `AUTHENTIK_ISSUER` | *(empty)* | OIDC issuer URL |
 | `AUTHENTIK_CLIENT_ID` | *(empty)* | Authentik OAuth2 client ID |
 | `AUTHENTIK_JWKS_URL` | *(auto from issuer)* | JWKS endpoint URL |
+
+### Security & Limits
+
+| Variable | Default | Description |
+|---|---|---|
+| `CORS_ALLOWED_ORIGINS` | `https://*.astian.org,...` | Comma-separated allowed origins |
+| `RATE_LIMIT_RPS` | `20` | Requests per second per IP (0 = disabled) |
+| `RATE_LIMIT_BURST` | `40` | Burst size for rate limiter |
+| `MAX_DEVICES_PER_USER` | `5` | Max active VPN connections per user (0 = unlimited) |
+| `CORE_TLS_SKIP_VERIFY` | `false` | Skip TLS verification for core-to-core comms |
 
 ## API Endpoints
 
@@ -80,29 +98,62 @@ docker compose up
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/health` | Healthcheck (no auth) |
-| `POST` | `/api/v1/peers` | Add peer |
-| `DELETE` | `/api/v1/peers/:pubkey` | Remove peer |
-| `PUT` | `/api/v1/peers/:pubkey` | Update peer |
-| `GET` | `/api/v1/peers/:pubkey/stats` | Peer stats |
+| `GET` | `/health` | Health check (no auth) |
+| `POST` | `/api/v1/peers` | Add WireGuard peer |
+| `DELETE` | `/api/v1/peers/{pubkey}` | Remove peer |
+| `PUT` | `/api/v1/peers/{pubkey}` | Update peer keepalive |
+| `GET` | `/api/v1/peers/{pubkey}/stats` | Peer traffic stats |
 | `GET` | `/api/v1/peers` | List all peers |
-| `POST` | `/api/v1/keypair` | Generate keypair |
+| `POST` | `/api/v1/keypair` | Generate Curve25519 keypair |
 | `GET` | `/api/v1/stats` | Server stats |
+
+### Auth (public)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/auth/config` | OIDC configuration for frontend |
+| `POST` | `/auth/callback` | Exchange authorization code for tokens |
+| `POST` | `/auth/refresh` | Refresh access token using refresh token |
 
 ### Control API (JWT Bearer protected)
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/auth/config` | OIDC configuration for frontend |
-| `POST` | `/auth/callback` | Exchange auth code for tokens |
 | `GET` | `/api/v1/control/me` | Current user profile |
+| `POST` | `/api/v1/control/keypair` | Generate keypair (for browser clients) |
 | `GET` | `/api/v1/control/servers` | List active VPN servers |
-| `POST` | `/api/v1/control/servers` | Create server (admin) |
-| `DELETE` | `/api/v1/control/servers/:id` | Delete server (admin) |
-| `GET` | `/api/v1/control/peers` | List my VPN connections |
-| `POST` | `/api/v1/control/peers` | Connect to a server |
-| `DELETE` | `/api/v1/control/peers/:id` | Disconnect from a server |
-| `GET` | `/api/v1/control/audit` | My audit logs |
+| `GET` | `/api/v1/control/servers/ping` | Ping all servers (latency check) |
+| `POST` | `/api/v1/control/connections` | Connect to a VPN server |
+| `GET` | `/api/v1/control/connections` | List my active connections |
+| `DELETE` | `/api/v1/control/connections/{id}` | Disconnect from a server |
+| `GET` | `/api/v1/control/connections/{id}/config` | Download WireGuard .conf file |
+| `GET` | `/api/v1/control/connections/{id}/qr` | Download QR code PNG for config |
+| `GET` | `/api/v1/control/audit-logs` | My audit logs |
+
+### Admin API (JWT + admin role required)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/admin/dashboard/stats` | Dashboard statistics |
+| `GET` | `/api/v1/admin/users` | List all users |
+| `POST` | `/api/v1/admin/users` | Create user |
+| `GET` | `/api/v1/admin/users/{id}` | Get user details |
+| `PUT` | `/api/v1/admin/users/{id}` | Update user |
+| `DELETE` | `/api/v1/admin/users/{id}` | Delete user |
+| `POST` | `/api/v1/admin/users/{id}/ban` | Ban/unban user |
+| `GET` | `/api/v1/admin/servers` | List all servers (includes core_token) |
+| `POST` | `/api/v1/admin/servers` | Create server |
+| `PUT` | `/api/v1/admin/servers/{id}` | Update server |
+| `DELETE` | `/api/v1/admin/servers/{id}` | Delete server |
+| `GET` | `/api/v1/admin/peers` | List all peers |
+| `DELETE` | `/api/v1/admin/peers/{id}` | Force disconnect peer |
+| `GET` | `/api/v1/admin/audit-logs` | All audit logs |
+
+### WebSocket
+
+| Path | Description |
+|---|---|
+| `/ws?token=<jwt>` | Real-time stats broadcast (JWT via query param) |
 
 ## License
 
