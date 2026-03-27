@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,11 +33,13 @@ const (
 var (
 	coreHTTP = &http.Client{Timeout: coreRequestTimeout}
 	coreTLSSkipVerify bool
+	coreAllowInsecureHTTP bool
 )
 
 // InitCoreClient configures the core HTTP client with TLS settings.
-func InitCoreClient(skipVerify bool) {
+func InitCoreClient(skipVerify bool, allowInsecureHTTP bool) {
 	coreTLSSkipVerify = skipVerify
+	coreAllowInsecureHTTP = allowInsecureHTTP
 	coreHTTP = &http.Client{
 		Timeout: coreRequestTimeout,
 		Transport: &http.Transport{
@@ -45,14 +50,58 @@ func InitCoreClient(skipVerify bool) {
 	}
 }
 
-// coreScheme returns "https" if the server port is 443 or the host contains
-// a scheme hint, otherwise "http". Servers can opt-in to TLS by setting
-// their API port to 443 or by prefixing the host with "https://".
-func coreScheme(server *models.VPNServer) string {
-	if server.Port == 443 {
-		return "https"
+// coreURL builds the full core API URL from server host/port.
+// Behavior:
+// 1) If host already includes http:// or https://, that scheme is respected.
+// 2) Otherwise HTTPS is the default.
+// 3) For local/test environments, CORE_ALLOW_INSECURE_HTTP=true allows HTTP.
+func coreURL(server *models.VPNServer, path string) (string, string, error) {
+	hostInput := strings.TrimSpace(server.Host)
+	if hostInput == "" {
+		return "", "", fmt.Errorf("empty core host")
 	}
-	return "http"
+
+	var (
+		scheme string
+		host   string
+		port   int
+	)
+
+	if strings.HasPrefix(hostInput, "http://") || strings.HasPrefix(hostInput, "https://") {
+		u, err := url.Parse(hostInput)
+		if err != nil {
+			return "", "", fmt.Errorf("invalid core host URL %q: %w", hostInput, err)
+		}
+		if u.Host == "" {
+			return "", "", fmt.Errorf("invalid core host URL %q: missing host", hostInput)
+		}
+		scheme = u.Scheme
+		host = u.Hostname()
+		if p := u.Port(); p != "" {
+			parsed, err := strconv.Atoi(p)
+			if err != nil {
+				return "", "", fmt.Errorf("invalid core host URL %q: invalid port", hostInput)
+			}
+			port = parsed
+		} else {
+			port = server.Port
+		}
+	} else {
+		host = hostInput
+		port = server.Port
+		scheme = "https"
+		if coreAllowInsecureHTTP && port != 443 {
+			scheme = "http"
+		}
+	}
+
+	if port <= 0 {
+		return "", "", fmt.Errorf("invalid core port %d", port)
+	}
+
+	hostPort := net.JoinHostPort(host, strconv.Itoa(port))
+	base := fmt.Sprintf("%s://%s", scheme, hostPort)
+	return base + path, hostPort, nil
 }
 
 // --- Circuit breaker (per server host) ---
@@ -194,15 +243,18 @@ func CallCoreAddPeer(server *models.VPNServer, pubkey string) (*CoreAddPeerRespo
 		"keepalive":  25,
 	})
 
-	coreURL := fmt.Sprintf("%s://%s:%d/api/v1/peers", coreScheme(server), server.Host, server.Port)
-	req, err := http.NewRequest(http.MethodPost, coreURL, nil)
+	fullURL, cbKey, err := coreURL(server, "/api/v1/peers")
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(http.MethodPost, fullURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Core-Token", server.CoreToken)
 
-	resp, err := coreDoWithRetry(req, payload, server.Host)
+	resp, err := coreDoWithRetry(req, payload, cbKey)
 	if err != nil {
 		return nil, err
 	}
@@ -229,15 +281,18 @@ func CallCoreAddPeer(server *models.VPNServer, pubkey string) (*CoreAddPeerRespo
 
 func CallCoreRemovePeer(server *models.VPNServer, pubkey string) error {
 	encodedKey := url.PathEscape(pubkey)
-	coreURL := fmt.Sprintf("%s://%s:%d/api/v1/peers/%s", coreScheme(server), server.Host, server.Port, encodedKey)
+	fullURL, cbKey, err := coreURL(server, "/api/v1/peers/"+encodedKey)
+	if err != nil {
+		return err
+	}
 
-	req, err := http.NewRequest(http.MethodDelete, coreURL, nil)
+	req, err := http.NewRequest(http.MethodDelete, fullURL, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("X-Core-Token", server.CoreToken)
 
-	resp, err := coreDoWithRetry(req, nil, server.Host)
+	resp, err := coreDoWithRetry(req, nil, cbKey)
 	if err != nil {
 		return err
 	}
@@ -253,15 +308,18 @@ func CallCoreRemovePeer(server *models.VPNServer, pubkey string) error {
 
 func CallCoreGetPeerStats(server *models.VPNServer, pubkey string) (*CorePeerStatsResponse, error) {
 	encodedKey := url.PathEscape(pubkey)
-	coreURL := fmt.Sprintf("%s://%s:%d/api/v1/peers/%s/stats", coreScheme(server), server.Host, server.Port, encodedKey)
+	fullURL, cbKey, err := coreURL(server, "/api/v1/peers/"+encodedKey+"/stats")
+	if err != nil {
+		return nil, err
+	}
 
-	req, err := http.NewRequest(http.MethodGet, coreURL, nil)
+	req, err := http.NewRequest(http.MethodGet, fullURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("X-Core-Token", server.CoreToken)
 
-	resp, err := coreDoWithRetry(req, nil, server.Host)
+	resp, err := coreDoWithRetry(req, nil, cbKey)
 	if err != nil {
 		return nil, err
 	}
@@ -285,15 +343,18 @@ func CallCoreGetPeerStats(server *models.VPNServer, pubkey string) (*CorePeerSta
 }
 
 func CallCoreListPeers(server *models.VPNServer) ([]CorePeerStatsResponse, error) {
-	coreURL := fmt.Sprintf("%s://%s:%d/api/v1/peers", coreScheme(server), server.Host, server.Port)
+	fullURL, cbKey, err := coreURL(server, "/api/v1/peers")
+	if err != nil {
+		return nil, err
+	}
 
-	req, err := http.NewRequest(http.MethodGet, coreURL, nil)
+	req, err := http.NewRequest(http.MethodGet, fullURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("X-Core-Token", server.CoreToken)
 
-	resp, err := coreDoWithRetry(req, nil, server.Host)
+	resp, err := coreDoWithRetry(req, nil, cbKey)
 	if err != nil {
 		return nil, err
 	}

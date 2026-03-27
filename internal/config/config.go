@@ -36,6 +36,7 @@ type Config struct {
 
 	// Core-to-core TLS
 	CoreTLSSkipVerify bool // skip TLS cert verification for self-signed certs
+	CoreAllowHTTP     bool // allow plain HTTP for local/testing inter-core calls
 
 	// Rate limiting
 	RateLimitRPS   int // requests per second per IP (0 = disabled)
@@ -71,7 +72,8 @@ func Load() *Config {
 		AuthentikClientID: getEnv("AUTHENTIK_CLIENT_ID", ""),
 		AuthentikJWKSURL:  jwksURL,
 
-		CoreTLSSkipVerify: getEnv("CORE_TLS_SKIP_VERIFY", "false") == "true",
+		CoreTLSSkipVerify: getEnvBool("CORE_TLS_SKIP_VERIFY", false),
+		CoreAllowHTTP:     getEnvBool("CORE_ALLOW_INSECURE_HTTP", false),
 
 		RateLimitRPS:   getEnvInt("RATE_LIMIT_RPS", 20),
 		RateLimitBurst: getEnvInt("RATE_LIMIT_BURST", 40),
@@ -110,4 +112,19 @@ func getEnvInt(key string, fallback int) int {
 		n = n*10 + int(c-'0')
 	}
 	return n
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	switch v {
+	case "1", "true", "TRUE", "True", "yes", "YES", "on", "ON":
+		return true
+	case "0", "false", "FALSE", "False", "no", "NO", "off", "OFF":
+		return false
+	default:
+		return fallback
+	}
 }

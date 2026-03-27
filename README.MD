@@ -91,6 +91,7 @@ docker compose up
 | `RATE_LIMIT_BURST` | `40` | Burst size for rate limiter |
 | `MAX_DEVICES_PER_USER` | `5` | Max active VPN connections per user (0 = unlimited) |
 | `CORE_TLS_SKIP_VERIFY` | `false` | Skip TLS verification for core-to-core comms |
+| `CORE_ALLOW_INSECURE_HTTP` | `false` | Allow HTTP (no TLS) for core-to-core comms in local/testing |
 
 ## API Endpoints
 

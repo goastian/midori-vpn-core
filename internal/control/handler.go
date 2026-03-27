@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -118,10 +119,22 @@ func (h *Handler) PingServers(w http.ResponseWriter, r *http.Request) {
 				CountryCode: server.CountryCode,
 			}
 
-			healthURL := fmt.Sprintf("%s://%s:%d/health", coreScheme(&server), server.Host, server.Port)
+			healthURL, _, err := coreURL(&server, "/health")
+			if err != nil {
+				results[idx] = result
+				return
+			}
 			start := time.Now()
-			client := &http.Client{Timeout: 5 * time.Second}
-			resp, err := client.Get(healthURL)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
+			if err != nil {
+				results[idx] = result
+				return
+			}
+
+			resp, err := coreHTTP.Do(req)
 			elapsed := time.Since(start).Milliseconds()
 
 			if err == nil {
