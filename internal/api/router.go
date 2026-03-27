@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -142,15 +143,29 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 }
 
 // jobCancelFunc stores the cancel function for background jobs
-var jobCancelFunc context.CancelFunc
+var (
+	jobCancelMu   sync.Mutex
+	jobCancelFunc context.CancelFunc
+)
 
 func SetJobCancel(cancel context.CancelFunc) {
+	jobCancelMu.Lock()
+	defer jobCancelMu.Unlock()
+
+	if jobCancelFunc != nil {
+		jobCancelFunc()
+	}
 	jobCancelFunc = cancel
 }
 
 func CancelJobs() {
-	if jobCancelFunc != nil {
-		jobCancelFunc()
+	jobCancelMu.Lock()
+	cancel := jobCancelFunc
+	jobCancelFunc = nil
+	jobCancelMu.Unlock()
+
+	if cancel != nil {
+		cancel()
 	}
 }
 

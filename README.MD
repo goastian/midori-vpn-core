@@ -95,6 +95,10 @@ docker compose up
 
 ## API Endpoints
 
+Availability notes:
+- `Core API` and `GET /health` are always available.
+- `Auth`, `Control API`, `Admin API`, and `WebSocket` are available only when both `DATABASE_URL` and `AUTHENTIK_CLIENT_ID` are configured.
+
 ### Core API (`X-Core-Token` protected)
 
 | Method | Path | Description |

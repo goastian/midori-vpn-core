@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -65,26 +64,41 @@ func main() {
 		Handler: router,
 	}
 
-	// Graceful shutdown
+	shutdownCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	serverErrCh := make(chan error, 1)
 	go func() {
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-		<-sigCh
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			serverErrCh <- err
+			return
+		}
+		serverErrCh <- nil
+	}()
+
+	select {
+	case err := <-serverErrCh:
+		if err != nil {
+			api.CancelJobs()
+			log.Fatalf("server error: %v", err)
+		}
+	case <-shutdownCtx.Done():
 		log.Println("shutting down...")
 
-		// Cancel background jobs first
+		// Stop periodic jobs before shutting down the HTTP server.
 		api.CancelJobs()
 
-		// Give in-flight requests up to 15s to complete
+		// Give in-flight requests up to 15s to complete.
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {
 			log.Printf("graceful shutdown error: %v", err)
 		}
-	}()
 
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("server error: %v", err)
+		if err := <-serverErrCh; err != nil {
+			log.Printf("server stopped with error: %v", err)
+		}
 	}
+
 	log.Println("server stopped")
 }
