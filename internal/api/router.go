@@ -116,7 +116,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 		})
 
 		// WebSocket for real-time stats (JWT protected via query param)
-		wsHub := control.NewWSHub()
+		wsHub := control.NewWSHub(cfg)
 		go wsHub.Run()
 		r.Get("/ws", func(w http.ResponseWriter, req *http.Request) {
 			// Validate JWT from query param ?token=<jwt>
@@ -125,11 +125,16 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 				respond.JsonError(w, "missing token query parameter", http.StatusUnauthorized)
 				return
 			}
-			if !auth.ValidateTokenOnly(cfg, jwks, tokenStr) {
+			claims, err := auth.ValidateTokenAndExtractClaims(cfg, jwks, tokenStr)
+			if err != nil {
 				respond.JsonError(w, "invalid token", http.StatusUnauthorized)
 				return
 			}
-			wsHub.HandleWS(w, req)
+			if err := wsHub.CanAccept(claims.Subject, claims.Groups); err != nil {
+				respond.JsonError(w, err.Error(), http.StatusTooManyRequests)
+				return
+			}
+			wsHub.HandleWS(w, req, claims.Subject)
 		})
 
 		// Start background jobs with cancellation support

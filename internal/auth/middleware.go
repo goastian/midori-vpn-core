@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -142,4 +143,35 @@ func ValidateTokenOnly(cfg *config.Config, jwks *JWKSProvider, tokenStr string) 
 		return false
 	}
 	return true
+}
+
+// WSClaims holds the subset of JWT claims needed for WebSocket authorization.
+type WSClaims struct {
+	Subject string
+	Groups  []string
+}
+
+// ValidateTokenAndExtractClaims validates a JWT and returns the subject and groups.
+func ValidateTokenAndExtractClaims(cfg *config.Config, jwks *JWKSProvider, tokenStr string) (*WSClaims, error) {
+	keySet := jwks.KeySet()
+	token, err := jwt.Parse(
+		[]byte(tokenStr),
+		jwt.WithKeySet(keySet),
+		jwt.WithValidate(true),
+		jwt.WithAcceptableSkew(30*time.Second),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if token.Issuer() != cfg.AuthentikIssuer {
+		return nil, fmt.Errorf("invalid issuer: %s", token.Issuer())
+	}
+	sub := token.Subject()
+	if sub == "" {
+		return nil, fmt.Errorf("missing sub claim")
+	}
+	return &WSClaims{
+		Subject: sub,
+		Groups:  getStringSliceClaim(token, "groups"),
+	}, nil
 }

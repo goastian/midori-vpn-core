@@ -44,6 +44,14 @@ type Config struct {
 
 	// Device limits
 	MaxDevicesPerUser int // max active connections per user (0 = unlimited)
+
+	// WebSocket limits per plan
+	WSMaxGlobal  int // max global WS connections (0 = unlimited)
+	WSMaxFree    int // max WS conns for free plan
+	WSMaxBasic   int // max WS conns for basic plan
+	WSMaxMedium  int // max WS conns for medium plan
+	WSMaxPro     int // max WS conns for pro plan
+	WSMaxAdmin   int // max WS conns for admins
 }
 
 func Load() *Config {
@@ -79,6 +87,13 @@ func Load() *Config {
 		RateLimitBurst: getEnvInt("RATE_LIMIT_BURST", 40),
 
 		MaxDevicesPerUser: getEnvInt("MAX_DEVICES_PER_USER", 5),
+
+		WSMaxGlobal: getEnvInt("WS_MAX_GLOBAL", 1000),
+		WSMaxFree:   getEnvInt("WS_MAX_FREE", 1),
+		WSMaxBasic:  getEnvInt("WS_MAX_BASIC", 2),
+		WSMaxMedium: getEnvInt("WS_MAX_MEDIUM", 3),
+		WSMaxPro:    getEnvInt("WS_MAX_PRO", 5),
+		WSMaxAdmin:  getEnvInt("WS_MAX_ADMIN", 10),
 	}
 
 	if cfg.AuthToken == "" {
@@ -104,6 +119,28 @@ func Load() *Config {
 	}
 
 	return cfg
+}
+
+// WSMaxForGroups returns the highest WS connection limit for the given groups.
+func (c *Config) WSMaxForGroups(groups []string) int {
+	max := c.WSMaxFree
+	for _, g := range groups {
+		var limit int
+		switch g {
+		case "vpn-admins", "admins":
+			limit = c.WSMaxAdmin
+		case "plan-pro":
+			limit = c.WSMaxPro
+		case "plan-medium":
+			limit = c.WSMaxMedium
+		case "plan-basic":
+			limit = c.WSMaxBasic
+		}
+		if limit > max {
+			max = limit
+		}
+	}
+	return max
 }
 
 func getEnv(key, fallback string) string {
