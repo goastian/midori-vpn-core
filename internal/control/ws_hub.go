@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -8,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/net/websocket"
+	"nhooyr.io/websocket"
 
 	"github.com/goastian/midori-vpn-core/internal/config"
 )
@@ -122,38 +123,45 @@ func (h *WSHub) ClientCount() int {
 }
 
 func (h *WSHub) HandleWS(w http.ResponseWriter, r *http.Request, userID string) {
-	s := websocket.Server{
-		Handler: func(conn *websocket.Conn) {
-			client := &WSClient{
-				conn:   conn,
-				send:   make(chan []byte, 64),
-				userID: userID,
-			}
-
-			h.register <- client
-			defer func() {
-				h.unregister <- client
-				conn.Close()
-			}()
-
-			// Writer goroutine
-			go func() {
-				for msg := range client.send {
-					if _, err := conn.Write(msg); err != nil {
-						break
-					}
-				}
-			}()
-
-			// Reader (keep connection alive, discard incoming)
-			buf := make([]byte, 512)
-			for {
-				conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-				if _, err := conn.Read(buf); err != nil {
-					break
-				}
-			}
-		},
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		CompressionMode: websocket.CompressionContextTakeover,
+	})
+	if err != nil {
+		log.Printf("ws: accept error: %v", err)
+		return
 	}
-	s.ServeHTTP(w, r)
+
+	client := &WSClient{
+		conn:   conn,
+		send:   make(chan []byte, 64),
+		userID: userID,
+	}
+
+	h.register <- client
+	defer func() {
+		h.unregister <- client
+		conn.Close(websocket.StatusNormalClosure, "")
+	}()
+
+	// Writer goroutine
+	go func() {
+		for msg := range client.send {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if err := conn.Write(ctx, websocket.MessageText, msg); err != nil {
+				cancel()
+				return
+			}
+			cancel()
+		}
+	}()
+
+	// Reader (keep connection alive, discard incoming)
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		_, _, err := conn.Read(ctx)
+		cancel()
+		if err != nil {
+			break
+		}
+	}
 }
