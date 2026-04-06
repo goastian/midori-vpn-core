@@ -39,10 +39,25 @@ func NewJWKSProvider(cfg *config.Config) (*JWKSProvider, error) {
 		cacheDir: cacheDir,
 	}
 
-	if err := p.refresh(); err != nil {
-		log.Printf("JWKS remote fetch failed, trying local fallback: %v", err)
+	// Preload with retry (3 attempts with exponential backoff)
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		if err := p.refresh(); err != nil {
+			lastErr = err
+			log.Printf("JWKS preload attempt %d/3 failed: %v", attempt, err)
+			if attempt < 3 {
+				time.Sleep(time.Duration(attempt) * 2 * time.Second)
+			}
+			continue
+		}
+		lastErr = nil
+		break
+	}
+
+	if lastErr != nil {
+		log.Printf("JWKS remote preload failed after 3 attempts, trying local fallback")
 		if fbErr := p.loadFromDisk(); fbErr != nil {
-			return nil, fmt.Errorf("initial JWKS fetch from %s failed and no local fallback: %w", cfg.AuthentikJWKSURL, err)
+			return nil, fmt.Errorf("JWKS preload from %s failed and no local fallback: %w", cfg.AuthentikJWKSURL, lastErr)
 		}
 		log.Printf("JWKS loaded from local fallback (%d keys)", p.keySet.Len())
 	}
