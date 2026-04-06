@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -81,19 +82,17 @@ func RateLimitMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 	}
 }
 
-// realIP extracts the client IP from X-Forwarded-For, X-Real-IP, or RemoteAddr.
+// realIP extracts the client IP from X-Real-IP, the rightmost non-trusted
+// entry in X-Forwarded-For, or falls back to RemoteAddr.
 func realIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Take the first IP in the chain
-		for i := 0; i < len(xff); i++ {
-			if xff[i] == ',' {
-				return xff[:i]
-			}
-		}
-		return xff
-	}
+	// Prefer X-Real-IP set by a trusted reverse proxy
 	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
+		return strings.TrimSpace(xri)
+	}
+	// Take the rightmost (last) IP from X-Forwarded-For — closest to our proxy
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		return strings.TrimSpace(parts[len(parts)-1])
 	}
 	// Strip port from RemoteAddr
 	addr := r.RemoteAddr

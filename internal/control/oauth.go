@@ -108,6 +108,11 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.isAllowedRedirectURI(req.RedirectURI) {
+		respond.JsonError(w, "redirect_uri not allowed", http.StatusBadRequest)
+		return
+	}
+
 	tokenURL := h.cfg.AuthentikIssuer + "/token/"
 
 	form := url.Values{}
@@ -146,4 +151,32 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respond.JsonOK(w, tokenResp, http.StatusOK)
+}
+
+// isAllowedRedirectURI checks whether the redirect_uri origin matches
+// one of the configured CORS allowed origins.
+func (h *OAuthHandler) isAllowedRedirectURI(redirectURI string) bool {
+	parsed, err := url.Parse(redirectURI)
+	if err != nil {
+		return false
+	}
+	origin := parsed.Scheme + "://" + parsed.Host
+
+	for _, allowed := range strings.Split(h.cfg.CORSAllowedOrigins, ",") {
+		allowed = strings.TrimSpace(allowed)
+		if allowed == "" {
+			continue
+		}
+		// Support wildcard subdomains like https://*.astian.org
+		if strings.HasPrefix(allowed, "https://*.") || strings.HasPrefix(allowed, "http://*.") {
+			suffix := allowed[strings.Index(allowed, "*.")+1:]
+			scheme := allowed[:strings.Index(allowed, "://")]
+			if parsed.Scheme == scheme && strings.HasSuffix(parsed.Host, suffix) {
+				return true
+			}
+		} else if origin == allowed {
+			return true
+		}
+	}
+	return false
 }

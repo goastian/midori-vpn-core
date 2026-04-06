@@ -2,8 +2,11 @@ package repo
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,12 +28,34 @@ func (r *AuditRepo) Log(ctx context.Context, userID *uuid.UUID, action string, m
 		metaJSON = []byte("{}")
 	}
 
+	masked := maskIP(ipAddress)
+
 	query := `INSERT INTO audit_logs (user_id, action, metadata, ip_address) VALUES ($1, $2, $3, $4)`
-	_, err = r.pool.Exec(ctx, query, userID, action, metaJSON, ipAddress)
+	_, err = r.pool.Exec(ctx, query, userID, action, metaJSON, masked)
 	if err != nil {
 		return fmt.Errorf("audit log: %w", err)
 	}
 	return nil
+}
+
+// maskIP truncates the last octet of IPv4 or last 80 bits of IPv6,
+// then appends a short hash for correlation without storing the full IP.
+func maskIP(ip string) string {
+	ip = strings.TrimSpace(ip)
+	if ip == "" || ip == "system" {
+		return ip
+	}
+
+	hash := sha256.Sum256([]byte(ip))
+	short := hex.EncodeToString(hash[:4])
+
+	if idx := strings.LastIndex(ip, "."); idx != -1 {
+		return ip[:idx] + ".x [" + short + "]"
+	}
+	if idx := strings.LastIndex(ip, ":"); idx != -1 {
+		return ip[:idx] + ":x [" + short + "]"
+	}
+	return ip
 }
 
 func (r *AuditRepo) ListByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]models.AuditLog, error) {

@@ -89,6 +89,20 @@ func Load() *Config {
 		log.Println("INFO: DATABASE_URL not set — Control API will be disabled")
 	}
 
+	// Validate numeric ranges
+	if cfg.WGPort < 1 || cfg.WGPort > 65535 {
+		log.Fatalf("FATAL: WG_PORT must be between 1 and 65535, got %d", cfg.WGPort)
+	}
+	if cfg.RateLimitRPS < 0 {
+		log.Fatalf("FATAL: RATE_LIMIT_RPS must be >= 0, got %d", cfg.RateLimitRPS)
+	}
+	if cfg.RateLimitBurst < 1 && cfg.RateLimitRPS > 0 {
+		log.Fatalf("FATAL: RATE_LIMIT_BURST must be >= 1 when rate limiting is enabled, got %d", cfg.RateLimitBurst)
+	}
+	if cfg.MaxDevicesPerUser < 0 {
+		log.Fatalf("FATAL: MAX_DEVICES_PER_USER must be >= 0, got %d", cfg.MaxDevicesPerUser)
+	}
+
 	return cfg
 }
 

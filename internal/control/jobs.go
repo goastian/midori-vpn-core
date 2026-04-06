@@ -16,9 +16,6 @@ func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub) {
 	serverRepo := repo.NewServerRepo(pool)
 	peerRepo := repo.NewPeerRepo(pool)
 
-	ticker := time.NewTicker(60 * time.Second)
-	defer ticker.Stop()
-
 	log.Println("job: stats-sync started (interval=60s)")
 
 	for {
@@ -26,7 +23,7 @@ func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub) {
 		case <-parentCtx.Done():
 			log.Println("job: stats-sync stopped")
 			return
-		case <-ticker.C:
+		case <-time.After(60 * time.Second):
 		}
 		ctx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
 
@@ -49,7 +46,9 @@ func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub) {
 			}
 
 			// Update server peer count from actual core data
-			_ = serverRepo.SetPeerCount(ctx, server.ID, len(corePeers))
+			if err := serverRepo.SetPeerCount(ctx, server.ID, len(corePeers)); err != nil {
+				log.Printf("job: stats-sync set peer count error (server=%s): %v", server.Name, err)
+			}
 
 			// Match core peers with DB peers and update stats
 			dbPeers, err := peerRepo.ListActiveByServer(ctx, server.ID)
@@ -70,7 +69,9 @@ func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub) {
 							hs = &t
 						}
 					}
-					_ = peerRepo.UpdateStats(ctx, dbPeer.ID, stats.BytesSent, stats.BytesReceived, hs)
+					if err := peerRepo.UpdateStats(ctx, dbPeer.ID, stats.BytesSent, stats.BytesReceived, hs); err != nil {
+						log.Printf("job: stats-sync update stats error (peer=%s): %v", dbPeer.ID, err)
+					}
 				}
 			}
 
@@ -111,9 +112,6 @@ func StartPeerCleanup(parentCtx context.Context, pool *pgxpool.Pool) {
 	peerRepo := repo.NewPeerRepo(pool)
 	auditRepo := repo.NewAuditRepo(pool)
 
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-
 	log.Println("job: peer-cleanup started (interval=5min, stale_threshold=30min)")
 
 	for {
@@ -121,7 +119,7 @@ func StartPeerCleanup(parentCtx context.Context, pool *pgxpool.Pool) {
 		case <-parentCtx.Done():
 			log.Println("job: peer-cleanup stopped")
 			return
-		case <-ticker.C:
+		case <-time.After(5 * time.Minute):
 		}
 		ctx, cancel := context.WithTimeout(parentCtx, 60*time.Second)
 
@@ -142,11 +140,17 @@ func StartPeerCleanup(parentCtx context.Context, pool *pgxpool.Pool) {
 		for _, peer := range stalePeers {
 			server, err := serverRepo.GetByID(ctx, peer.ServerID)
 			if err == nil {
-				_ = CallCoreRemovePeer(server, peer.PublicKey)
-				_ = serverRepo.UpdatePeerCount(ctx, peer.ServerID, -1)
+				if err := CallCoreRemovePeer(server, peer.PublicKey); err != nil {
+					log.Printf("job: peer-cleanup core remove error (peer=%s): %v", peer.ID, err)
+				}
+				if err := serverRepo.UpdatePeerCount(ctx, peer.ServerID, -1); err != nil {
+					log.Printf("job: peer-cleanup update peer count error (server=%s): %v", peer.ServerID, err)
+				}
 			}
 
-			_ = peerRepo.Deactivate(ctx, peer.ID)
+			if err := peerRepo.Deactivate(ctx, peer.ID); err != nil {
+				log.Printf("job: peer-cleanup deactivate error (peer=%s): %v", peer.ID, err)
+			}
 
 			auditRepo.Log(ctx, &peer.UserID, "peer.cleanup",
 				map[string]interface{}{

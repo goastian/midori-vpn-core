@@ -374,8 +374,12 @@ func (m *Manager) persistConfig() {
 		sb.WriteString("\n")
 	}
 
-	if err := os.WriteFile(confPath, []byte(sb.String()), 0600); err != nil {
+	if err := os.WriteFile(confPath+".tmp", []byte(sb.String()), 0600); err != nil {
 		log.Printf("error writing config: %v", err)
+		return
+	}
+	if err := os.Rename(confPath+".tmp", confPath); err != nil {
+		log.Printf("error renaming config: %v", err)
 	} else {
 		log.Printf("persisted config to %s", confPath)
 	}
