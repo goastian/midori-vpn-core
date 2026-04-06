@@ -13,11 +13,64 @@ import (
 )
 
 type OAuthHandler struct {
-	cfg *config.Config
+	cfg            *config.Config
+	allowedOrigins []string
 }
 
 func NewOAuthHandler(cfg *config.Config) *OAuthHandler {
-	return &OAuthHandler{cfg: cfg}
+	origins := make([]string, 0)
+	for _, o := range strings.Split(cfg.CORSAllowedOrigins, ",") {
+		o = strings.TrimSpace(o)
+		if o != "" {
+			origins = append(origins, o)
+		}
+	}
+	return &OAuthHandler{cfg: cfg, allowedOrigins: origins}
+}
+
+// csrfCheck validates Origin (or Referer) header against allowed origins.
+// Returns true if the request passes; writes an error response and returns false otherwise.
+func (h *OAuthHandler) csrfCheck(w http.ResponseWriter, r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		// Fallback to Referer
+		if ref := r.Header.Get("Referer"); ref != "" {
+			if parsed, err := url.Parse(ref); err == nil {
+				origin = parsed.Scheme + "://" + parsed.Host
+			}
+		}
+	}
+	if origin == "" {
+		respond.JsonError(w, "missing Origin header", http.StatusForbidden)
+		return false
+	}
+	if !h.isAllowedOrigin(origin) {
+		respond.JsonError(w, "origin not allowed", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+// isAllowedOrigin checks if the origin matches any of the configured CORS origins.
+func (h *OAuthHandler) isAllowedOrigin(origin string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	for _, allowed := range h.allowedOrigins {
+		if allowed == origin {
+			return true
+		}
+		// Support wildcard subdomains
+		if strings.HasPrefix(allowed, "https://*.") || strings.HasPrefix(allowed, "http://*.") {
+			suffix := allowed[strings.Index(allowed, "*.")+1:]
+			scheme := allowed[:strings.Index(allowed, "://")]
+			if parsed.Scheme == scheme && strings.HasSuffix(parsed.Host, suffix) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (h *OAuthHandler) OIDCConfig(w http.ResponseWriter, r *http.Request) {
@@ -51,6 +104,10 @@ type RefreshRequest struct {
 }
 
 func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
+	if !h.csrfCheck(w, r) {
+		return
+	}
+
 	var req RefreshRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respond.JsonError(w, "invalid request body", http.StatusBadRequest)
@@ -98,6 +155,10 @@ func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
+	if !h.csrfCheck(w, r) {
+		return
+	}
+
 	var req CallbackRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respond.JsonError(w, "invalid request body", http.StatusBadRequest)
@@ -161,22 +222,5 @@ func (h *OAuthHandler) isAllowedRedirectURI(redirectURI string) bool {
 		return false
 	}
 	origin := parsed.Scheme + "://" + parsed.Host
-
-	for _, allowed := range strings.Split(h.cfg.CORSAllowedOrigins, ",") {
-		allowed = strings.TrimSpace(allowed)
-		if allowed == "" {
-			continue
-		}
-		// Support wildcard subdomains like https://*.astian.org
-		if strings.HasPrefix(allowed, "https://*.") || strings.HasPrefix(allowed, "http://*.") {
-			suffix := allowed[strings.Index(allowed, "*.")+1:]
-			scheme := allowed[:strings.Index(allowed, "://")]
-			if parsed.Scheme == scheme && strings.HasSuffix(parsed.Host, suffix) {
-				return true
-			}
-		} else if origin == allowed {
-			return true
-		}
-	}
-	return false
+	return h.isAllowedOrigin(origin)
 }
