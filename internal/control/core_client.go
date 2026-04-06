@@ -34,10 +34,11 @@ var (
 	coreHTTP = &http.Client{Timeout: coreRequestTimeout}
 	coreTLSSkipVerify bool
 	coreAllowInsecureHTTP bool
+	coreAllowedHosts map[string]bool
 )
 
 // InitCoreClient configures the core HTTP client with TLS settings.
-func InitCoreClient(skipVerify bool, allowInsecureHTTP bool) {
+func InitCoreClient(skipVerify bool, allowInsecureHTTP bool, allowedHosts string) {
 	coreTLSSkipVerify = skipVerify
 	coreAllowInsecureHTTP = allowInsecureHTTP
 	coreHTTP = &http.Client{
@@ -47,6 +48,15 @@ func InitCoreClient(skipVerify bool, allowInsecureHTTP bool) {
 				InsecureSkipVerify: skipVerify,
 			},
 		},
+	}
+
+	// Parse allowed hosts whitelist
+	coreAllowedHosts = make(map[string]bool)
+	for _, h := range strings.Split(allowedHosts, ",") {
+		h = strings.TrimSpace(h)
+		if h != "" {
+			coreAllowedHosts[h] = true
+		}
 	}
 }
 
@@ -97,6 +107,11 @@ func coreURL(server *models.VPNServer, path string) (string, string, error) {
 
 	if port <= 0 {
 		return "", "", fmt.Errorf("invalid core port %d", port)
+	}
+
+	// Validate host against whitelist
+	if len(coreAllowedHosts) > 0 && !coreAllowedHosts[host] {
+		return "", "", fmt.Errorf("core host %q not in allowed hosts whitelist", host)
 	}
 
 	hostPort := net.JoinHostPort(host, strconv.Itoa(port))

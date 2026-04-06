@@ -35,8 +35,9 @@ type Config struct {
 	AuthentikJWKSURL  string
 
 	// Core-to-core TLS
-	CoreTLSSkipVerify bool // skip TLS cert verification for self-signed certs
-	CoreAllowHTTP     bool // allow plain HTTP for local/testing inter-core calls
+	CoreTLSSkipVerify bool   // skip TLS cert verification for self-signed certs
+	CoreAllowHTTP     bool   // allow plain HTTP for local/testing inter-core calls
+	CoreAllowedHosts  string // comma-separated whitelist of allowed core server hosts (empty = allow all)
 
 	// Rate limiting
 	RateLimitRPS   int // requests per second per IP (0 = disabled)
@@ -82,6 +83,7 @@ func Load() *Config {
 
 		CoreTLSSkipVerify: getEnvBool("CORE_TLS_SKIP_VERIFY", false),
 		CoreAllowHTTP:     getEnvBool("CORE_ALLOW_INSECURE_HTTP", false),
+		CoreAllowedHosts:  getEnv("CORE_ALLOWED_HOSTS", ""),
 
 		RateLimitRPS:   getEnvInt("RATE_LIMIT_RPS", 20),
 		RateLimitBurst: getEnvInt("RATE_LIMIT_BURST", 40),

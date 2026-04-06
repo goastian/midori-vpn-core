@@ -23,7 +23,7 @@ func main() {
 	respond.SetAppEnv(cfg.AppEnv)
 
 	// Initialize core HTTP client with TLS settings
-	control.InitCoreClient(cfg.CoreTLSSkipVerify, cfg.CoreAllowHTTP)
+	control.InitCoreClient(cfg.CoreTLSSkipVerify, cfg.CoreAllowHTTP, cfg.CoreAllowedHosts)
 
 	manager, err := wg.NewManager(cfg)
 	if err != nil {
