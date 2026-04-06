@@ -47,6 +47,11 @@ func InitCoreClient(skipVerify bool, allowInsecureHTTP bool, allowedHosts string
 			TLSClientConfig: &tls.Config{
 				InsecureSkipVerify: skipVerify,
 			},
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			MaxConnsPerHost:     20,
+			IdleConnTimeout:     90 * time.Second,
+			DisableKeepAlives:   false,
 		},
 	}
 
