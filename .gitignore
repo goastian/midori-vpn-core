@@ -8,6 +8,7 @@
 *.test
 *.out
 vendor/
+*.md
 
 # Config & secrets
 .env
