@@ -12,6 +12,11 @@ type Keypair struct {
 	PublicKey  string `json:"public_key"`
 }
 
+// String implements fmt.Stringer to prevent accidental logging of private keys.
+func (kp *Keypair) String() string {
+	return "Keypair{pub=" + kp.PublicKey + "}"
+}
+
 func GenerateKeypair() (*Keypair, error) {
 	var privKey [32]byte
 	if _, err := rand.Read(privKey[:]); err != nil {
