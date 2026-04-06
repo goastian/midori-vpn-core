@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -14,22 +16,35 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/config"
 )
 
+const jwksCacheFile = "jwks_cache.json"
+
 type JWKSProvider struct {
 	cfg       *config.Config
 	mu        sync.RWMutex
 	keySet    jwk.Set
 	fetchedAt time.Time
 	cacheTTL  time.Duration
+	cacheDir  string
 }
 
 func NewJWKSProvider(cfg *config.Config) (*JWKSProvider, error) {
+	cacheDir := cfg.ConfigDir
+	if cacheDir == "" {
+		cacheDir = os.TempDir()
+	}
+
 	p := &JWKSProvider{
 		cfg:      cfg,
 		cacheTTL: 1 * time.Hour,
+		cacheDir: cacheDir,
 	}
 
 	if err := p.refresh(); err != nil {
-		return nil, fmt.Errorf("initial JWKS fetch from %s: %w", cfg.AuthentikJWKSURL, err)
+		log.Printf("JWKS remote fetch failed, trying local fallback: %v", err)
+		if fbErr := p.loadFromDisk(); fbErr != nil {
+			return nil, fmt.Errorf("initial JWKS fetch from %s failed and no local fallback: %w", cfg.AuthentikJWKSURL, err)
+		}
+		log.Printf("JWKS loaded from local fallback (%d keys)", p.keySet.Len())
 	}
 
 	go p.backgroundRefresh()
@@ -83,6 +98,9 @@ func (p *JWKSProvider) refresh() error {
 	p.fetchedAt = time.Now()
 	p.mu.Unlock()
 
+	// Persist to disk for fallback
+	p.saveToDisk(body)
+
 	log.Printf("JWKS refreshed: %d keys from %s", set.Len(), p.cfg.AuthentikJWKSURL)
 	return nil
 }
@@ -93,7 +111,38 @@ func (p *JWKSProvider) backgroundRefresh() {
 
 	for range ticker.C {
 		if err := p.refresh(); err != nil {
-			log.Printf("JWKS background refresh error: %v", err)
+			log.Printf("JWKS background refresh error (keeping cached keys): %v", err)
 		}
 	}
+}
+
+func (p *JWKSProvider) cachePath() string {
+	return filepath.Join(p.cacheDir, jwksCacheFile)
+}
+
+func (p *JWKSProvider) saveToDisk(data []byte) {
+	path := p.cachePath()
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		log.Printf("JWKS: failed to write cache to %s: %v", path, err)
+	}
+}
+
+func (p *JWKSProvider) loadFromDisk() error {
+	path := p.cachePath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read JWKS cache %s: %w", path, err)
+	}
+
+	set, err := jwk.ParseString(string(data))
+	if err != nil {
+		return fmt.Errorf("parse cached JWKS: %w", err)
+	}
+
+	p.mu.Lock()
+	p.keySet = set
+	p.fetchedAt = time.Now()
+	p.mu.Unlock()
+
+	return nil
 }
