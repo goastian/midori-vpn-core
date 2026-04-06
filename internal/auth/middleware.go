@@ -3,7 +3,7 @@ package auth
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -47,7 +47,7 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 				jwt.WithAcceptableSkew(30*time.Second),
 			)
 			if err != nil {
-				log.Printf("JWT validation failed: %v", err)
+				slog.Warn("JWT validation failed", "error", err)
 				http.Error(w, `{"ok":false,"error":"invalid token"}`, http.StatusUnauthorized)
 				return
 			}
@@ -68,7 +68,7 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 
 			user, err := userRepo.UpsertByAuthentikUID(r.Context(), sub, email, groups)
 			if err != nil {
-				log.Printf("JIT provisioning error for sub=%s: %v", sub, err)
+				slog.Error("JIT provisioning error", "sub", sub, "error", err)
 				http.Error(w, `{"ok":false,"error":"user provisioning failed"}`, http.StatusInternalServerError)
 				return
 			}
@@ -136,7 +136,7 @@ func ValidateTokenOnly(cfg *config.Config, jwks *JWKSProvider, tokenStr string) 
 		jwt.WithAcceptableSkew(30*time.Second),
 	)
 	if err != nil {
-		log.Printf("WS JWT validation failed: %v", err)
+		slog.Warn("WS JWT validation failed", "error", err)
 		return false
 	}
 	if token.Issuer() != cfg.AuthentikIssuer {

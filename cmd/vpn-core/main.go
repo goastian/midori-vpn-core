@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os/signal"
 	"syscall"
@@ -49,15 +50,15 @@ func main() {
 			log.Fatalf("failed to initialize JWKS provider: %v", err)
 		}
 
-		log.Println("Control API enabled (PostgreSQL + Authentik)")
+		slog.Info("Control API enabled", "auth", "PostgreSQL + Authentik")
 		router = api.NewRouterWithDB(cfg, manager, pool, jwks)
 	} else {
-		log.Println("Control API disabled (no DATABASE_URL or AUTHENTIK_CLIENT_ID)")
+		slog.Info("Control API disabled", "reason", "no DATABASE_URL or AUTHENTIK_CLIENT_ID")
 		router = api.NewRouter(cfg, manager)
 	}
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
-	log.Printf("MidoriVPN listening on %s", addr)
+	slog.Info("MidoriVPN listening", "addr", addr)
 
 	srv := &http.Server{
 		Addr:    addr,
@@ -83,7 +84,7 @@ func main() {
 			log.Fatalf("server error: %v", err)
 		}
 	case <-shutdownCtx.Done():
-		log.Println("shutting down...")
+		slog.Info("shutting down...")
 
 		// Stop periodic jobs before shutting down the HTTP server.
 		api.CancelJobs()
@@ -92,13 +93,13 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {
-			log.Printf("graceful shutdown error: %v", err)
+			slog.Error("graceful shutdown error", "error", err)
 		}
 
 		if err := <-serverErrCh; err != nil {
-			log.Printf("server stopped with error: %v", err)
+			slog.Error("server stopped with error", "error", err)
 		}
 	}
 
-	log.Println("server stopped")
+	slog.Info("server stopped")
 }

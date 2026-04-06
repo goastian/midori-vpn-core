@@ -4,7 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -72,7 +72,7 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 	}
 
 	if err := m.loadExistingPeers(); err != nil {
-		log.Printf("warning: could not load existing peers: %v", err)
+		slog.Warn("could not load existing peers", "error", err)
 	}
 
 	return m, nil
@@ -85,13 +85,12 @@ func (m *Manager) Close() {
 func (m *Manager) ensureInterface() error {
 	dev, err := m.client.Device(m.cfg.WGInterface)
 	if err != nil {
-		log.Printf("interface %s not found, attempting to configure...", m.cfg.WGInterface)
+		slog.Info("interface not found, attempting to configure", "interface", m.cfg.WGInterface)
 		return m.configureNewInterface()
 	}
 
 	m.privateKey = dev.PrivateKey
-	log.Printf("interface %s already exists, listen port %d, %d peers",
-		m.cfg.WGInterface, dev.ListenPort, len(dev.Peers))
+	slog.Info("interface already exists", "interface", m.cfg.WGInterface, "listen_port", dev.ListenPort, "peers", len(dev.Peers))
 	return nil
 }
 
@@ -121,7 +120,7 @@ func (m *Manager) configureNewInterface() error {
 	}
 
 	m.persistConfig()
-	log.Printf("configured interface %s on port %d", m.cfg.WGInterface, port)
+	slog.Info("configured interface", "interface", m.cfg.WGInterface, "port", port)
 	return nil
 }
 
@@ -140,7 +139,7 @@ func (m *Manager) loadExistingPeers() error {
 		}
 	}
 
-	log.Printf("loaded %d existing peers from interface %s", len(dev.Peers), m.cfg.WGInterface)
+	slog.Info("loaded existing peers", "count", len(dev.Peers), "interface", m.cfg.WGInterface)
 	return nil
 }
 
@@ -345,7 +344,7 @@ func (m *Manager) persistConfig() {
 	confPath := filepath.Join(m.cfg.ConfigDir, m.cfg.WGInterface+".conf")
 
 	if err := os.MkdirAll(m.cfg.ConfigDir, 0700); err != nil {
-		log.Printf("error creating config dir: %v", err)
+		slog.Error("error creating config dir", "error", err)
 		return
 	}
 
@@ -358,7 +357,7 @@ func (m *Manager) persistConfig() {
 
 	dev, err := m.client.Device(m.cfg.WGInterface)
 	if err != nil {
-		log.Printf("error reading device for persistence: %v", err)
+		slog.Error("error reading device for persistence", "error", err)
 		return
 	}
 
@@ -375,12 +374,12 @@ func (m *Manager) persistConfig() {
 	}
 
 	if err := os.WriteFile(confPath+".tmp", []byte(sb.String()), 0600); err != nil {
-		log.Printf("error writing config: %v", err)
+		slog.Error("error writing config", "error", err)
 		return
 	}
 	if err := os.Rename(confPath+".tmp", confPath); err != nil {
-		log.Printf("error renaming config: %v", err)
+		slog.Error("error renaming config", "error", err)
 	} else {
-		log.Printf("persisted config to %s", confPath)
+		slog.Info("persisted config", "path", confPath)
 	}
 }

@@ -2,7 +2,7 @@ package control
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,12 +16,12 @@ func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub) {
 	serverRepo := repo.NewServerRepo(pool)
 	peerRepo := repo.NewPeerRepo(pool)
 
-	log.Println("job: stats-sync started (interval=60s)")
+	slog.Info("job started", "job", "stats-sync", "interval", "60s")
 
 	for {
 		select {
 		case <-parentCtx.Done():
-			log.Println("job: stats-sync stopped")
+			slog.Info("job stopped", "job", "stats-sync")
 			return
 		case <-time.After(60 * time.Second):
 		}
@@ -29,7 +29,7 @@ func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub) {
 
 		servers, err := serverRepo.ListAll(ctx)
 		if err != nil {
-			log.Printf("job: stats-sync list servers error: %v", err)
+			slog.Error("stats-sync list servers error", "error", err)
 			cancel()
 			continue
 		}
@@ -41,13 +41,13 @@ func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub) {
 
 			corePeers, err := CallCoreListPeers(&server)
 			if err != nil {
-				log.Printf("job: stats-sync core %s (%s) error: %v", server.Name, server.Host, err)
+				slog.Error("stats-sync core error", "server", server.Name, "host", server.Host, "error", err)
 				continue
 			}
 
 			// Update server peer count from actual core data
 			if err := serverRepo.SetPeerCount(ctx, server.ID, len(corePeers)); err != nil {
-				log.Printf("job: stats-sync set peer count error (server=%s): %v", server.Name, err)
+				slog.Error("stats-sync set peer count error", "server", server.Name, "error", err)
 			}
 
 			// Match core peers with DB peers and update stats
@@ -70,12 +70,12 @@ func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub) {
 						}
 					}
 					if err := peerRepo.UpdateStats(ctx, dbPeer.ID, stats.BytesSent, stats.BytesReceived, hs); err != nil {
-						log.Printf("job: stats-sync update stats error (peer=%s): %v", dbPeer.ID, err)
+						slog.Error("stats-sync update stats error", "peer_id", dbPeer.ID, "error", err)
 					}
 				}
 			}
 
-			log.Printf("job: stats-sync %s: %d core peers, %d db peers", server.Name, len(corePeers), len(dbPeers))
+			slog.Info("stats-sync completed", "server", server.Name, "core_peers", len(corePeers), "db_peers", len(dbPeers))
 		}
 
 		// Broadcast updated stats to WS clients
@@ -112,12 +112,12 @@ func StartPeerCleanup(parentCtx context.Context, pool *pgxpool.Pool) {
 	peerRepo := repo.NewPeerRepo(pool)
 	auditRepo := repo.NewAuditRepo(pool)
 
-	log.Println("job: peer-cleanup started (interval=5min, stale_threshold=30min)")
+	slog.Info("job started", "job", "peer-cleanup", "interval", "5min", "stale_threshold", "30min")
 
 	for {
 		select {
 		case <-parentCtx.Done():
-			log.Println("job: peer-cleanup stopped")
+			slog.Info("job stopped", "job", "peer-cleanup")
 			return
 		case <-time.After(5 * time.Minute):
 		}
@@ -125,7 +125,7 @@ func StartPeerCleanup(parentCtx context.Context, pool *pgxpool.Pool) {
 
 		stalePeers, err := peerRepo.ListStale(ctx, 30*time.Minute)
 		if err != nil {
-			log.Printf("job: peer-cleanup list stale error: %v", err)
+			slog.Error("peer-cleanup list stale error", "error", err)
 			cancel()
 			continue
 		}
@@ -135,21 +135,21 @@ func StartPeerCleanup(parentCtx context.Context, pool *pgxpool.Pool) {
 			continue
 		}
 
-		log.Printf("job: peer-cleanup found %d stale peers", len(stalePeers))
+		slog.Info("peer-cleanup found stale peers", "count", len(stalePeers))
 
 		for _, peer := range stalePeers {
 			server, err := serverRepo.GetByID(ctx, peer.ServerID)
 			if err == nil {
 				if err := CallCoreRemovePeer(server, peer.PublicKey); err != nil {
-					log.Printf("job: peer-cleanup core remove error (peer=%s): %v", peer.ID, err)
+					slog.Error("peer-cleanup core remove error", "peer_id", peer.ID, "error", err)
 				}
 				if err := serverRepo.UpdatePeerCount(ctx, peer.ServerID, -1); err != nil {
-					log.Printf("job: peer-cleanup update peer count error (server=%s): %v", peer.ServerID, err)
+					slog.Error("peer-cleanup update peer count error", "server_id", peer.ServerID, "error", err)
 				}
 			}
 
 			if err := peerRepo.Deactivate(ctx, peer.ID); err != nil {
-				log.Printf("job: peer-cleanup deactivate error (peer=%s): %v", peer.ID, err)
+				slog.Error("peer-cleanup deactivate error", "peer_id", peer.ID, "error", err)
 			}
 
 			auditRepo.Log(ctx, &peer.UserID, "peer.cleanup",
@@ -159,8 +159,7 @@ func StartPeerCleanup(parentCtx context.Context, pool *pgxpool.Pool) {
 					"reason":    "stale_or_expired",
 				}, "system")
 
-			log.Printf("job: peer-cleanup deactivated peer %s (user=%s, server=%s)",
-				peer.ID, peer.UserID, peer.ServerID)
+			slog.Info("peer-cleanup deactivated peer", "peer_id", peer.ID, "user_id", peer.UserID, "server_id", peer.ServerID)
 		}
 
 		cancel()

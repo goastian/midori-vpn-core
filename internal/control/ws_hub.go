@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -54,8 +54,7 @@ func (h *WSHub) Run() {
 			h.clients[client] = true
 			h.userConns[client.userID]++
 			h.mu.Unlock()
-			log.Printf("ws: client connected user=%s (%d total, %d for user)",
-				client.userID, len(h.clients), h.userConns[client.userID])
+			slog.Info("ws: client connected", "user", client.userID, "total", len(h.clients), "user_conns", h.userConns[client.userID])
 
 		case client := <-h.unregister:
 			h.mu.Lock()
@@ -68,7 +67,7 @@ func (h *WSHub) Run() {
 				}
 			}
 			h.mu.Unlock()
-			log.Printf("ws: client disconnected user=%s (%d total)", client.userID, len(h.clients))
+			slog.Info("ws: client disconnected", "user", client.userID, "total", len(h.clients))
 
 		case message := <-h.broadcast:
 			h.mu.RLock()
@@ -127,7 +126,7 @@ func (h *WSHub) HandleWS(w http.ResponseWriter, r *http.Request, userID string) 
 		CompressionMode: websocket.CompressionContextTakeover,
 	})
 	if err != nil {
-		log.Printf("ws: accept error: %v", err)
+		slog.Error("ws: accept error", "error", err)
 		return
 	}
 

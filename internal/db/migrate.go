@@ -3,7 +3,7 @@ package db
 import (
 	"embed"
 	"errors"
-	"log"
+	"log/slog"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
@@ -30,6 +30,6 @@ func RunMigrations(databaseURL string) error {
 	}
 
 	v, dirty, _ := m.Version()
-	log.Printf("migrations: version=%d dirty=%v", v, dirty)
+	slog.Info("migrations applied", "version", v, "dirty", dirty)
 	return nil
 }

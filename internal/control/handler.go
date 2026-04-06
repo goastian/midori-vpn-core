@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"sync"
@@ -61,7 +61,7 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GenerateKeypair(w http.ResponseWriter, r *http.Request) {
 	kp, err := vpnCrypto.GenerateKeypair()
 	if err != nil {
-		log.Printf("keypair generation error: %v", err)
+		slog.Error("keypair generation error", "error", err)
 		respond.JsonError(w, "failed to generate keypair", http.StatusInternalServerError)
 		return
 	}
@@ -75,7 +75,7 @@ func (h *Handler) GenerateKeypair(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ListServers(w http.ResponseWriter, r *http.Request) {
 	servers, err := h.serverRepo.ListActive(r.Context())
 	if err != nil {
-		log.Printf("list servers error: %v", err)
+		slog.Error("list servers error", "error", err)
 		respond.JsonError(w, "failed to list servers", http.StatusInternalServerError)
 		return
 	}
@@ -99,7 +99,7 @@ type ServerPingResult struct {
 func (h *Handler) PingServers(w http.ResponseWriter, r *http.Request) {
 	servers, err := h.serverRepo.ListActive(r.Context())
 	if err != nil {
-		log.Printf("ping servers list error: %v", err)
+		slog.Error("ping servers list error", "error", err)
 		respond.JsonError(w, "failed to list servers", http.StatusInternalServerError)
 		return
 	}
@@ -186,7 +186,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	if h.maxDevicesPerUser > 0 {
 		activeCount, err := h.peerRepo.CountByUser(r.Context(), user.ID)
 		if err != nil {
-			log.Printf("count devices error: %v", err)
+			slog.Error("count devices error", "error", err)
 			respond.JsonError(w, "failed to check device limit", http.StatusInternalServerError)
 			return
 		}
@@ -226,7 +226,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	// 4+5. Call vpn-core to add peer (core assigns IP from pool)
 	coreResp, err := CallCoreAddPeer(server, req.PublicKey)
 	if err != nil {
-		log.Printf("core add peer error: %v", err)
+		slog.Error("core add peer error", "error", err)
 		respond.JsonError(w, "failed to connect to VPN server", http.StatusBadGateway)
 		return
 	}
@@ -241,7 +241,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.peerRepo.Create(r.Context(), peer); err != nil {
 		_ = CallCoreRemovePeer(server, req.PublicKey)
-		log.Printf("create peer error: %v", err)
+		slog.Error("create peer error", "error", err)
 		respond.JsonError(w, "failed to save connection", http.StatusInternalServerError)
 		return
 	}
@@ -367,7 +367,7 @@ func (h *Handler) ExportQR(w http.ResponseWriter, r *http.Request) {
 
 	png, err := qrcode.Encode(conf, qrcode.Medium, 512)
 	if err != nil {
-		log.Printf("qr generation error: %v", err)
+		slog.Error("qr generation error", "error", err)
 		respond.JsonError(w, "failed to generate QR code", http.StatusInternalServerError)
 		return
 	}
@@ -396,7 +396,7 @@ func (h *Handler) ListMyConnections(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r)
 	peers, err := h.peerRepo.ListByUser(r.Context(), user.ID)
 	if err != nil {
-		log.Printf("list connections error: %v", err)
+		slog.Error("list connections error", "error", err)
 		respond.JsonError(w, "failed to list connections", http.StatusInternalServerError)
 		return
 	}
@@ -411,7 +411,7 @@ func (h *Handler) MyAuditLogs(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r)
 	logs, err := h.auditRepo.ListByUser(r.Context(), user.ID, 50, 0)
 	if err != nil {
-		log.Printf("list audit logs error: %v", err)
+		slog.Error("list audit logs error", "error", err)
 		respond.JsonError(w, "failed to list audit logs", http.StatusInternalServerError)
 		return
 	}
@@ -445,7 +445,7 @@ func (h *Handler) AdminListUsers(w http.ResponseWriter, r *http.Request) {
 	limit, offset := paginationParams(r)
 	users, err := h.userRepo.List(r.Context(), limit, offset)
 	if err != nil {
-		log.Printf("admin list users error: %v", err)
+		slog.Error("admin list users error", "error", err)
 		respond.JsonError(w, "failed to list users", http.StatusInternalServerError)
 		return
 	}
@@ -502,7 +502,7 @@ func (h *Handler) AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.userRepo.Create(r.Context(), user); err != nil {
-		log.Printf("admin create user error: %v", err)
+		slog.Error("admin create user error", "error", err)
 		respond.JsonError(w, "failed to create user", http.StatusInternalServerError)
 		return
 	}
@@ -550,7 +550,7 @@ func (h *Handler) AdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.userRepo.Update(r.Context(), user); err != nil {
-		log.Printf("admin update user %s error: %v", user.ID, err)
+		slog.Error("admin update user error", "user_id", user.ID, "error", err)
 		respond.JsonError(w, "failed to update user", http.StatusInternalServerError)
 		return
 	}
@@ -576,7 +576,7 @@ func (h *Handler) AdminDeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.userRepo.Delete(r.Context(), id); err != nil {
-		log.Printf("admin delete user %s error: %v", id, err)
+		slog.Error("admin delete user error", "user_id", id, "error", err)
 		respond.JsonError(w, "failed to delete user", http.StatusInternalServerError)
 		return
 	}
@@ -608,7 +608,7 @@ func (h *Handler) AdminBanUser(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
 	if err := h.userRepo.Ban(r.Context(), id, req.Reason); err != nil {
-		log.Printf("admin ban user %s error: %v", id, err)
+		slog.Error("admin ban user error", "user_id", id, "error", err)
 		respond.JsonError(w, "failed to ban user", http.StatusInternalServerError)
 		return
 	}
@@ -648,7 +648,7 @@ type CreateServerRequest struct {
 func (h *Handler) AdminListServers(w http.ResponseWriter, r *http.Request) {
 	servers, err := h.serverRepo.ListAll(r.Context())
 	if err != nil {
-		log.Printf("admin list servers error: %v", err)
+		slog.Error("admin list servers error", "error", err)
 		respond.JsonError(w, "failed to list servers", http.StatusInternalServerError)
 		return
 	}
@@ -688,7 +688,7 @@ func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.serverRepo.Create(r.Context(), server); err != nil {
-		log.Printf("admin create server error: %v", err)
+		slog.Error("admin create server error", "error", err)
 		respond.JsonError(w, "failed to create server", http.StatusInternalServerError)
 		return
 	}
@@ -764,7 +764,7 @@ func (h *Handler) AdminUpdateServer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.serverRepo.Update(r.Context(), server); err != nil {
-		log.Printf("admin update server %s error: %v", server.ID, err)
+		slog.Error("admin update server error", "server_id", server.ID, "error", err)
 		respond.JsonError(w, "failed to update server", http.StatusInternalServerError)
 		return
 	}
@@ -784,7 +784,7 @@ func (h *Handler) AdminDeleteServer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.serverRepo.Delete(r.Context(), id); err != nil {
-		log.Printf("admin delete server %s error: %v", id, err)
+		slog.Error("admin delete server error", "server_id", id, "error", err)
 		respond.JsonError(w, "failed to delete server", http.StatusInternalServerError)
 		return
 	}
@@ -800,7 +800,7 @@ func (h *Handler) AdminListPeers(w http.ResponseWriter, r *http.Request) {
 	limit, offset := paginationParams(r)
 	peers, err := h.peerRepo.ListAll(r.Context(), limit, offset)
 	if err != nil {
-		log.Printf("admin list peers error: %v", err)
+		slog.Error("admin list peers error", "error", err)
 		respond.JsonError(w, "failed to list peers", http.StatusInternalServerError)
 		return
 	}
@@ -840,7 +840,7 @@ func (h *Handler) AdminListAuditLogs(w http.ResponseWriter, r *http.Request) {
 	action := r.URL.Query().Get("action")
 	logs, err := h.auditRepo.ListAll(r.Context(), limit, offset, action)
 	if err != nil {
-		log.Printf("admin list audit logs error: %v", err)
+		slog.Error("admin list audit logs error", "error", err)
 		respond.JsonError(w, "failed to list audit logs", http.StatusInternalServerError)
 		return
 	}

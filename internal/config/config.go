@@ -2,6 +2,7 @@ package config
 
 import (
 	"log"
+	"log/slog"
 	"os"
 )
 
@@ -99,11 +100,11 @@ func Load() *Config {
 	}
 
 	if cfg.AuthToken == "" {
-		log.Println("WARNING: VPN_CORE_TOKEN is empty — all requests will be rejected")
+		slog.Warn("VPN_CORE_TOKEN is empty — all requests will be rejected")
 	}
 
 	if cfg.DatabaseURL == "" {
-		log.Println("INFO: DATABASE_URL not set — Control API will be disabled")
+		slog.Info("DATABASE_URL not set — Control API will be disabled")
 	}
 
 	// Validate numeric ranges

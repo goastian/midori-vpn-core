@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -44,7 +44,7 @@ func NewJWKSProvider(cfg *config.Config) (*JWKSProvider, error) {
 	for attempt := 1; attempt <= 3; attempt++ {
 		if err := p.refresh(); err != nil {
 			lastErr = err
-			log.Printf("JWKS preload attempt %d/3 failed: %v", attempt, err)
+			slog.Warn("JWKS preload attempt failed", "attempt", attempt, "error", err)
 			if attempt < 3 {
 				time.Sleep(time.Duration(attempt) * 2 * time.Second)
 			}
@@ -55,11 +55,11 @@ func NewJWKSProvider(cfg *config.Config) (*JWKSProvider, error) {
 	}
 
 	if lastErr != nil {
-		log.Printf("JWKS remote preload failed after 3 attempts, trying local fallback")
+		slog.Warn("JWKS remote preload failed after 3 attempts, trying local fallback")
 		if fbErr := p.loadFromDisk(); fbErr != nil {
 			return nil, fmt.Errorf("JWKS preload from %s failed and no local fallback: %w", cfg.AuthentikJWKSURL, lastErr)
 		}
-		log.Printf("JWKS loaded from local fallback (%d keys)", p.keySet.Len())
+		slog.Info("JWKS loaded from local fallback", "keys", p.keySet.Len())
 	}
 
 	go p.backgroundRefresh()
@@ -116,7 +116,7 @@ func (p *JWKSProvider) refresh() error {
 	// Persist to disk for fallback
 	p.saveToDisk(body)
 
-	log.Printf("JWKS refreshed: %d keys from %s", set.Len(), p.cfg.AuthentikJWKSURL)
+	slog.Info("JWKS refreshed", "keys", set.Len(), "source", p.cfg.AuthentikJWKSURL)
 	return nil
 }
 
@@ -126,7 +126,7 @@ func (p *JWKSProvider) backgroundRefresh() {
 
 	for range ticker.C {
 		if err := p.refresh(); err != nil {
-			log.Printf("JWKS background refresh error (keeping cached keys): %v", err)
+			slog.Error("JWKS background refresh error", "error", err)
 		}
 	}
 }
@@ -138,7 +138,7 @@ func (p *JWKSProvider) cachePath() string {
 func (p *JWKSProvider) saveToDisk(data []byte) {
 	path := p.cachePath()
 	if err := os.WriteFile(path, data, 0600); err != nil {
-		log.Printf("JWKS: failed to write cache to %s: %v", path, err)
+		slog.Warn("JWKS cache write failed", "path", path, "error", err)
 	}
 }
 

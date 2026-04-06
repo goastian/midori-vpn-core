@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -211,7 +211,7 @@ func coreDoWithRetry(req *http.Request, bodyBytes []byte, host string) (*http.Re
 		if err != nil {
 			lastErr = err
 			cb.recordFailure()
-			log.Printf("core request attempt %d/%d to %s failed: %v", attempt+1, coreMaxRetries, host, err)
+			slog.Error("core request failed", "attempt", attempt+1, "max_retries", coreMaxRetries, "host", host, "error", err)
 			time.Sleep(coreRetryBaseDelay * time.Duration(attempt+1))
 			continue
 		}
@@ -221,7 +221,7 @@ func coreDoWithRetry(req *http.Request, bodyBytes []byte, host string) (*http.Re
 			resp.Body.Close()
 			lastErr = fmt.Errorf("core returned %d: %s", resp.StatusCode, string(body))
 			cb.recordFailure()
-			log.Printf("core request attempt %d/%d to %s: status %d", attempt+1, coreMaxRetries, host, resp.StatusCode)
+			slog.Error("core request server error", "attempt", attempt+1, "max_retries", coreMaxRetries, "host", host, "status", resp.StatusCode)
 			time.Sleep(coreRetryBaseDelay * time.Duration(attempt+1))
 			continue
 		}

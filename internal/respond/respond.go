@@ -2,7 +2,7 @@ package respond
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 )
 
@@ -33,7 +33,7 @@ func JsonError(w http.ResponseWriter, msg string, code int) {
 // SafeError returns a generic error message in production and the real
 // error in development. It always logs the real error for debugging.
 func SafeError(w http.ResponseWriter, publicMsg string, err error, code int) {
-	log.Printf("error: %s: %v", publicMsg, err)
+	slog.Error(publicMsg, "error", err)
 	if appEnv == "development" {
 		JsonError(w, err.Error(), code)
 		return
