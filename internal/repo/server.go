@@ -3,6 +3,8 @@ package repo
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -12,13 +14,30 @@ import (
 
 type ServerRepo struct {
 	pool *pgxpool.Pool
+
+	// In-memory cache for active server list
+	cacheMu      sync.RWMutex
+	cachedActive []models.VPNServer
+	cacheTime    time.Time
+	cacheTTL     time.Duration
 }
 
 func NewServerRepo(pool *pgxpool.Pool) *ServerRepo {
-	return &ServerRepo{pool: pool}
+	return &ServerRepo{
+		pool:     pool,
+		cacheTTL: 30 * time.Second,
+	}
+}
+
+// InvalidateCache forces the next ListActive call to query the DB.
+func (r *ServerRepo) InvalidateCache() {
+	r.cacheMu.Lock()
+	r.cacheTime = time.Time{}
+	r.cacheMu.Unlock()
 }
 
 func (r *ServerRepo) Create(ctx context.Context, s *models.VPNServer) error {
+	defer r.InvalidateCache()
 	query := `
 		INSERT INTO vpn_servers (name, host, port, wg_port, public_key, core_token, location, country_code, max_peers)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -49,6 +68,16 @@ func (r *ServerRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.VPNServ
 }
 
 func (r *ServerRepo) ListActive(ctx context.Context) ([]models.VPNServer, error) {
+	// Check cache first
+	r.cacheMu.RLock()
+	if r.cachedActive != nil && time.Since(r.cacheTime) < r.cacheTTL {
+		result := make([]models.VPNServer, len(r.cachedActive))
+		copy(result, r.cachedActive)
+		r.cacheMu.RUnlock()
+		return result, nil
+	}
+	r.cacheMu.RUnlock()
+
 	query := `
 		SELECT id, name, host, port, wg_port, public_key, location, country_code,
 		       max_peers, current_peers, is_active, created_at, updated_at
@@ -72,6 +101,14 @@ func (r *ServerRepo) ListActive(ctx context.Context) ([]models.VPNServer, error)
 		}
 		servers = append(servers, s)
 	}
+
+	// Update cache
+	r.cacheMu.Lock()
+	r.cachedActive = make([]models.VPNServer, len(servers))
+	copy(r.cachedActive, servers)
+	r.cacheTime = time.Now()
+	r.cacheMu.Unlock()
+
 	return servers, nil
 }
 
@@ -124,6 +161,7 @@ func (r *ServerRepo) LeastLoaded(ctx context.Context) (*models.VPNServer, error)
 }
 
 func (r *ServerRepo) Update(ctx context.Context, s *models.VPNServer) error {
+	defer r.InvalidateCache()
 	query := `
 		UPDATE vpn_servers
 		SET name = $1, host = $2, port = $3, wg_port = $4, public_key = $5, core_token = $6,
@@ -138,12 +176,14 @@ func (r *ServerRepo) Update(ctx context.Context, s *models.VPNServer) error {
 }
 
 func (r *ServerRepo) UpdatePeerCount(ctx context.Context, serverID uuid.UUID, delta int) error {
+	defer r.InvalidateCache()
 	query := `UPDATE vpn_servers SET current_peers = GREATEST(current_peers + $1, 0), updated_at = NOW() WHERE id = $2`
 	_, err := r.pool.Exec(ctx, query, delta, serverID)
 	return err
 }
 
 func (r *ServerRepo) SetPeerCount(ctx context.Context, serverID uuid.UUID, count int) error {
+	defer r.InvalidateCache()
 	query := `UPDATE vpn_servers SET current_peers = $1, updated_at = NOW() WHERE id = $2`
 	_, err := r.pool.Exec(ctx, query, count, serverID)
 	return err
@@ -156,6 +196,7 @@ func (r *ServerRepo) Count(ctx context.Context) (int, int, error) {
 }
 
 func (r *ServerRepo) Delete(ctx context.Context, id uuid.UUID) error {
+	defer r.InvalidateCache()
 	_, err := r.pool.Exec(ctx, `DELETE FROM vpn_servers WHERE id = $1`, id)
 	return err
 }
