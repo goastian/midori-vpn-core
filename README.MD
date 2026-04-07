@@ -116,9 +116,9 @@ Availability notes:
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/auth/config` | OIDC configuration for frontend |
-| `POST` | `/auth/callback` | Exchange authorization code for tokens |
-| `POST` | `/auth/refresh` | Refresh access token using refresh token |
+| `GET` | `/api/v1/auth/config` | OIDC configuration for frontend |
+| `POST` | `/api/v1/auth/callback` | Exchange authorization code for tokens |
+| `POST` | `/api/v1/auth/refresh` | Refresh access token using refresh token |
 
 ### Control API (JWT Bearer protected)
 

@@ -59,9 +59,9 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 	// Control API (JWT/Authentik protected) — only if DB is available
 	if pool != nil && jwks != nil {
 		oauthH := control.NewOAuthHandler(cfg)
-		r.Post("/auth/callback", oauthH.Callback)
-		r.Post("/auth/refresh", oauthH.Refresh)
-		r.Get("/auth/config", oauthH.OIDCConfig)
+		r.Post("/api/v1/auth/callback", oauthH.Callback)
+		r.Post("/api/v1/auth/refresh", oauthH.Refresh)
+		r.Get("/api/v1/auth/config", oauthH.OIDCConfig)
 
 		ch := control.NewHandler(pool, cfg)
 		jwtMW := auth.JWTMiddleware(cfg, pool, jwks)
