@@ -3,7 +3,9 @@ package config
 import (
 	"log"
 	"log/slog"
+	"net/url"
 	"os"
+	"strings"
 )
 
 type Config struct {
@@ -57,11 +59,11 @@ type Config struct {
 }
 
 func Load() *Config {
-	issuer := getEnv("AUTHENTIK_ISSUER", "")
+	issuer := strings.TrimRight(getEnv("AUTHENTIK_ISSUER", ""), "/")
 
 	jwksURL := getEnv("AUTHENTIK_JWKS_URL", "")
 	if jwksURL == "" && issuer != "" {
-		jwksURL = issuer + "/jwks/"
+		jwksURL = strings.TrimRight(issuer, "/") + "/jwks/"
 	}
 
 	cfg := &Config{
@@ -122,6 +124,62 @@ func Load() *Config {
 	}
 
 	return cfg
+}
+
+func (c *Config) AuthentikAppURL() string {
+	return strings.TrimRight(c.AuthentikIssuer, "/")
+}
+
+func (c *Config) AuthentikOrigin() string {
+	appURL := c.AuthentikAppURL()
+	if appURL == "" {
+		return ""
+	}
+	parsed, err := url.Parse(appURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return appURL
+	}
+	return parsed.Scheme + "://" + parsed.Host
+}
+
+func (c *Config) AuthentikTokenIssuer() string {
+	origin := c.AuthentikOrigin()
+	if origin == "" {
+		return ""
+	}
+	return origin + "/"
+}
+
+func (c *Config) AuthentikAuthorizationURL() string {
+	origin := c.AuthentikOrigin()
+	if origin == "" {
+		return ""
+	}
+	return origin + "/application/o/authorize/"
+}
+
+func (c *Config) AuthentikTokenURL() string {
+	origin := c.AuthentikOrigin()
+	if origin == "" {
+		return ""
+	}
+	return origin + "/application/o/token/"
+}
+
+func (c *Config) AuthentikUserInfoURL() string {
+	origin := c.AuthentikOrigin()
+	if origin == "" {
+		return ""
+	}
+	return origin + "/application/o/userinfo/"
+}
+
+func (c *Config) AuthentikEndSessionURL() string {
+	appURL := c.AuthentikAppURL()
+	if appURL == "" {
+		return ""
+	}
+	return appURL + "/end-session/"
 }
 
 // WSMaxForGroups returns the highest WS connection limit for the given groups.

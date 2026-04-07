@@ -75,11 +75,11 @@ func (h *OAuthHandler) isAllowedOrigin(origin string) bool {
 
 func (h *OAuthHandler) OIDCConfig(w http.ResponseWriter, r *http.Request) {
 	respond.JsonOK(w, map[string]string{
-		"issuer":                 h.cfg.AuthentikIssuer,
-		"authorization_endpoint": h.cfg.AuthentikIssuer + "/authorize/",
-		"token_endpoint":         h.cfg.AuthentikIssuer + "/token/",
-		"userinfo_endpoint":      h.cfg.AuthentikIssuer + "/userinfo/",
-		"end_session_endpoint":   h.cfg.AuthentikIssuer + "/end-session/",
+		"issuer":                 h.cfg.AuthentikTokenIssuer(),
+		"authorization_endpoint": h.cfg.AuthentikAuthorizationURL(),
+		"token_endpoint":         h.cfg.AuthentikTokenURL(),
+		"userinfo_endpoint":      h.cfg.AuthentikUserInfoURL(),
+		"end_session_endpoint":   h.cfg.AuthentikEndSessionURL(),
 		"jwks_uri":               h.cfg.AuthentikJWKSURL,
 		"client_id":              h.cfg.AuthentikClientID,
 	}, http.StatusOK)
@@ -118,7 +118,7 @@ func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokenURL := h.cfg.AuthentikIssuer + "/token/"
+	tokenURL := h.cfg.AuthentikTokenURL()
 
 	form := url.Values{}
 	form.Set("grant_type", "refresh_token")
@@ -174,7 +174,7 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokenURL := h.cfg.AuthentikIssuer + "/token/"
+	tokenURL := h.cfg.AuthentikTokenURL()
 
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")

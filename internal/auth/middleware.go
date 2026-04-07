@@ -21,6 +21,10 @@ type ctxKey string
 
 const UserCtxKey ctxKey = "authenticated_user"
 
+func sameIssuer(actual, expected string) bool {
+	return strings.TrimRight(actual, "/") == strings.TrimRight(expected, "/")
+}
+
 func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) func(http.Handler) http.Handler {
 	userRepo := repo.NewUserRepo(pool)
 
@@ -52,7 +56,7 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 				return
 			}
 
-			if token.Issuer() != cfg.AuthentikIssuer {
+			if !sameIssuer(token.Issuer(), cfg.AuthentikTokenIssuer()) {
 				http.Error(w, `{"ok":false,"error":"invalid token issuer"}`, http.StatusUnauthorized)
 				return
 			}
@@ -139,7 +143,7 @@ func ValidateTokenOnly(cfg *config.Config, jwks *JWKSProvider, tokenStr string) 
 		slog.Warn("WS JWT validation failed", "error", err)
 		return false
 	}
-	if token.Issuer() != cfg.AuthentikIssuer {
+	if !sameIssuer(token.Issuer(), cfg.AuthentikTokenIssuer()) {
 		return false
 	}
 	return true
@@ -163,7 +167,7 @@ func ValidateTokenAndExtractClaims(cfg *config.Config, jwks *JWKSProvider, token
 	if err != nil {
 		return nil, err
 	}
-	if token.Issuer() != cfg.AuthentikIssuer {
+	if !sameIssuer(token.Issuer(), cfg.AuthentikTokenIssuer()) {
 		return nil, fmt.Errorf("invalid issuer: %s", token.Issuer())
 	}
 	sub := token.Subject()
