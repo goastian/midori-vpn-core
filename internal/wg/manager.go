@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -94,7 +95,35 @@ func (m *Manager) ensureInterface() error {
 	return nil
 }
 
+func (m *Manager) createNetworkInterface() error {
+	iface := m.cfg.WGInterface
+
+	// Create the WireGuard network interface
+	if out, err := exec.Command("ip", "link", "add", "dev", iface, "type", "wireguard").CombinedOutput(); err != nil {
+		return fmt.Errorf("ip link add %s: %s: %w", iface, strings.TrimSpace(string(out)), err)
+	}
+
+	// Assign the gateway IP from the subnet to the interface
+	gatewayIP := m.pool.GatewayIP()
+	if out, err := exec.Command("ip", "address", "add", "dev", iface, gatewayIP).CombinedOutput(); err != nil {
+		return fmt.Errorf("ip address add %s: %s: %w", gatewayIP, strings.TrimSpace(string(out)), err)
+	}
+
+	// Bring the interface up
+	if out, err := exec.Command("ip", "link", "set", "up", "dev", iface).CombinedOutput(); err != nil {
+		return fmt.Errorf("ip link set up %s: %s: %w", iface, strings.TrimSpace(string(out)), err)
+	}
+
+	slog.Info("created network interface", "interface", iface, "address", gatewayIP)
+	return nil
+}
+
 func (m *Manager) configureNewInterface() error {
+	// First create the WireGuard network interface via ip(8)
+	if err := m.createNetworkInterface(); err != nil {
+		return err
+	}
+
 	kp, err := crypto.GenerateKeypair()
 	if err != nil {
 		return fmt.Errorf("generate server keypair: %w", err)
