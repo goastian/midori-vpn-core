@@ -33,10 +33,11 @@ type Config struct {
 	RedisURL string
 
 	// Authentik OIDC
-	AuthentikIssuer       string
-	AuthentikClientID     string
-	AuthentikClientSecret string
-	AuthentikJWKSURL      string
+	AuthentikIssuer            string
+	AuthentikClientID          string
+	AuthentikClientSecret      string
+	AuthentikJWKSURL           string
+	AuthentikIntrospectionURLOverride string // optional: overrides derived introspection URL
 
 	// Core-to-core TLS
 	CoreTLSSkipVerify bool   // skip TLS cert verification for self-signed certs
@@ -81,10 +82,11 @@ func Load() *Config {
 
 		DatabaseURL:       getEnv("DATABASE_URL", ""),
 		RedisURL:          getEnv("REDIS_URL", ""),
-		AuthentikIssuer:       issuer,
-		AuthentikClientID:     getEnv("AUTHENTIK_CLIENT_ID", ""),
-		AuthentikClientSecret: getEnv("AUTHENTIK_CLIENT_SECRET", ""),
-		AuthentikJWKSURL:      jwksURL,
+		AuthentikIssuer:                   issuer,
+		AuthentikClientID:                 getEnv("AUTHENTIK_CLIENT_ID", ""),
+		AuthentikClientSecret:             getEnv("AUTHENTIK_CLIENT_SECRET", ""),
+		AuthentikJWKSURL:                  jwksURL,
+		AuthentikIntrospectionURLOverride: getEnv("AUTHENTIK_INTROSPECTION_URL", ""),
 
 		CoreTLSSkipVerify: getEnvBool("CORE_TLS_SKIP_VERIFY", false),
 		CoreAllowHTTP:     getEnvBool("CORE_ALLOW_INSECURE_HTTP", false),
@@ -177,6 +179,9 @@ func (c *Config) AuthentikUserInfoURL() string {
 }
 
 func (c *Config) AuthentikIntrospectionURL() string {
+	if c.AuthentikIntrospectionURLOverride != "" {
+		return c.AuthentikIntrospectionURLOverride
+	}
 	origin := c.AuthentikOrigin()
 	if origin == "" {
 		return ""

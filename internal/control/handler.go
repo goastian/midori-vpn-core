@@ -856,7 +856,8 @@ func IsAdmin(user *models.User) bool {
 		return false
 	}
 	for _, g := range user.Groups {
-		if g == "vpn-admins" || g == "admins" {
+		switch g {
+		case "vpn-admins", "admins", "authentik Admins":
 			return true
 		}
 	}

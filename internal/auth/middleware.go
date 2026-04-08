@@ -25,6 +25,13 @@ func sameIssuer(actual, expected string) bool {
 	return strings.TrimRight(actual, "/") == strings.TrimRight(expected, "/")
 }
 
+// isJWE returns true when the token has 5 dot-separated segments, which is
+// the compact serialization of a JWE (encrypted token). JWE tokens cannot be
+// validated with a public JWKS; they must go through introspection.
+func isJWE(tokenStr string) bool {
+	return strings.Count(tokenStr, ".") == 4
+}
+
 func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) func(http.Handler) http.Handler {
 	userRepo := repo.NewUserRepo(pool)
 
@@ -43,42 +50,64 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 			}
 			tokenStr := parts[1]
 
-			keySet := jwks.KeySet()
-			token, err := jwt.Parse(
-				[]byte(tokenStr),
-				jwt.WithKeySet(keySet),
-				jwt.WithValidate(true),
-				jwt.WithAcceptableSkew(30*time.Second),
-			)
 			var sub string
 			var email string
 			var groups []string
 
-			if err != nil {
-				slog.Warn("JWT validation failed, trying introspection fallback", "error", err)
+			if isJWE(tokenStr) {
+				// JWE tokens (5 segments) are encrypted and cannot be validated
+				// locally with JWKS public keys — send directly to introspection.
+				slog.Debug("JWE token detected, using introspection")
 				claims, intErr := introspectToken(cfg, tokenStr)
 				if intErr != nil {
-					slog.Warn("Token introspection failed", "error", intErr)
+					slog.Warn("JWE token introspection failed", "error", intErr)
 					http.Error(w, `{"ok":false,"error":"invalid token"}`, http.StatusUnauthorized)
 					return
 				}
 				if claims.Iss != "" && !sameIssuer(claims.Iss, cfg.AuthentikTokenIssuer()) {
+					slog.Warn("JWE introspection issuer mismatch",
+						"got", claims.Iss,
+						"expected", cfg.AuthentikTokenIssuer(),
+					)
 					http.Error(w, `{"ok":false,"error":"invalid token issuer"}`, http.StatusUnauthorized)
 					return
 				}
-
 				sub = claims.Sub
 				email = claims.Email
 				groups = introspectionGroups(claims.Groups)
 			} else {
-				if !sameIssuer(token.Issuer(), cfg.AuthentikTokenIssuer()) {
-					http.Error(w, `{"ok":false,"error":"invalid token issuer"}`, http.StatusUnauthorized)
-					return
-				}
+				keySet := jwks.KeySet()
+				token, err := jwt.Parse(
+					[]byte(tokenStr),
+					jwt.WithKeySet(keySet),
+					jwt.WithValidate(true),
+					jwt.WithAcceptableSkew(30*time.Second),
+				)
 
-				sub = token.Subject()
-				email = getStringClaim(token, "email")
-				groups = getStringSliceClaim(token, "groups")
+				if err != nil {
+					slog.Warn("JWT validation failed, trying introspection fallback", "error", err)
+					claims, intErr := introspectToken(cfg, tokenStr)
+					if intErr != nil {
+						slog.Warn("Token introspection failed", "error", intErr)
+						http.Error(w, `{"ok":false,"error":"invalid token"}`, http.StatusUnauthorized)
+						return
+					}
+					if claims.Iss != "" && !sameIssuer(claims.Iss, cfg.AuthentikTokenIssuer()) {
+						http.Error(w, `{"ok":false,"error":"invalid token issuer"}`, http.StatusUnauthorized)
+						return
+					}
+					sub = claims.Sub
+					email = claims.Email
+					groups = introspectionGroups(claims.Groups)
+				} else {
+					if !sameIssuer(token.Issuer(), cfg.AuthentikTokenIssuer()) {
+						http.Error(w, `{"ok":false,"error":"invalid token issuer"}`, http.StatusUnauthorized)
+						return
+					}
+					sub = token.Subject()
+					email = getStringClaim(token, "email")
+					groups = getStringSliceClaim(token, "groups")
+				}
 			}
 
 			if sub == "" {
