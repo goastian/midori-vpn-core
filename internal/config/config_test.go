@@ -20,7 +20,7 @@ func TestAuthentikURLsFromApplicationURL(t *testing.T) {
 	if got := cfg.AuthentikUserInfoURL(); got != "https://accounts.astian.org/application/o/userinfo/" {
 		t.Fatalf("AuthentikUserInfoURL() = %q", got)
 	}
-	if got := cfg.AuthentikIntrospectionURL(); got != "https://accounts.astian.org/application/o/introspect/" {
+	if got := cfg.AuthentikIntrospectionURL(); got != "https://accounts.astian.org/application/o/midori-vpn/introspect/" {
 		t.Fatalf("AuthentikIntrospectionURL() = %q", got)
 	}
 	if got := cfg.AuthentikEndSessionURL(); got != "https://accounts.astian.org/application/o/midori-vpn/end-session/" {
@@ -31,5 +31,16 @@ func TestAuthentikURLsFromApplicationURL(t *testing.T) {
 	}
 	if got := cfg.AuthentikOrigin(); got != "https://accounts.astian.org" {
 		t.Fatalf("AuthentikOrigin() = %q", got)
+	}
+}
+
+func TestAuthentikIntrospectionURLOverride(t *testing.T) {
+	cfg := &Config{
+		AuthentikIssuer:                   "https://accounts.astian.org/application/o/midori-vpn",
+		AuthentikIntrospectionURLOverride: "https://accounts.astian.org/application/o/introspect/",
+	}
+
+	if got := cfg.AuthentikIntrospectionURL(); got != "https://accounts.astian.org/application/o/introspect/" {
+		t.Fatalf("AuthentikIntrospectionURL() override = %q", got)
 	}
 }

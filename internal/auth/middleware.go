@@ -49,6 +49,16 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 				return
 			}
 			tokenStr := parts[1]
+			tokenKind := "jwt"
+			if isJWE(tokenStr) {
+				tokenKind = "jwe"
+			}
+			slog.Debug("auth middleware token received",
+				"path", r.URL.Path,
+				"method", r.Method,
+				"remote", r.RemoteAddr,
+				"token_kind", tokenKind,
+			)
 
 			var sub string
 			var email string
@@ -60,7 +70,12 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 				slog.Debug("JWE token detected, using introspection")
 				claims, intErr := introspectToken(cfg, tokenStr)
 				if intErr != nil {
-					slog.Warn("JWE token introspection failed", "error", intErr)
+					slog.Warn("JWE token introspection failed",
+						"path", r.URL.Path,
+						"method", r.Method,
+						"remote", r.RemoteAddr,
+						"error", intErr,
+					)
 					http.Error(w, `{"ok":false,"error":"invalid token"}`, http.StatusUnauthorized)
 					return
 				}
@@ -85,10 +100,20 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 				)
 
 				if err != nil {
-					slog.Warn("JWT validation failed, trying introspection fallback", "error", err)
+					slog.Warn("JWT validation failed, trying introspection fallback",
+						"path", r.URL.Path,
+						"method", r.Method,
+						"remote", r.RemoteAddr,
+						"error", err,
+					)
 					claims, intErr := introspectToken(cfg, tokenStr)
 					if intErr != nil {
-						slog.Warn("Token introspection failed", "error", intErr)
+						slog.Warn("Token introspection failed",
+							"path", r.URL.Path,
+							"method", r.Method,
+							"remote", r.RemoteAddr,
+							"error", intErr,
+						)
 						http.Error(w, `{"ok":false,"error":"invalid token"}`, http.StatusUnauthorized)
 						return
 					}
@@ -177,6 +202,18 @@ func getStringSliceClaim(token jwt.Token, key string) []string {
 // ValidateTokenOnly checks if a JWT is valid without extracting user info.
 // Used for WebSocket authentication via query parameter.
 func ValidateTokenOnly(cfg *config.Config, jwks *JWKSProvider, tokenStr string) bool {
+	if isJWE(tokenStr) {
+		claims, intErr := introspectToken(cfg, tokenStr)
+		if intErr != nil {
+			slog.Warn("WS JWE introspection failed", "introspection_error", intErr)
+			return false
+		}
+		if claims.Iss != "" && !sameIssuer(claims.Iss, cfg.AuthentikTokenIssuer()) {
+			return false
+		}
+		return claims.Sub != ""
+	}
+
 	keySet := jwks.KeySet()
 	token, err := jwt.Parse(
 		[]byte(tokenStr),
@@ -209,6 +246,23 @@ type WSClaims struct {
 
 // ValidateTokenAndExtractClaims validates a JWT and returns the subject and groups.
 func ValidateTokenAndExtractClaims(cfg *config.Config, jwks *JWKSProvider, tokenStr string) (*WSClaims, error) {
+	if isJWE(tokenStr) {
+		claims, intErr := introspectToken(cfg, tokenStr)
+		if intErr != nil {
+			return nil, fmt.Errorf("jwe introspection failed: %w", intErr)
+		}
+		if claims.Iss != "" && !sameIssuer(claims.Iss, cfg.AuthentikTokenIssuer()) {
+			return nil, fmt.Errorf("invalid issuer: %s", claims.Iss)
+		}
+		if claims.Sub == "" {
+			return nil, fmt.Errorf("missing sub claim")
+		}
+		return &WSClaims{
+			Subject: claims.Sub,
+			Groups:  introspectionGroups(claims.Groups),
+		}, nil
+	}
+
 	keySet := jwks.KeySet()
 	token, err := jwt.Parse(
 		[]byte(tokenStr),

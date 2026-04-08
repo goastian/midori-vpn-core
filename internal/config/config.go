@@ -33,10 +33,10 @@ type Config struct {
 	RedisURL string
 
 	// Authentik OIDC
-	AuthentikIssuer            string
-	AuthentikClientID          string
-	AuthentikClientSecret      string
-	AuthentikJWKSURL           string
+	AuthentikIssuer                   string
+	AuthentikClientID                 string
+	AuthentikClientSecret             string
+	AuthentikJWKSURL                  string
 	AuthentikIntrospectionURLOverride string // optional: overrides derived introspection URL
 
 	// Core-to-core TLS
@@ -52,12 +52,12 @@ type Config struct {
 	MaxDevicesPerUser int // max active connections per user (0 = unlimited)
 
 	// WebSocket limits per plan
-	WSMaxGlobal  int // max global WS connections (0 = unlimited)
-	WSMaxFree    int // max WS conns for free plan
-	WSMaxBasic   int // max WS conns for basic plan
-	WSMaxMedium  int // max WS conns for medium plan
-	WSMaxPro     int // max WS conns for pro plan
-	WSMaxAdmin   int // max WS conns for admins
+	WSMaxGlobal int // max global WS connections (0 = unlimited)
+	WSMaxFree   int // max WS conns for free plan
+	WSMaxBasic  int // max WS conns for basic plan
+	WSMaxMedium int // max WS conns for medium plan
+	WSMaxPro    int // max WS conns for pro plan
+	WSMaxAdmin  int // max WS conns for admins
 }
 
 func Load() *Config {
@@ -80,8 +80,8 @@ func Load() *Config {
 
 		CORSAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "https://*.astian.org,http://localhost:5173,http://localhost:3000"),
 
-		DatabaseURL:       getEnv("DATABASE_URL", ""),
-		RedisURL:          getEnv("REDIS_URL", ""),
+		DatabaseURL:                       getEnv("DATABASE_URL", ""),
+		RedisURL:                          getEnv("REDIS_URL", ""),
 		AuthentikIssuer:                   issuer,
 		AuthentikClientID:                 getEnv("AUTHENTIK_CLIENT_ID", ""),
 		AuthentikClientSecret:             getEnv("AUTHENTIK_CLIENT_SECRET", ""),
@@ -181,6 +181,10 @@ func (c *Config) AuthentikUserInfoURL() string {
 func (c *Config) AuthentikIntrospectionURL() string {
 	if c.AuthentikIntrospectionURLOverride != "" {
 		return c.AuthentikIntrospectionURLOverride
+	}
+	appURL := c.AuthentikAppURL()
+	if appURL != "" {
+		return appURL + "/introspect/"
 	}
 	origin := c.AuthentikOrigin()
 	if origin == "" {
