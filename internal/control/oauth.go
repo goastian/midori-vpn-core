@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -74,6 +75,13 @@ func (h *OAuthHandler) isAllowedOrigin(origin string) bool {
 }
 
 func (h *OAuthHandler) OIDCConfig(w http.ResponseWriter, r *http.Request) {
+	slog.Info("[AUTH] OIDCConfig requested",
+		"remote", r.RemoteAddr,
+		"issuer", h.cfg.AuthentikTokenIssuer(),
+		"authorization_url", h.cfg.AuthentikAuthorizationURL(),
+		"token_url", h.cfg.AuthentikTokenURL(),
+		"client_id", h.cfg.AuthentikClientID,
+	)
 	respond.JsonOK(w, map[string]string{
 		"issuer":                 h.cfg.AuthentikTokenIssuer(),
 		"authorization_endpoint": h.cfg.AuthentikAuthorizationURL(),
@@ -104,21 +112,27 @@ type RefreshRequest struct {
 }
 
 func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
+	slog.Info("[AUTH] Refresh hit", "remote", r.RemoteAddr)
+
 	if !h.csrfCheck(w, r) {
+		slog.Warn("[AUTH] Refresh CSRF check failed")
 		return
 	}
 
 	var req RefreshRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		slog.Warn("[AUTH] Refresh invalid request body", "error", err)
 		respond.JsonError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 	if req.RefreshToken == "" {
+		slog.Warn("[AUTH] Refresh missing refresh_token")
 		respond.JsonError(w, "refresh_token is required", http.StatusBadRequest)
 		return
 	}
 
 	tokenURL := h.cfg.AuthentikTokenURL()
+	slog.Info("[AUTH] Refresh exchanging with Authentik", "token_url", tokenURL)
 
 	form := url.Values{}
 	form.Set("grant_type", "refresh_token")
@@ -127,6 +141,7 @@ func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := http.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
 	if err != nil {
+		slog.Error("[AUTH] Refresh HTTP error", "error", err)
 		respond.JsonError(w, "token refresh failed", http.StatusBadGateway)
 		return
 	}
@@ -134,11 +149,15 @@ func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		slog.Error("[AUTH] Refresh failed to read response", "error", err)
 		respond.JsonError(w, "failed to read token response", http.StatusBadGateway)
 		return
 	}
 
+	slog.Info("[AUTH] Refresh Authentik response", "status", resp.StatusCode)
+
 	if resp.StatusCode != http.StatusOK {
+		slog.Warn("[AUTH] Refresh Authentik returned error", "status", resp.StatusCode, "body", string(body))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		w.Write(body)
@@ -147,34 +166,62 @@ func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 
 	var tokenResp TokenResponse
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		slog.Error("[AUTH] Refresh failed to parse token", "error", err)
 		respond.JsonError(w, "invalid token response", http.StatusBadGateway)
 		return
 	}
 
+	slog.Info("[AUTH] Refresh SUCCESS")
 	respond.JsonOK(w, tokenResp, http.StatusOK)
 }
 
 func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
+	slog.Info("[AUTH] Callback hit",
+		"method", r.Method,
+		"path", r.URL.Path,
+		"remote", r.RemoteAddr,
+		"origin", r.Header.Get("Origin"),
+		"referer", r.Header.Get("Referer"),
+	)
+
 	if !h.csrfCheck(w, r) {
+		slog.Warn("[AUTH] Callback CSRF check failed", "origin", r.Header.Get("Origin"), "referer", r.Header.Get("Referer"))
 		return
 	}
 
 	var req CallbackRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		slog.Warn("[AUTH] Callback invalid request body", "error", err)
 		respond.JsonError(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
+
+	slog.Info("[AUTH] Callback parsed request",
+		"code_length", len(req.Code),
+		"redirect_uri", req.RedirectURI,
+		"has_verifier", req.CodeVerifier != "",
+	)
+
 	if req.Code == "" || req.RedirectURI == "" {
+		slog.Warn("[AUTH] Callback missing code or redirect_uri")
 		respond.JsonError(w, "code and redirect_uri are required", http.StatusBadRequest)
 		return
 	}
 
 	if !h.isAllowedRedirectURI(req.RedirectURI) {
+		slog.Warn("[AUTH] Callback redirect_uri not allowed",
+			"redirect_uri", req.RedirectURI,
+			"allowed_origins", h.allowedOrigins,
+		)
 		respond.JsonError(w, "redirect_uri not allowed", http.StatusBadRequest)
 		return
 	}
 
 	tokenURL := h.cfg.AuthentikTokenURL()
+	slog.Info("[AUTH] Callback exchanging code with Authentik",
+		"token_url", tokenURL,
+		"client_id", h.cfg.AuthentikClientID,
+	)
 
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
@@ -187,6 +234,7 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := http.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
 	if err != nil {
+		slog.Error("[AUTH] Callback token exchange HTTP error", "error", err, "token_url", tokenURL)
 		respond.JsonError(w, fmt.Sprintf("token exchange failed: %v", err), http.StatusBadGateway)
 		return
 	}
@@ -194,11 +242,21 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		slog.Error("[AUTH] Callback failed to read Authentik response", "error", err)
 		respond.JsonError(w, "failed to read token response", http.StatusBadGateway)
 		return
 	}
 
+	slog.Info("[AUTH] Callback Authentik response",
+		"status", resp.StatusCode,
+		"body_length", len(body),
+	)
+
 	if resp.StatusCode != http.StatusOK {
+		slog.Warn("[AUTH] Callback Authentik returned error",
+			"status", resp.StatusCode,
+			"body", string(body),
+		)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		w.Write(body)
@@ -207,9 +265,17 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 
 	var tokenResp TokenResponse
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		slog.Error("[AUTH] Callback failed to parse token response", "error", err)
 		respond.JsonError(w, "invalid token response", http.StatusBadGateway)
 		return
 	}
+
+	slog.Info("[AUTH] Callback SUCCESS — tokens obtained",
+		"has_access_token", tokenResp.AccessToken != "",
+		"has_refresh_token", tokenResp.RefreshToken != "",
+		"has_id_token", tokenResp.IDToken != "",
+		"expires_in", tokenResp.ExpiresIn,
+	)
 
 	respond.JsonOK(w, tokenResp, http.StatusOK)
 }
