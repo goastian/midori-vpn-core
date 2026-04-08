@@ -50,25 +50,41 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 				jwt.WithValidate(true),
 				jwt.WithAcceptableSkew(30*time.Second),
 			)
+			var sub string
+			var email string
+			var groups []string
+
 			if err != nil {
-				slog.Warn("JWT validation failed", "error", err)
-				http.Error(w, `{"ok":false,"error":"invalid token"}`, http.StatusUnauthorized)
-				return
+				slog.Warn("JWT validation failed, trying introspection fallback", "error", err)
+				claims, intErr := introspectToken(cfg, tokenStr)
+				if intErr != nil {
+					slog.Warn("Token introspection failed", "error", intErr)
+					http.Error(w, `{"ok":false,"error":"invalid token"}`, http.StatusUnauthorized)
+					return
+				}
+				if claims.Iss != "" && !sameIssuer(claims.Iss, cfg.AuthentikTokenIssuer()) {
+					http.Error(w, `{"ok":false,"error":"invalid token issuer"}`, http.StatusUnauthorized)
+					return
+				}
+
+				sub = claims.Sub
+				email = claims.Email
+				groups = introspectionGroups(claims.Groups)
+			} else {
+				if !sameIssuer(token.Issuer(), cfg.AuthentikTokenIssuer()) {
+					http.Error(w, `{"ok":false,"error":"invalid token issuer"}`, http.StatusUnauthorized)
+					return
+				}
+
+				sub = token.Subject()
+				email = getStringClaim(token, "email")
+				groups = getStringSliceClaim(token, "groups")
 			}
 
-			if !sameIssuer(token.Issuer(), cfg.AuthentikTokenIssuer()) {
-				http.Error(w, `{"ok":false,"error":"invalid token issuer"}`, http.StatusUnauthorized)
-				return
-			}
-
-			sub := token.Subject()
 			if sub == "" {
 				http.Error(w, `{"ok":false,"error":"missing sub claim"}`, http.StatusUnauthorized)
 				return
 			}
-
-			email := getStringClaim(token, "email")
-			groups := getStringSliceClaim(token, "groups")
 
 			user, err := userRepo.UpsertByAuthentikUID(r.Context(), sub, email, groups)
 			if err != nil {
@@ -140,8 +156,15 @@ func ValidateTokenOnly(cfg *config.Config, jwks *JWKSProvider, tokenStr string) 
 		jwt.WithAcceptableSkew(30*time.Second),
 	)
 	if err != nil {
-		slog.Warn("WS JWT validation failed", "error", err)
-		return false
+		claims, intErr := introspectToken(cfg, tokenStr)
+		if intErr != nil {
+			slog.Warn("WS JWT validation/introspection failed", "jwt_error", err, "introspection_error", intErr)
+			return false
+		}
+		if claims.Iss != "" && !sameIssuer(claims.Iss, cfg.AuthentikTokenIssuer()) {
+			return false
+		}
+		return claims.Sub != ""
 	}
 	if !sameIssuer(token.Issuer(), cfg.AuthentikTokenIssuer()) {
 		return false
@@ -165,7 +188,20 @@ func ValidateTokenAndExtractClaims(cfg *config.Config, jwks *JWKSProvider, token
 		jwt.WithAcceptableSkew(30*time.Second),
 	)
 	if err != nil {
-		return nil, err
+		claims, intErr := introspectToken(cfg, tokenStr)
+		if intErr != nil {
+			return nil, fmt.Errorf("jwt parse failed: %w; introspection failed: %v", err, intErr)
+		}
+		if claims.Iss != "" && !sameIssuer(claims.Iss, cfg.AuthentikTokenIssuer()) {
+			return nil, fmt.Errorf("invalid issuer: %s", claims.Iss)
+		}
+		if claims.Sub == "" {
+			return nil, fmt.Errorf("missing sub claim")
+		}
+		return &WSClaims{
+			Subject: claims.Sub,
+			Groups:  introspectionGroups(claims.Groups),
+		}, nil
 	}
 	if !sameIssuer(token.Issuer(), cfg.AuthentikTokenIssuer()) {
 		return nil, fmt.Errorf("invalid issuer: %s", token.Issuer())

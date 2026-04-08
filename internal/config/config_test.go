@@ -20,6 +20,9 @@ func TestAuthentikURLsFromApplicationURL(t *testing.T) {
 	if got := cfg.AuthentikUserInfoURL(); got != "https://accounts.astian.org/application/o/userinfo/" {
 		t.Fatalf("AuthentikUserInfoURL() = %q", got)
 	}
+	if got := cfg.AuthentikIntrospectionURL(); got != "https://accounts.astian.org/application/o/introspect/" {
+		t.Fatalf("AuthentikIntrospectionURL() = %q", got)
+	}
 	if got := cfg.AuthentikEndSessionURL(); got != "https://accounts.astian.org/application/o/midori-vpn/end-session/" {
 		t.Fatalf("AuthentikEndSessionURL() = %q", got)
 	}

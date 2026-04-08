@@ -176,6 +176,14 @@ func (c *Config) AuthentikUserInfoURL() string {
 	return origin + "/application/o/userinfo/"
 }
 
+func (c *Config) AuthentikIntrospectionURL() string {
+	origin := c.AuthentikOrigin()
+	if origin == "" {
+		return ""
+	}
+	return origin + "/application/o/introspect/"
+}
+
 func (c *Config) AuthentikEndSessionURL() string {
 	appURL := c.AuthentikAppURL()
 	if appURL == "" {
