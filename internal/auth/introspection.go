@@ -109,12 +109,14 @@ func introspectToken(cfg *config.Config, token string) (*introspectionClaims, er
 	}
 
 	var lastErr error
+	allAttemptsFailed := true
 	for i, endpoint := range urls {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		claims, status, body, err := doIntrospectionRequest(ctx, endpoint, form)
 		cancel()
 
 		if err == nil {
+			allAttemptsFailed = false
 			slog.Debug("introspection success",
 				"endpoint", endpoint,
 				"attempt", i+1,
@@ -128,7 +130,7 @@ func introspectToken(cfg *config.Config, token string) (*introspectionClaims, er
 		if len(bodyPreview) > 240 {
 			bodyPreview = bodyPreview[:240]
 		}
-		slog.Warn("introspection attempt failed",
+		slog.Debug("introspection attempt failed",
 			"endpoint", endpoint,
 			"attempt", i+1,
 			"status", status,
@@ -145,6 +147,9 @@ func introspectToken(cfg *config.Config, token string) (*introspectionClaims, er
 
 	if lastErr == nil {
 		lastErr = fmt.Errorf("introspection failed for all candidate endpoints")
+	}
+	if allAttemptsFailed {
+		slog.Warn("introspection failed for all candidate endpoints", "error", lastErr)
 	}
 	return nil, lastErr
 }

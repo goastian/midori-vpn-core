@@ -207,7 +207,7 @@ func (c *Config) WSMaxForGroups(groups []string) int {
 	for _, g := range groups {
 		var limit int
 		switch g {
-		case "vpn-admins", "admins":
+		case "vpn-admins", "admins", "authentik Admins":
 			limit = c.WSMaxAdmin
 		case "plan-pro":
 			limit = c.WSMaxPro
