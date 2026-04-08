@@ -138,6 +138,9 @@ func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	form.Set("grant_type", "refresh_token")
 	form.Set("refresh_token", req.RefreshToken)
 	form.Set("client_id", h.cfg.AuthentikClientID)
+	if h.cfg.AuthentikClientSecret != "" {
+		form.Set("client_secret", h.cfg.AuthentikClientSecret)
+	}
 
 	resp, err := http.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
 	if err != nil {
@@ -221,6 +224,7 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	slog.Info("[AUTH] Callback exchanging code with Authentik",
 		"token_url", tokenURL,
 		"client_id", h.cfg.AuthentikClientID,
+		"has_client_secret", h.cfg.AuthentikClientSecret != "",
 	)
 
 	form := url.Values{}
@@ -228,6 +232,9 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	form.Set("code", req.Code)
 	form.Set("redirect_uri", req.RedirectURI)
 	form.Set("client_id", h.cfg.AuthentikClientID)
+	if h.cfg.AuthentikClientSecret != "" {
+		form.Set("client_secret", h.cfg.AuthentikClientSecret)
+	}
 	if req.CodeVerifier != "" {
 		form.Set("code_verifier", req.CodeVerifier)
 	}

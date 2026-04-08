@@ -33,9 +33,10 @@ type Config struct {
 	RedisURL string
 
 	// Authentik OIDC
-	AuthentikIssuer   string
-	AuthentikClientID string
-	AuthentikJWKSURL  string
+	AuthentikIssuer       string
+	AuthentikClientID     string
+	AuthentikClientSecret string
+	AuthentikJWKSURL      string
 
 	// Core-to-core TLS
 	CoreTLSSkipVerify bool   // skip TLS cert verification for self-signed certs
@@ -80,9 +81,10 @@ func Load() *Config {
 
 		DatabaseURL:       getEnv("DATABASE_URL", ""),
 		RedisURL:          getEnv("REDIS_URL", ""),
-		AuthentikIssuer:   issuer,
-		AuthentikClientID: getEnv("AUTHENTIK_CLIENT_ID", ""),
-		AuthentikJWKSURL:  jwksURL,
+		AuthentikIssuer:       issuer,
+		AuthentikClientID:     getEnv("AUTHENTIK_CLIENT_ID", ""),
+		AuthentikClientSecret: getEnv("AUTHENTIK_CLIENT_SECRET", ""),
+		AuthentikJWKSURL:      jwksURL,
 
 		CoreTLSSkipVerify: getEnvBool("CORE_TLS_SKIP_VERIFY", false),
 		CoreAllowHTTP:     getEnvBool("CORE_ALLOW_INSECURE_HTTP", false),
