@@ -106,6 +106,21 @@ func (h *Handler) PingServers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	respond.JsonOK(w, buildServerPingResults(servers), http.StatusOK)
+}
+
+func (h *Handler) AdminPingServers(w http.ResponseWriter, r *http.Request) {
+	servers, err := h.serverRepo.ListAll(r.Context())
+	if err != nil {
+		slog.Error("admin ping servers list error", "error", err)
+		respond.JsonError(w, "failed to list servers", http.StatusInternalServerError)
+		return
+	}
+
+	respond.JsonOK(w, buildServerPingResults(servers), http.StatusOK)
+}
+
+func buildServerPingResults(servers []models.VPNServer) []ServerPingResult {
 	results := make([]ServerPingResult, len(servers))
 	var wg sync.WaitGroup
 
@@ -152,7 +167,7 @@ func (h *Handler) PingServers(w http.ResponseWriter, r *http.Request) {
 	}
 	wg.Wait()
 
-	respond.JsonOK(w, results, http.StatusOK)
+	return results
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

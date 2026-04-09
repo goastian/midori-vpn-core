@@ -103,6 +103,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 
 			// Servers
 			r.Get("/servers", ch.AdminListServers)
+			r.Get("/servers/ping", ch.AdminPingServers)
 			r.Post("/servers", ch.AdminCreateServer)
 			r.Put("/servers/{id}", ch.AdminUpdateServer)
 			r.Delete("/servers/{id}", ch.AdminDeleteServer)
