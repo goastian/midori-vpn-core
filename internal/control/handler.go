@@ -29,6 +29,7 @@ type Handler struct {
 	peerRepo          *repo.PeerRepo
 	auditRepo         *repo.AuditRepo
 	maxDevicesPerUser int
+	appEnv            string
 }
 
 func NewHandler(pool *pgxpool.Pool, cfg *config.Config) *Handler {
@@ -38,6 +39,7 @@ func NewHandler(pool *pgxpool.Pool, cfg *config.Config) *Handler {
 		peerRepo:          repo.NewPeerRepo(pool),
 		auditRepo:         repo.NewAuditRepo(pool),
 		maxDevicesPerUser: cfg.MaxDevicesPerUser,
+		appEnv:            cfg.AppEnv,
 	}
 }
 
@@ -261,7 +263,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		PeerID:          peer.ID,
 		PeerIP:          coreResp.AllowedIP,
 		ServerPublicKey: server.PublicKey,
-		ServerEndpoint:  fmt.Sprintf("%s:%d", server.Host, server.WGPort),
+		ServerEndpoint:  wireGuardEndpointForServerHost(server.Host, server.WGPort),
 		DNS:             "1.1.1.1, 8.8.8.8",
 		AllowedIPs:      "0.0.0.0/0, ::/0",
 	}
@@ -379,6 +381,7 @@ func (h *Handler) ExportQR(w http.ResponseWriter, r *http.Request) {
 }
 
 func buildWGConfig(peer *models.Peer, server *models.VPNServer) string {
+	endpoint := wireGuardEndpointForServerHost(server.Host, server.WGPort)
 	return fmt.Sprintf(`[Interface]
 PrivateKey = <YOUR_PRIVATE_KEY>
 Address = %s/32
@@ -386,10 +389,10 @@ DNS = 1.1.1.1, 8.8.8.8
 
 [Peer]
 PublicKey = %s
-Endpoint = %s:%d
+Endpoint = %s
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
-`, peer.AssignedIP, server.PublicKey, server.Host, server.WGPort)
+`, peer.AssignedIP, server.PublicKey, endpoint)
 }
 
 func (h *Handler) ListMyConnections(w http.ResponseWriter, r *http.Request) {
@@ -675,6 +678,19 @@ func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 		req.MaxPeers = 250
 	}
 
+	normalizedHost, normalizedPort, err := normalizeAdminServerHost(req.Host, req.Port)
+	if err != nil {
+		respond.JsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.Host = normalizedHost
+	req.Port = normalizedPort
+
+	if h.appEnv == "production" && isLoopbackServerHost(req.Host) {
+		respond.JsonError(w, "loopback hosts (localhost/127.0.0.1/::1) are not allowed in production", http.StatusBadRequest)
+		return
+	}
+
 	server := &models.VPNServer{
 		Name:        req.Name,
 		Host:        req.Host,
@@ -735,11 +751,28 @@ func (h *Handler) AdminUpdateServer(w http.ResponseWriter, r *http.Request) {
 	if req.Name != "" {
 		server.Name = req.Name
 	}
-	if req.Host != "" {
-		server.Host = req.Host
-	}
-	if req.Port != 0 {
-		server.Port = req.Port
+	if req.Host != "" || req.Port != 0 {
+		hostInput := server.Host
+		if req.Host != "" {
+			hostInput = req.Host
+		}
+		portInput := server.Port
+		if req.Port != 0 {
+			portInput = req.Port
+		}
+
+		normalizedHost, normalizedPort, err := normalizeAdminServerHost(hostInput, portInput)
+		if err != nil {
+			respond.JsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if h.appEnv == "production" && isLoopbackServerHost(normalizedHost) {
+			respond.JsonError(w, "loopback hosts (localhost/127.0.0.1/::1) are not allowed in production", http.StatusBadRequest)
+			return
+		}
+
+		server.Host = normalizedHost
+		server.Port = normalizedPort
 	}
 	if req.WGPort != 0 {
 		server.WGPort = req.WGPort
