@@ -23,6 +23,7 @@ type VPNServer struct {
 	ID           uuid.UUID `json:"id"`
 	Name         string    `json:"name"`
 	Host         string    `json:"host"`
+	Endpoint     string    `json:"endpoint"`
 	Port         int       `json:"port"`
 	WGPort       int       `json:"wg_port"`
 	PublicKey    string    `json:"public_key"`

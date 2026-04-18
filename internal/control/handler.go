@@ -24,12 +24,13 @@ import (
 )
 
 type Handler struct {
-	userRepo          *repo.UserRepo
-	serverRepo        *repo.ServerRepo
-	peerRepo          *repo.PeerRepo
-	auditRepo         *repo.AuditRepo
-	maxDevicesPerUser int
-	appEnv            string
+	userRepo           *repo.UserRepo
+	serverRepo         *repo.ServerRepo
+	peerRepo           *repo.PeerRepo
+	auditRepo          *repo.AuditRepo
+	maxDevicesPerUser  int
+	appEnv             string
+	coreAllowLoopback  bool
 }
 
 func NewHandler(pool *pgxpool.Pool, cfg *config.Config) *Handler {
@@ -40,6 +41,7 @@ func NewHandler(pool *pgxpool.Pool, cfg *config.Config) *Handler {
 		auditRepo:         repo.NewAuditRepo(pool),
 		maxDevicesPerUser: cfg.MaxDevicesPerUser,
 		appEnv:            cfg.AppEnv,
+		coreAllowLoopback: cfg.CoreAllowHTTP,
 	}
 }
 
@@ -273,11 +275,26 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 			"device_name": req.DeviceName,
 		}, r.RemoteAddr)
 
-	// 8. Return full WireGuard config
+	// 8. Fetch the real WireGuard public key from the core
+	serverPubKey := server.PublicKey
+	coreStats, err := CallCoreServerStats(server)
+	if err != nil {
+		slog.Warn("could not fetch core stats for server public key", "server_id", server.ID, "error", err)
+	} else if coreStats.PublicKey != "" {
+		serverPubKey = coreStats.PublicKey
+		if server.PublicKey != coreStats.PublicKey {
+			server.PublicKey = coreStats.PublicKey
+			if updateErr := h.serverRepo.Update(r.Context(), server); updateErr != nil {
+				slog.Warn("failed to persist server public key", "server_id", server.ID, "error", updateErr)
+			}
+		}
+	}
+
+	// 9. Return full WireGuard config
 	config := models.ConnectionConfig{
 		PeerID:          peer.ID,
 		PeerIP:          coreResp.AllowedIP,
-		ServerPublicKey: server.PublicKey,
+		ServerPublicKey: serverPubKey,
 		ServerEndpoint:  wireGuardEndpointForServerHost(server.Host, server.WGPort),
 		DNS:             "1.1.1.1, 8.8.8.8",
 		AllowedIPs:      "0.0.0.0/0, ::/0",
@@ -320,6 +337,45 @@ func (h *Handler) Disconnect(w http.ResponseWriter, r *http.Request) {
 	respond.JsonOK(w, map[string]string{"status": "disconnected"}, http.StatusOK)
 }
 
+func (h *Handler) DeleteConnection(w http.ResponseWriter, r *http.Request) {
+	user := auth.GetUser(r)
+
+	peerID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		respond.JsonError(w, "invalid peer id", http.StatusBadRequest)
+		return
+	}
+
+	peer, err := h.peerRepo.GetByID(r.Context(), peerID)
+	if err != nil {
+		respond.JsonError(w, "peer not found", http.StatusNotFound)
+		return
+	}
+
+	if peer.UserID != user.ID && !IsAdmin(user) {
+		respond.JsonError(w, "not your peer", http.StatusForbidden)
+		return
+	}
+
+	// Remove from WireGuard if the peer is active
+	if peer.IsActive {
+		if server, err := h.serverRepo.GetByID(r.Context(), peer.ServerID); err == nil {
+			_ = CallCoreRemovePeer(server, peer.PublicKey)
+			_ = h.serverRepo.UpdatePeerCount(r.Context(), peer.ServerID, -1)
+		}
+	}
+
+	if err := h.peerRepo.Delete(r.Context(), peerID); err != nil {
+		respond.JsonError(w, "failed to delete device", http.StatusInternalServerError)
+		return
+	}
+
+	h.auditRepo.Log(r.Context(), &user.ID, "peer.delete",
+		map[string]interface{}{"peer_id": peerID, "server_id": peer.ServerID}, r.RemoteAddr)
+
+	respond.JsonOK(w, map[string]string{"status": "deleted"}, http.StatusOK)
+}
+
 func (h *Handler) ExportConfig(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r)
 
@@ -346,6 +402,7 @@ func (h *Handler) ExportConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ensureServerPublicKey(server)
 	conf := buildWGConfig(peer, server)
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -380,6 +437,7 @@ func (h *Handler) ExportQR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ensureServerPublicKey(server)
 	conf := buildWGConfig(peer, server)
 
 	png, err := qrcode.Encode(conf, qrcode.Medium, 512)
@@ -395,11 +453,31 @@ func (h *Handler) ExportQR(w http.ResponseWriter, r *http.Request) {
 	w.Write(png)
 }
 
+// ensureServerPublicKey fetches the real WireGuard public key from the core
+// and updates the server record if it differs from what is stored.
+func ensureServerPublicKey(server *models.VPNServer) {
+	stats, err := CallCoreServerStats(server)
+	if err != nil {
+		slog.Warn("could not fetch core stats for public key", "server_id", server.ID, "error", err)
+		return
+	}
+	if stats.PublicKey != "" && stats.PublicKey != server.PublicKey {
+		slog.Info("updating server public key from core", "server_id", server.ID)
+		server.PublicKey = stats.PublicKey
+	}
+}
+
 func buildWGConfig(peer *models.Peer, server *models.VPNServer) string {
-	endpoint := wireGuardEndpointForServerHost(server.Host, server.WGPort)
+	// Use Endpoint if set (public-facing host), otherwise fall back to Host
+	epHost := server.Endpoint
+	if epHost == "" {
+		epHost = server.Host
+	}
+	endpoint := wireGuardEndpointForServerHost(epHost, server.WGPort)
+	// AssignedIP already includes /32 from the pool allocator; use it directly
 	return fmt.Sprintf(`[Interface]
 PrivateKey = <YOUR_PRIVATE_KEY>
-Address = %s/32
+Address = %s
 DNS = 1.1.1.1, 8.8.8.8
 
 [Peer]
@@ -651,9 +729,30 @@ func (h *Handler) AdminBanUser(w http.ResponseWriter, r *http.Request) {
 	respond.JsonOK(w, map[string]string{"status": "banned"}, http.StatusOK)
 }
 
+func (h *Handler) AdminUnbanUser(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		respond.JsonError(w, "invalid user id", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.userRepo.Unban(r.Context(), id); err != nil {
+		slog.Error("admin unban user error", "user_id", id, "error", err)
+		respond.JsonError(w, "failed to unban user", http.StatusInternalServerError)
+		return
+	}
+
+	admin := auth.GetUser(r)
+	h.auditRepo.Log(r.Context(), &admin.ID, "admin.user.unban",
+		map[string]interface{}{"target_user_id": id}, r.RemoteAddr)
+
+	respond.JsonOK(w, map[string]string{"status": "unbanned"}, http.StatusOK)
+}
+
 type CreateServerRequest struct {
 	Name        string `json:"name"`
 	Host        string `json:"host"`
+	Endpoint    string `json:"endpoint"`
 	Port        int    `json:"port"`
 	WGPort      int    `json:"wg_port"`
 	PublicKey   string `json:"public_key"`
@@ -701,14 +800,15 @@ func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 	req.Host = normalizedHost
 	req.Port = normalizedPort
 
-	if h.appEnv == "production" && isLoopbackServerHost(req.Host) {
-		respond.JsonError(w, "loopback hosts (localhost/127.0.0.1/::1) are not allowed in production", http.StatusBadRequest)
+	if h.appEnv == "production" && !h.coreAllowLoopback && isLoopbackServerHost(req.Host) {
+		respond.JsonError(w, "loopback hosts (localhost/127.0.0.1/::1) are not allowed in production — set CORE_ALLOW_INSECURE_HTTP=true to override", http.StatusBadRequest)
 		return
 	}
 
 	server := &models.VPNServer{
 		Name:        req.Name,
 		Host:        req.Host,
+		Endpoint:    req.Endpoint,
 		Port:        req.Port,
 		WGPort:      req.WGPort,
 		PublicKey:   req.PublicKey,
@@ -734,6 +834,7 @@ func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 type UpdateServerRequest struct {
 	Name        string `json:"name"`
 	Host        string `json:"host"`
+	Endpoint    string `json:"endpoint"`
 	Port        int    `json:"port"`
 	WGPort      int    `json:"wg_port"`
 	PublicKey   string `json:"public_key"`
@@ -766,6 +867,8 @@ func (h *Handler) AdminUpdateServer(w http.ResponseWriter, r *http.Request) {
 	if req.Name != "" {
 		server.Name = req.Name
 	}
+	// Endpoint may be cleared (set to "") intentionally, so always update it
+	server.Endpoint = req.Endpoint
 	if req.Host != "" || req.Port != 0 {
 		hostInput := server.Host
 		if req.Host != "" {
@@ -781,8 +884,8 @@ func (h *Handler) AdminUpdateServer(w http.ResponseWriter, r *http.Request) {
 			respond.JsonError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if h.appEnv == "production" && isLoopbackServerHost(normalizedHost) {
-			respond.JsonError(w, "loopback hosts (localhost/127.0.0.1/::1) are not allowed in production", http.StatusBadRequest)
+		if h.appEnv == "production" && !h.coreAllowLoopback && isLoopbackServerHost(normalizedHost) {
+			respond.JsonError(w, "loopback hosts (localhost/127.0.0.1/::1) are not allowed in production — set CORE_ALLOW_INSECURE_HTTP=true to override", http.StatusBadRequest)
 			return
 		}
 

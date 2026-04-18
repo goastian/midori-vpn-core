@@ -71,15 +71,25 @@ func (h *WSHub) Run() {
 
 		case message := <-h.broadcast:
 			h.mu.RLock()
+			var dead []*WSClient
 			for client := range h.clients {
 				select {
 				case client.send <- message:
 				default:
-					close(client.send)
-					delete(h.clients, client)
+					dead = append(dead, client)
 				}
 			}
 			h.mu.RUnlock()
+			if len(dead) > 0 {
+				h.mu.Lock()
+				for _, client := range dead {
+					if _, ok := h.clients[client]; ok {
+						close(client.send)
+						delete(h.clients, client)
+					}
+				}
+				h.mu.Unlock()
+			}
 		}
 	}
 }

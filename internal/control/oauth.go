@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/respond"
@@ -142,7 +144,16 @@ func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		form.Set("client_secret", h.cfg.AuthentikClientSecret)
 	}
 
-	resp, err := http.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
+	tokenCtx, tokenCancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer tokenCancel()
+	tokenReq, err := http.NewRequestWithContext(tokenCtx, http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		slog.Error("[AUTH] Refresh failed to create request", "error", err)
+		respond.JsonError(w, "token refresh failed", http.StatusInternalServerError)
+		return
+	}
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(tokenReq)
 	if err != nil {
 		slog.Error("[AUTH] Refresh HTTP error", "error", err)
 		respond.JsonError(w, "token refresh failed", http.StatusBadGateway)
@@ -239,7 +250,16 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		form.Set("code_verifier", req.CodeVerifier)
 	}
 
-	resp, err := http.Post(tokenURL, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
+	tokenCtx, tokenCancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer tokenCancel()
+	tokenReq, err := http.NewRequestWithContext(tokenCtx, http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		slog.Error("[AUTH] Callback failed to create request", "error", err)
+		respond.JsonError(w, "token exchange failed", http.StatusInternalServerError)
+		return
+	}
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := http.DefaultClient.Do(tokenReq)
 	if err != nil {
 		slog.Error("[AUTH] Callback token exchange HTTP error", "error", err, "token_url", tokenURL)
 		respond.JsonError(w, fmt.Sprintf("token exchange failed: %v", err), http.StatusBadGateway)

@@ -32,6 +32,13 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 	if cfg.RateLimitRPS > 0 {
 		r.Use(RateLimitMiddleware(cfg))
 	}
+	// Limit request body size to 1 MiB to prevent resource exhaustion attacks.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+			next.ServeHTTP(w, r)
+		})
+	})
 
 	h := core.NewHandler(cfg, mgr)
 
@@ -79,6 +86,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 			r.Post("/connections", ch.Connect)
 			r.Get("/connections", ch.ListMyConnections)
 			r.Delete("/connections/{id}", ch.Disconnect)
+			r.Delete("/connections/{id}/device", ch.DeleteConnection)
 			r.Get("/connections/{id}/config", ch.ExportConfig)
 			r.Get("/connections/{id}/qr", ch.ExportQR)
 
@@ -100,6 +108,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 			r.Put("/users/{id}", ch.AdminUpdateUser)
 			r.Delete("/users/{id}", ch.AdminDeleteUser)
 			r.Post("/users/{id}/ban", ch.AdminBanUser)
+			r.Delete("/users/{id}/ban", ch.AdminUnbanUser)
 
 			// Servers
 			r.Get("/servers", ch.AdminListServers)

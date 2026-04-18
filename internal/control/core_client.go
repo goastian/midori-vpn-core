@@ -362,6 +362,53 @@ func CallCoreGetPeerStats(server *models.VPNServer, pubkey string) (*CorePeerSta
 	return &result, nil
 }
 
+// CoreServerStatsResponse mirrors wg.ServerStatsResponse from the core API.
+type CoreServerStatsResponse struct {
+	Interface  string `json:"interface"`
+	PublicKey  string `json:"public_key"`
+	ListenPort int    `json:"listen_port"`
+	PeerCount  int    `json:"peer_count"`
+	TotalTX    int64  `json:"total_tx_bytes"`
+	TotalRX    int64  `json:"total_rx_bytes"`
+}
+
+// CallCoreServerStats fetches the WireGuard interface stats (including the real
+// public key) from the core's GET /api/v1/stats endpoint.
+func CallCoreServerStats(server *models.VPNServer) (*CoreServerStatsResponse, error) {
+	fullURL, cbKey, err := coreURL(server, "/api/v1/stats")
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, fullURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Core-Token", server.CoreToken)
+
+	resp, err := coreDoWithRetry(req, nil, cbKey)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	var apiResp coreAPIResponse
+	if err := json.Unmarshal(body, &apiResp); err != nil {
+		return nil, fmt.Errorf("invalid core response: %s", string(body))
+	}
+	if !apiResp.OK {
+		return nil, fmt.Errorf("core error: %s", apiResp.Err)
+	}
+
+	var result CoreServerStatsResponse
+	if err := json.Unmarshal(apiResp.Data, &result); err != nil {
+		return nil, fmt.Errorf("parse core server stats: %w", err)
+	}
+	return &result, nil
+}
+
 func CallCoreListPeers(server *models.VPNServer) ([]CorePeerStatsResponse, error) {
 	fullURL, cbKey, err := coreURL(server, "/api/v1/peers")
 	if err != nil {

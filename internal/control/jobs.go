@@ -65,7 +65,7 @@ func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub) {
 				if stats, ok := peerMap[dbPeer.PublicKey]; ok {
 					var hs *time.Time
 					if stats.LastHandshake != "" {
-						if t, err := time.Parse(time.RFC3339, stats.LastHandshake); err == nil {
+						if t, err := time.Parse(time.RFC3339, stats.LastHandshake); err == nil && !t.IsZero() {
 							hs = &t
 						}
 					}

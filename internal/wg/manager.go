@@ -22,13 +22,13 @@ import (
 )
 
 type PeerInfo struct {
-	PublicKey       string    `json:"public_key"`
-	AllowedIP      string    `json:"allowed_ip"`
-	Keepalive      int       `json:"keepalive"`
-	LastHandshake  time.Time `json:"last_handshake"`
-	TransmitBytes  int64     `json:"tx_bytes"`
-	ReceiveBytes   int64     `json:"rx_bytes"`
-	Endpoint       string    `json:"endpoint,omitempty"`
+	PublicKey     string     `json:"public_key"`
+	AllowedIP     string     `json:"allowed_ip"`
+	Keepalive     int        `json:"keepalive"`
+	LastHandshake *time.Time `json:"last_handshake,omitempty"`
+	TransmitBytes int64      `json:"tx_bytes"`
+	ReceiveBytes  int64      `json:"rx_bytes"`
+	Endpoint      string     `json:"endpoint,omitempty"`
 }
 
 type ServerStatsResponse struct {
@@ -194,7 +194,11 @@ func (m *Manager) AddPeer(pubkeyStr string, keepalive int) (string, error) {
 		return "", fmt.Errorf("IP allocation: %w", err)
 	}
 
-	_, ipNet, _ := net.ParseCIDR(allocatedIP)
+	_, ipNet, err := net.ParseCIDR(allocatedIP)
+	if err != nil {
+		_ = m.pool.Release(allocatedIP)
+		return "", fmt.Errorf("internal: invalid allocated IP %q: %w", allocatedIP, err)
+	}
 
 	ka := time.Duration(keepalive) * time.Second
 	peerCfg := wgtypes.PeerConfig{
@@ -263,7 +267,10 @@ func (m *Manager) UpdatePeer(pubkeyStr string, keepalive int) error {
 		return errors.New("peer not found")
 	}
 
-	_, ipNet, _ := net.ParseCIDR(ip)
+	_, ipNet, err := net.ParseCIDR(ip)
+	if err != nil {
+		return fmt.Errorf("internal: invalid stored IP %q: %w", ip, err)
+	}
 
 	ka := time.Duration(keepalive) * time.Second
 	peerCfg := wgtypes.PeerConfig{
@@ -299,10 +306,13 @@ func (m *Manager) PeerStats(pubkeyStr string) (*PeerInfo, error) {
 	for _, peer := range dev.Peers {
 		if peer.PublicKey == pubKey {
 			info := &PeerInfo{
-				PublicKey:      pubkeyStr,
-				LastHandshake:  peer.LastHandshakeTime,
-				TransmitBytes:  peer.TransmitBytes,
-				ReceiveBytes:   peer.ReceiveBytes,
+				PublicKey:     pubkeyStr,
+				TransmitBytes: peer.TransmitBytes,
+				ReceiveBytes:  peer.ReceiveBytes,
+			}
+			if !peer.LastHandshakeTime.IsZero() {
+				hs := peer.LastHandshakeTime
+				info.LastHandshake = &hs
 			}
 			if len(peer.AllowedIPs) > 0 {
 				info.AllowedIP = peer.AllowedIPs[0].String()
@@ -326,10 +336,13 @@ func (m *Manager) ListPeers() ([]PeerInfo, error) {
 	peers := make([]PeerInfo, 0, len(dev.Peers))
 	for _, peer := range dev.Peers {
 		info := PeerInfo{
-			PublicKey:      base64.StdEncoding.EncodeToString(peer.PublicKey[:]),
-			LastHandshake:  peer.LastHandshakeTime,
-			TransmitBytes:  peer.TransmitBytes,
-			ReceiveBytes:   peer.ReceiveBytes,
+			PublicKey:     base64.StdEncoding.EncodeToString(peer.PublicKey[:]),
+			TransmitBytes: peer.TransmitBytes,
+			ReceiveBytes:  peer.ReceiveBytes,
+		}
+		if !peer.LastHandshakeTime.IsZero() {
+			hs := peer.LastHandshakeTime
+			info.LastHandshake = &hs
 		}
 		if len(peer.AllowedIPs) > 0 {
 			info.AllowedIP = peer.AllowedIPs[0].String()

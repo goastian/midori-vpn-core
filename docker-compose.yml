@@ -16,7 +16,7 @@ services:
     env_file:
       - .env
     ports:
-      - "8080:8080/tcp"
+      - "8085:8080/tcp"
       - "51820:51820/udp"
     volumes:
       - wg-config:/etc/wireguard
