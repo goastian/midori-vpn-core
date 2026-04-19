@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
@@ -69,10 +70,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Authenticate via Proxy-Authorization: Bearer <jwt>
+	// Authenticate via Proxy-Authorization: Bearer <jwt> or Basic (password=jwt)
 	sub, err := s.authenticate(r)
 	if err != nil {
 		slog.Debug("proxy auth failed", "remote", r.RemoteAddr, "error", err)
+		w.Header().Set("Proxy-Authenticate", `Basic realm="midorivpn"`)
 		http.Error(w, "proxy authentication required", http.StatusProxyAuthRequired)
 		return
 	}
@@ -144,6 +146,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // authenticate extracts and validates the JWT from Proxy-Authorization header.
+// Accepts both "Bearer <jwt>" and "Basic <base64>" where the password is the JWT
+// (the latter is required for Chrome extension compatibility via onAuthRequired).
 func (s *Server) authenticate(r *http.Request) (string, error) {
 	header := r.Header.Get("Proxy-Authorization")
 	if header == "" {
@@ -151,10 +155,31 @@ func (s *Server) authenticate(r *http.Request) (string, error) {
 	}
 
 	parts := strings.SplitN(header, " ", 2)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
+	if len(parts) != 2 {
 		return "", fmt.Errorf("invalid Proxy-Authorization format")
 	}
-	tokenStr := parts[1]
+
+	var tokenStr string
+	switch {
+	case strings.EqualFold(parts[0], "bearer"):
+		tokenStr = parts[1]
+	case strings.EqualFold(parts[0], "basic"):
+		decoded, err := base64.StdEncoding.DecodeString(parts[1])
+		if err != nil {
+			return "", fmt.Errorf("invalid basic auth encoding: %w", err)
+		}
+		// Format: "user:jwt_token" — extract the part after the first ':'
+		colonIdx := strings.IndexByte(string(decoded), ':')
+		if colonIdx < 0 {
+			return "", fmt.Errorf("invalid basic auth format")
+		}
+		tokenStr = string(decoded[colonIdx+1:])
+		if tokenStr == "" {
+			return "", fmt.Errorf("empty token in basic auth")
+		}
+	default:
+		return "", fmt.Errorf("unsupported auth scheme: %s", parts[0])
+	}
 
 	keySet := s.jwks.KeySet()
 	token, err := jwt.Parse(
