@@ -73,11 +73,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Authenticate via Proxy-Authorization: Bearer <jwt> or Basic (password=jwt)
 	sub, err := s.authenticate(r)
 	if err != nil {
-		slog.Debug("proxy auth failed", "remote", r.RemoteAddr, "error", err)
+		slog.Info("proxy auth failed", "remote", r.RemoteAddr, "target", r.Host, "error", err)
 		w.Header().Set("Proxy-Authenticate", `Basic realm="midorivpn"`)
 		http.Error(w, "proxy authentication required", http.StatusProxyAuthRequired)
 		return
 	}
+
+	slog.Info("proxy CONNECT authenticated", "user", sub, "target", r.Host, "remote", r.RemoteAddr)
 
 	// Per-user concurrency limit
 	if !s.acquireSlot(sub) {
@@ -107,11 +109,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Dial the target
 	targetConn, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
 	if err != nil {
-		slog.Debug("proxy dial failed", "target", r.Host, "error", err)
+		slog.Warn("proxy dial failed", "user", sub, "target", r.Host, "error", err)
 		http.Error(w, "failed to connect to target", http.StatusBadGateway)
 		return
 	}
 	defer targetConn.Close()
+
+	slog.Info("proxy tunnel established", "user", sub, "target", r.Host)
 
 	// Hijack the client connection
 	hijacker, ok := w.(http.Hijacker)
@@ -133,11 +137,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	done := make(chan struct{}, 2)
 
 	go func() {
-		io.Copy(targetConn, clientConn)
+		n, _ := io.Copy(targetConn, clientConn)
+		slog.Debug("proxy tunnel client->target done", "target", r.Host, "bytes", n)
 		done <- struct{}{}
 	}()
 	go func() {
-		io.Copy(clientConn, targetConn)
+		n, _ := io.Copy(clientConn, targetConn)
+		slog.Debug("proxy tunnel target->client done", "target", r.Host, "bytes", n)
 		done <- struct{}{}
 	}()
 
