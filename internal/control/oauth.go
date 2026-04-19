@@ -197,11 +197,8 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		"referer", r.Header.Get("Referer"),
 	)
 
-	if !h.csrfCheck(w, r) {
-		slog.Warn("[AUTH] Callback CSRF check failed", "origin", r.Header.Get("Origin"), "referer", r.Header.Get("Referer"))
-		return
-	}
-
+	// Read and parse the body first so we can inspect code_verifier before
+	// deciding whether CSRF validation is needed.
 	var req CallbackRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		slog.Warn("[AUTH] Callback invalid request body", "error", err)
@@ -214,6 +211,18 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		"redirect_uri", req.RedirectURI,
 		"has_verifier", req.CodeVerifier != "",
 	)
+
+	// When a code_verifier is present the client is using PKCE, which already
+	// binds the token exchange to the original authorization request and
+	// provides equivalent CSRF protection. Skip the Origin/Referer check so
+	// browser-extension backgrounds (which have no Origin header) can call
+	// this endpoint directly.
+	if req.CodeVerifier == "" {
+		if !h.csrfCheck(w, r) {
+			slog.Warn("[AUTH] Callback CSRF check failed", "origin", r.Header.Get("Origin"), "referer", r.Header.Get("Referer"))
+			return
+		}
+	}
 
 	if req.Code == "" || req.RedirectURI == "" {
 		slog.Warn("[AUTH] Callback missing code or redirect_uri")
