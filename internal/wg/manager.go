@@ -100,6 +100,7 @@ func (m *Manager) ensureInterface() error {
 	m.privateKey = dev.PrivateKey
 	pubKey := base64.StdEncoding.EncodeToString(dev.PublicKey[:])
 	slog.Info("interface already exists", "interface", m.cfg.WGInterface, "listen_port", dev.ListenPort, "peers", len(dev.Peers), "public_key", pubKey)
+	m.ensureNATRules()
 	return nil
 }
 
@@ -123,6 +124,7 @@ func (m *Manager) createNetworkInterface() error {
 	}
 
 	slog.Info("created network interface", "interface", iface, "address", gatewayIP)
+	m.ensureNATRules()
 	return nil
 }
 
@@ -159,6 +161,50 @@ func (m *Manager) configureNewInterface() error {
 	m.persistConfig()
 	slog.Info("configured interface", "interface", m.cfg.WGInterface, "port", port, "public_key", kp.PublicKey)
 	return nil
+}
+
+// ensureNATRules idempotently adds the iptables rules needed to forward and
+// masquerade traffic from WireGuard peers to the internet.
+// Called on interface creation and on startup (in case rules were lost after
+// a container restart with a pre-existing interface).
+func (m *Manager) ensureNATRules() {
+	iface := m.cfg.WGInterface
+	subnet := m.cfg.Subnet
+
+	type rule struct {
+		check []string
+		add   []string
+	}
+
+	rules := []rule{
+		{
+			check: []string{"iptables", "-t", "nat", "-C", "POSTROUTING", "-s", subnet, "-j", "MASQUERADE"},
+			add:   []string{"iptables", "-t", "nat", "-A", "POSTROUTING", "-s", subnet, "-j", "MASQUERADE"},
+		},
+		{
+			check: []string{"iptables", "-C", "FORWARD", "-i", iface, "-j", "ACCEPT"},
+			add:   []string{"iptables", "-A", "FORWARD", "-i", iface, "-j", "ACCEPT"},
+		},
+		{
+			check: []string{"iptables", "-C", "FORWARD", "-o", iface, "-j", "ACCEPT"},
+			add:   []string{"iptables", "-A", "FORWARD", "-o", iface, "-j", "ACCEPT"},
+		},
+	}
+
+	for _, r := range rules {
+		if err := exec.Command(r.check[0], r.check[1:]...).Run(); err != nil {
+			// Rule doesn't exist yet — add it
+			if out, addErr := exec.Command(r.add[0], r.add[1:]...).CombinedOutput(); addErr != nil {
+				slog.Warn("failed to add iptables rule",
+					"rule", strings.Join(r.add[3:], " "),
+					"error", addErr,
+					"output", strings.TrimSpace(string(out)),
+				)
+			} else {
+				slog.Info("added iptables rule", "rule", strings.Join(r.add[3:], " "))
+			}
+		}
+	}
 }
 
 func (m *Manager) loadExistingPeers() error {
