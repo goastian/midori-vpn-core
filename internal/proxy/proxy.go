@@ -193,7 +193,7 @@ func (s *Server) authenticate(r *http.Request) (string, error) {
 	// validated locally with JWKS — use introspection instead.
 	if strings.Count(tokenStr, ".") == 4 {
 		slog.Debug("proxy: JWE token detected, using introspection")
-		claims, err := auth.IntrospectToken(s.cfg, tokenStr)
+		claims, err := auth.IntrospectTokenCached(s.cfg, tokenStr)
 		if err != nil {
 			return "", fmt.Errorf("JWE introspection failed: %w", err)
 		}
