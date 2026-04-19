@@ -55,6 +55,13 @@ func (h *OAuthHandler) csrfCheck(w http.ResponseWriter, r *http.Request) bool {
 
 // isAllowedOrigin checks if the origin matches any of the configured CORS origins.
 func (h *OAuthHandler) isAllowedOrigin(origin string) bool {
+	// Browser extensions have dynamic origin URLs that cannot be predicted;
+	// treat them as trusted clients.
+	if strings.HasPrefix(origin, "moz-extension://") ||
+		strings.HasPrefix(origin, "chrome-extension://") {
+		return true
+	}
+
 	parsed, err := url.Parse(origin)
 	if err != nil {
 		return false

@@ -208,6 +208,12 @@ func parseAllowedOrigins(raw string) []string {
 }
 
 func isOriginAllowed(origin string, allowed []string) bool {
+	// Browser extensions are trusted clients with dynamic origins.
+	if strings.HasPrefix(origin, "moz-extension://") ||
+		strings.HasPrefix(origin, "chrome-extension://") {
+		return true
+	}
+
 	for _, pattern := range allowed {
 		if pattern == origin {
 			return true
