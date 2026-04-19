@@ -68,7 +68,7 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 				// JWE tokens (5 segments) are encrypted and cannot be validated
 				// locally with JWKS public keys — send directly to introspection.
 				slog.Debug("JWE token detected, using introspection")
-				claims, intErr := introspectToken(cfg, tokenStr)
+				claims, intErr := IntrospectToken(cfg, tokenStr)
 				if intErr != nil {
 					slog.Warn("JWE token introspection failed",
 						"path", r.URL.Path,
@@ -106,7 +106,7 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 						"remote", r.RemoteAddr,
 						"error", err,
 					)
-					claims, intErr := introspectToken(cfg, tokenStr)
+					claims, intErr := IntrospectToken(cfg, tokenStr)
 					if intErr != nil {
 						slog.Warn("Token introspection failed",
 							"path", r.URL.Path,
@@ -203,7 +203,7 @@ func getStringSliceClaim(token jwt.Token, key string) []string {
 // Used for WebSocket authentication via query parameter.
 func ValidateTokenOnly(cfg *config.Config, jwks *JWKSProvider, tokenStr string) bool {
 	if isJWE(tokenStr) {
-		claims, intErr := introspectToken(cfg, tokenStr)
+		claims, intErr := IntrospectToken(cfg, tokenStr)
 		if intErr != nil {
 			slog.Warn("WS JWE introspection failed", "introspection_error", intErr)
 			return false
@@ -222,7 +222,7 @@ func ValidateTokenOnly(cfg *config.Config, jwks *JWKSProvider, tokenStr string) 
 		jwt.WithAcceptableSkew(30*time.Second),
 	)
 	if err != nil {
-		claims, intErr := introspectToken(cfg, tokenStr)
+		claims, intErr := IntrospectToken(cfg, tokenStr)
 		if intErr != nil {
 			slog.Warn("WS JWT validation/introspection failed", "jwt_error", err, "introspection_error", intErr)
 			return false
@@ -247,7 +247,7 @@ type WSClaims struct {
 // ValidateTokenAndExtractClaims validates a JWT and returns the subject and groups.
 func ValidateTokenAndExtractClaims(cfg *config.Config, jwks *JWKSProvider, tokenStr string) (*WSClaims, error) {
 	if isJWE(tokenStr) {
-		claims, intErr := introspectToken(cfg, tokenStr)
+		claims, intErr := IntrospectToken(cfg, tokenStr)
 		if intErr != nil {
 			return nil, fmt.Errorf("jwe introspection failed: %w", intErr)
 		}
@@ -271,7 +271,7 @@ func ValidateTokenAndExtractClaims(cfg *config.Config, jwks *JWKSProvider, token
 		jwt.WithAcceptableSkew(30*time.Second),
 	)
 	if err != nil {
-		claims, intErr := introspectToken(cfg, tokenStr)
+		claims, intErr := IntrospectToken(cfg, tokenStr)
 		if intErr != nil {
 			return nil, fmt.Errorf("jwt parse failed: %w; introspection failed: %v", err, intErr)
 		}

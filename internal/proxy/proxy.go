@@ -154,6 +154,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // authenticate extracts and validates the JWT from Proxy-Authorization header.
 // Accepts both "Bearer <jwt>" and "Basic <base64>" where the password is the JWT
 // (the latter is required for Chrome extension compatibility via onAuthRequired).
+// JWE tokens (encrypted, 5 dot-segments) are validated via introspection since
+// they cannot be verified with JWKS public keys.
 func (s *Server) authenticate(r *http.Request) (string, error) {
 	header := r.Header.Get("Proxy-Authorization")
 	if header == "" {
@@ -185,6 +187,20 @@ func (s *Server) authenticate(r *http.Request) (string, error) {
 		}
 	default:
 		return "", fmt.Errorf("unsupported auth scheme: %s", parts[0])
+	}
+
+	// JWE tokens (5 dot-separated segments) are encrypted and cannot be
+	// validated locally with JWKS — use introspection instead.
+	if strings.Count(tokenStr, ".") == 4 {
+		slog.Debug("proxy: JWE token detected, using introspection")
+		claims, err := auth.IntrospectToken(s.cfg, tokenStr)
+		if err != nil {
+			return "", fmt.Errorf("JWE introspection failed: %w", err)
+		}
+		if claims.Sub == "" {
+			return "", fmt.Errorf("missing sub claim in introspection")
+		}
+		return claims.Sub, nil
 	}
 
 	keySet := s.jwks.KeySet()

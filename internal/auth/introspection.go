@@ -14,7 +14,9 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/config"
 )
 
-type introspectionClaims struct {
+// IntrospectionClaims holds the claims returned by the Authentik introspection
+// endpoint. Exported so other packages (e.g. proxy) can use introspection.
+type IntrospectionClaims struct {
 	Active bool        `json:"active"`
 	Sub    string      `json:"sub"`
 	Iss    string      `json:"iss"`
@@ -50,7 +52,7 @@ func introspectionURLs(cfg *config.Config) []string {
 	return urls
 }
 
-func doIntrospectionRequest(ctx context.Context, endpoint string, form url.Values) (*introspectionClaims, int, string, error) {
+func doIntrospectionRequest(ctx context.Context, endpoint string, form url.Values) (*IntrospectionClaims, int, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, 0, "", err
@@ -73,7 +75,7 @@ func doIntrospectionRequest(ctx context.Context, endpoint string, form url.Value
 		return nil, resp.StatusCode, bodyStr, fmt.Errorf("introspection returned %d: %s", resp.StatusCode, bodyStr)
 	}
 
-	var claims introspectionClaims
+	var claims IntrospectionClaims
 	if err := json.Unmarshal(body, &claims); err != nil {
 		return nil, resp.StatusCode, bodyStr, fmt.Errorf("parse introspection response: %w", err)
 	}
@@ -87,7 +89,8 @@ func doIntrospectionRequest(ctx context.Context, endpoint string, form url.Value
 	return &claims, resp.StatusCode, bodyStr, nil
 }
 
-func introspectToken(cfg *config.Config, token string) (*introspectionClaims, error) {
+// IntrospectToken validates a token via the Authentik introspection endpoint.
+func IntrospectToken(cfg *config.Config, token string) (*IntrospectionClaims, error) {
 	if token == "" {
 		return nil, fmt.Errorf("empty token")
 	}
