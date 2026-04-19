@@ -102,6 +102,7 @@ func (r *AuditRepo) ListAll(ctx context.Context, limit, offset int, action strin
 func scanAuditRows(rows interface {
 	Next() bool
 	Scan(dest ...interface{}) error
+	Err() error
 }) ([]models.AuditLog, error) {
 	var logs []models.AuditLog
 	for rows.Next() {
@@ -112,6 +113,9 @@ func scanAuditRows(rows interface {
 		}
 		_ = json.Unmarshal(metaBytes, &l.Metadata)
 		logs = append(logs, l)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("scan audit rows: %w", err)
 	}
 	return logs, nil
 }

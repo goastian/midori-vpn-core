@@ -14,7 +14,6 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/control"
 	"github.com/goastian/midori-vpn-core/internal/core"
-	"github.com/goastian/midori-vpn-core/internal/respond"
 	"github.com/goastian/midori-vpn-core/internal/wg"
 )
 
@@ -76,6 +75,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 		// User-facing routes
 		r.Route("/api/v1/control", func(r chi.Router) {
 			r.Use(jwtMW)
+			r.Use(control.BannedCheck)
 
 			r.Get("/me", ch.Me)
 			r.Post("/keypair", ch.GenerateKeypair)
@@ -125,26 +125,11 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 			r.Get("/audit-logs", ch.AdminListAuditLogs)
 		})
 
-		// WebSocket for real-time stats (JWT protected via query param)
+		// WebSocket for real-time stats (JWT authenticated via first message)
 		wsHub := control.NewWSHub(cfg)
 		go wsHub.Run()
 		r.Get("/ws", func(w http.ResponseWriter, req *http.Request) {
-			// Validate JWT from query param ?token=<jwt>
-			tokenStr := req.URL.Query().Get("token")
-			if tokenStr == "" {
-				respond.JsonError(w, "missing token query parameter", http.StatusUnauthorized)
-				return
-			}
-			claims, err := auth.ValidateTokenAndExtractClaims(cfg, jwks, tokenStr)
-			if err != nil {
-				respond.JsonError(w, "invalid token", http.StatusUnauthorized)
-				return
-			}
-			if err := wsHub.CanAccept(claims.Subject, claims.Groups); err != nil {
-				respond.JsonError(w, err.Error(), http.StatusTooManyRequests)
-				return
-			}
-			wsHub.HandleWS(w, req, claims.Subject)
+			wsHub.HandleWS(w, req, cfg, jwks)
 		})
 
 		// Start background jobs with cancellation support
@@ -190,12 +175,14 @@ func CORSMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
+			// Always set Vary: Origin so caches distinguish responses by origin
+			w.Header().Set("Vary", "Origin")
+
 			if origin != "" && isOriginAllowed(origin, allowedOrigins) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Core-Token")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-				w.Header().Set("Vary", "Origin")
 			}
 
 			if r.Method == "OPTIONS" {

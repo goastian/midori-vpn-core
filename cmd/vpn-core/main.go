@@ -15,6 +15,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/control"
 	"github.com/goastian/midori-vpn-core/internal/db"
+	"github.com/goastian/midori-vpn-core/internal/proxy"
 	"github.com/goastian/midori-vpn-core/internal/respond"
 	"github.com/goastian/midori-vpn-core/internal/wg"
 )
@@ -25,6 +26,9 @@ func main() {
 
 	// Initialize core HTTP client with TLS settings
 	control.InitCoreClient(cfg.CoreTLSSkipVerify, cfg.CoreAllowHTTP, cfg.CoreAllowedHosts)
+
+	shutdownCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	manager, err := wg.NewManager(cfg)
 	if err != nil {
@@ -52,6 +56,16 @@ func main() {
 
 		slog.Info("Control API enabled", "auth", "PostgreSQL + Authentik")
 		router = api.NewRouterWithDB(cfg, manager, pool, jwks)
+
+		// Start HTTP CONNECT proxy if enabled
+		if cfg.ProxyEnabled {
+			proxySrv := proxy.New(cfg, jwks)
+			go func() {
+				if err := proxySrv.Start(shutdownCtx); err != nil {
+					slog.Error("proxy server stopped", "error", err)
+				}
+			}()
+		}
 	} else {
 		slog.Info("Control API disabled", "reason", "no DATABASE_URL or AUTHENTIK_CLIENT_ID")
 		router = api.NewRouter(cfg, manager)
@@ -64,9 +78,6 @@ func main() {
 		Addr:    addr,
 		Handler: router,
 	}
-
-	shutdownCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	serverErrCh := make(chan error, 1)
 	go func() {

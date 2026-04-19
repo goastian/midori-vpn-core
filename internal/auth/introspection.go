@@ -63,7 +63,7 @@ func doIntrospectionRequest(ctx context.Context, endpoint string, form url.Value
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, resp.StatusCode, "", fmt.Errorf("read introspection response: %w", err)
 	}

@@ -6,11 +6,13 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"nhooyr.io/websocket"
 
+	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/config"
 )
 
@@ -131,14 +133,57 @@ func (h *WSHub) ClientCount() int {
 	return len(h.clients)
 }
 
-func (h *WSHub) HandleWS(w http.ResponseWriter, r *http.Request, userID string) {
+func (h *WSHub) HandleWS(w http.ResponseWriter, r *http.Request, cfg *config.Config, jwks *auth.JWKSProvider) {
+	// Build origin patterns from CORS config for WebSocket origin validation
+	var originPatterns []string
+	for _, raw := range strings.Split(cfg.CORSAllowedOrigins, ",") {
+		raw = strings.TrimSpace(raw)
+		if raw != "" {
+			originPatterns = append(originPatterns, raw)
+		}
+	}
+
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		CompressionMode: websocket.CompressionContextTakeover,
+		OriginPatterns:  originPatterns,
 	})
 	if err != nil {
 		slog.Error("ws: accept error", "error", err)
 		return
 	}
+
+	// Authenticate via the first message: client must send {"token":"<jwt>"}
+	// within 10 seconds of connecting.
+	authCtx, authCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	_, msg, err := conn.Read(authCtx)
+	authCancel()
+	if err != nil {
+		slog.Warn("ws: auth message timeout or read error", "error", err)
+		conn.Close(websocket.StatusPolicyViolation, "authentication timeout")
+		return
+	}
+
+	var authMsg struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(msg, &authMsg); err != nil || authMsg.Token == "" {
+		conn.Close(websocket.StatusPolicyViolation, "invalid auth message")
+		return
+	}
+
+	claims, err := auth.ValidateTokenAndExtractClaims(cfg, jwks, authMsg.Token)
+	if err != nil {
+		slog.Warn("ws: invalid token", "error", err)
+		conn.Close(websocket.StatusPolicyViolation, "invalid token")
+		return
+	}
+
+	if err := h.CanAccept(claims.Subject, claims.Groups); err != nil {
+		conn.Close(websocket.StatusTryAgainLater, err.Error())
+		return
+	}
+
+	userID := claims.Subject
 
 	client := &WSClient{
 		conn:   conn,

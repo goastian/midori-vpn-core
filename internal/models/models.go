@@ -33,6 +33,7 @@ type VPNServer struct {
 	MaxPeers     int       `json:"max_peers"`
 	CurrentPeers int       `json:"current_peers"`
 	IsActive     bool      `json:"is_active"`
+	ProxyPort    int       `json:"proxy_port"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }

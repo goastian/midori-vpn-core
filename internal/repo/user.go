@@ -74,6 +74,9 @@ func (r *UserRepo) List(ctx context.Context, limit, offset int) ([]models.User, 
 		}
 		users = append(users, *u)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list users rows: %w", err)
+	}
 	return users, nil
 }
 

@@ -217,7 +217,7 @@ func coreDoWithRetry(req *http.Request, bodyBytes []byte, host string) (*http.Re
 		}
 
 		if resp.StatusCode >= 500 {
-			body, _ := io.ReadAll(resp.Body)
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
 			lastErr = fmt.Errorf("core returned %d: %s", resp.StatusCode, string(body))
 			cb.recordFailure()

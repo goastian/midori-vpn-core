@@ -3,7 +3,6 @@ package control
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -262,12 +261,12 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	resp, err := http.DefaultClient.Do(tokenReq)
 	if err != nil {
 		slog.Error("[AUTH] Callback token exchange HTTP error", "error", err, "token_url", tokenURL)
-		respond.JsonError(w, fmt.Sprintf("token exchange failed: %v", err), http.StatusBadGateway)
+		respond.JsonError(w, "token exchange failed", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		slog.Error("[AUTH] Callback failed to read Authentik response", "error", err)
 		respond.JsonError(w, "failed to read token response", http.StatusBadGateway)

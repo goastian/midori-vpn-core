@@ -83,6 +83,13 @@ func (m *Manager) Close() {
 	m.client.Close()
 }
 
+// PublicKey returns the server's WireGuard public key in base64.
+func (m *Manager) PublicKey() string {
+	// Derive public key from private key via Curve25519
+	pubKey := m.privateKey.PublicKey()
+	return base64.StdEncoding.EncodeToString(pubKey[:])
+}
+
 func (m *Manager) ensureInterface() error {
 	dev, err := m.client.Device(m.cfg.WGInterface)
 	if err != nil {
@@ -91,7 +98,8 @@ func (m *Manager) ensureInterface() error {
 	}
 
 	m.privateKey = dev.PrivateKey
-	slog.Info("interface already exists", "interface", m.cfg.WGInterface, "listen_port", dev.ListenPort, "peers", len(dev.Peers))
+	pubKey := base64.StdEncoding.EncodeToString(dev.PublicKey[:])
+	slog.Info("interface already exists", "interface", m.cfg.WGInterface, "listen_port", dev.ListenPort, "peers", len(dev.Peers), "public_key", pubKey)
 	return nil
 }
 
@@ -149,7 +157,7 @@ func (m *Manager) configureNewInterface() error {
 	}
 
 	m.persistConfig()
-	slog.Info("configured interface", "interface", m.cfg.WGInterface, "port", port)
+	slog.Info("configured interface", "interface", m.cfg.WGInterface, "port", port, "public_key", kp.PublicKey)
 	return nil
 }
 

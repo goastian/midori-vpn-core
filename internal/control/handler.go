@@ -2,11 +2,14 @@ package control
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +25,45 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/repo"
 	"github.com/goastian/midori-vpn-core/internal/respond"
 )
+
+// deviceNameRe allows only safe characters for Content-Disposition filenames.
+var deviceNameRe = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
+
+// sanitizeDeviceName strips unsafe characters, truncates to 64 chars, and
+// defaults to "device" if the result is empty.
+func sanitizeDeviceName(name string) string {
+	name = deviceNameRe.ReplaceAllString(name, "")
+	if len(name) > 64 {
+		name = name[:64]
+	}
+	if name == "" {
+		name = "device"
+	}
+	return name
+}
+
+// isValidWGKey checks if the provided key is a valid 32-byte base64-encoded
+// WireGuard key (Curve25519 public key = 44 base64 chars).
+func isValidWGKey(key string) bool {
+	raw, err := base64.StdEncoding.DecodeString(key)
+	if err != nil {
+		return false
+	}
+	return len(raw) == 32
+}
+
+// BannedCheck is a middleware that rejects requests from banned users
+// across all control routes (not just Connect).
+func BannedCheck(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user := auth.GetUser(r)
+		if user != nil && user.IsBanned {
+			respond.JsonError(w, "account is banned", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 type Handler struct {
 	userRepo           *repo.UserRepo
@@ -185,12 +227,6 @@ type ConnectRequest struct {
 func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r)
 
-	// 1. Validate banned
-	if user.IsBanned {
-		respond.JsonError(w, "account is banned", http.StatusForbidden)
-		return
-	}
-
 	var req ConnectRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respond.JsonError(w, "invalid JSON body", http.StatusBadRequest)
@@ -200,6 +236,11 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, "public_key is required", http.StatusBadRequest)
 		return
 	}
+	if !isValidWGKey(req.PublicKey) {
+		respond.JsonError(w, "public_key must be a valid 32-byte base64-encoded WireGuard key", http.StatusBadRequest)
+		return
+	}
+	req.DeviceName = sanitizeDeviceName(req.DeviceName)
 
 	// 2. Enforce device limit
 	if h.maxDevicesPerUser > 0 {
@@ -228,10 +269,6 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 			respond.JsonError(w, "server not found", http.StatusNotFound)
 			return
 		}
-		if !s.IsActive || s.CurrentPeers >= s.MaxPeers {
-			respond.JsonError(w, "server is full or inactive", http.StatusConflict)
-			return
-		}
 		server = s
 	} else {
 		s, err := h.serverRepo.LeastLoaded(r.Context())
@@ -241,6 +278,25 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		}
 		server = s
 	}
+
+	// 3b. Atomically reserve a slot (prevents TOCTOU race on capacity)
+	reserved, err := h.serverRepo.ReserveSlot(r.Context(), server.ID)
+	if err != nil {
+		slog.Error("reserve slot error", "error", err)
+		respond.JsonError(w, "failed to reserve server slot", http.StatusInternalServerError)
+		return
+	}
+	if !reserved {
+		respond.JsonError(w, "server is full or inactive", http.StatusConflict)
+		return
+	}
+	// Ensure slot is released if anything downstream fails
+	slotReleased := false
+	defer func() {
+		if !slotReleased {
+			_ = h.serverRepo.UpdatePeerCount(r.Context(), server.ID, -1)
+		}
+	}()
 
 	// 4+5. Call vpn-core to add peer (core assigns IP from pool)
 	coreResp, err := CallCoreAddPeer(server, req.PublicKey)
@@ -265,7 +321,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = h.serverRepo.UpdatePeerCount(r.Context(), server.ID, 1)
+	slotReleased = true // slot is now owned by the peer record
 
 	h.auditRepo.Log(r.Context(), &user.ID, "peer.connect",
 		map[string]interface{}{
@@ -291,11 +347,21 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 9. Return full WireGuard config
+	// PeerIP: strip CIDR mask so the frontend can safely append /32 without doubling.
+	peerIPAddr := coreResp.AllowedIP
+	if idx := strings.Index(peerIPAddr, "/"); idx != -1 {
+		peerIPAddr = peerIPAddr[:idx]
+	}
+	// ServerEndpoint: prefer the public Endpoint field, fall back to Host.
+	epHostConnect := server.Endpoint
+	if epHostConnect == "" {
+		epHostConnect = server.Host
+	}
 	config := models.ConnectionConfig{
 		PeerID:          peer.ID,
-		PeerIP:          coreResp.AllowedIP,
+		PeerIP:          peerIPAddr,
 		ServerPublicKey: serverPubKey,
-		ServerEndpoint:  wireGuardEndpointForServerHost(server.Host, server.WGPort),
+		ServerEndpoint:  wireGuardEndpointForServerHost(epHostConnect, server.WGPort),
 		DNS:             "1.1.1.1, 8.8.8.8",
 		AllowedIPs:      "0.0.0.0/0, ::/0",
 	}
@@ -405,8 +471,9 @@ func (h *Handler) ExportConfig(w http.ResponseWriter, r *http.Request) {
 	ensureServerPublicKey(server)
 	conf := buildWGConfig(peer, server)
 
+	safeName := sanitizeDeviceName(peer.DeviceName)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="wg-%s.conf"`, peer.DeviceName))
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="wg-%s.conf"`, safeName))
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(conf))
 }
@@ -448,7 +515,7 @@ func (h *Handler) ExportQR(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="wg-%s.png"`, peer.DeviceName))
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="wg-%s.png"`, sanitizeDeviceName(peer.DeviceName)))
 	w.WriteHeader(http.StatusOK)
 	w.Write(png)
 }
@@ -474,7 +541,17 @@ func buildWGConfig(peer *models.Peer, server *models.VPNServer) string {
 		epHost = server.Host
 	}
 	endpoint := wireGuardEndpointForServerHost(epHost, server.WGPort)
-	// AssignedIP already includes /32 from the pool allocator; use it directly
+
+	// Normalize AssignedIP: strip any duplicate /32 suffix from old DB rows,
+	// then ensure exactly one /32 suffix is present.
+	assignedIP := peer.AssignedIP
+	for strings.HasSuffix(assignedIP, "/32/32") {
+		assignedIP = strings.TrimSuffix(assignedIP, "/32")
+	}
+	if !strings.Contains(assignedIP, "/") {
+		assignedIP += "/32"
+	}
+
 	return fmt.Sprintf(`[Interface]
 PrivateKey = <YOUR_PRIVATE_KEY>
 Address = %s
@@ -485,7 +562,7 @@ PublicKey = %s
 Endpoint = %s
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
-`, peer.AssignedIP, server.PublicKey, endpoint)
+`, assignedIP, server.PublicKey, endpoint)
 }
 
 func (h *Handler) ListMyConnections(w http.ResponseWriter, r *http.Request) {
@@ -760,6 +837,7 @@ type CreateServerRequest struct {
 	Location    string `json:"location"`
 	CountryCode string `json:"country_code"`
 	MaxPeers    int    `json:"max_peers"`
+	ProxyPort   int    `json:"proxy_port"`
 }
 
 func (h *Handler) AdminListServers(w http.ResponseWriter, r *http.Request) {
@@ -816,6 +894,7 @@ func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 		Location:    req.Location,
 		CountryCode: req.CountryCode,
 		MaxPeers:    req.MaxPeers,
+		ProxyPort:   req.ProxyPort,
 	}
 
 	if err := h.serverRepo.Create(r.Context(), server); err != nil {
@@ -843,6 +922,7 @@ type UpdateServerRequest struct {
 	CountryCode string `json:"country_code"`
 	MaxPeers    int    `json:"max_peers"`
 	IsActive    *bool  `json:"is_active"`
+	ProxyPort   *int   `json:"proxy_port"`
 }
 
 func (h *Handler) AdminUpdateServer(w http.ResponseWriter, r *http.Request) {
@@ -912,6 +992,9 @@ func (h *Handler) AdminUpdateServer(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.IsActive != nil {
 		server.IsActive = *req.IsActive
+	}
+	if req.ProxyPort != nil {
+		server.ProxyPort = *req.ProxyPort
 	}
 
 	if err := h.serverRepo.Update(r.Context(), server); err != nil {

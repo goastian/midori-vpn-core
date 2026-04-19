@@ -21,9 +21,10 @@ RUN apk add --no-cache \
     tzdata
 
 COPY --from=builder /vpn-core /usr/local/bin/vpn-core
-COPY migrations /migrations
 
-RUN mkdir -p /etc/wireguard
+# The container runs as root so that child processes (ip, wg, iptables)
+# inherit NET_ADMIN granted via cap_add in docker-compose.yml.
+# Network namespace isolation already limits the blast radius.
 
 EXPOSE 8080/tcp
 EXPOSE 51820/udp

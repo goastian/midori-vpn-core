@@ -1,0 +1,2 @@
+-- No rollback needed: the corrected IPs are semantically identical.
+-- This migration is idempotent (running it again is a no-op).

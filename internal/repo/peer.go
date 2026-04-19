@@ -70,6 +70,9 @@ func (r *PeerRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]models.P
 		}
 		peers = append(peers, p)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list peers by user rows: %w", err)
+	}
 	return peers, nil
 }
 
@@ -95,6 +98,9 @@ func (r *PeerRepo) ListByServer(ctx context.Context, serverID uuid.UUID) ([]mode
 			return nil, err
 		}
 		peers = append(peers, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list peers by server rows: %w", err)
 	}
 	return peers, nil
 }
@@ -122,6 +128,9 @@ func (r *PeerRepo) ListAll(ctx context.Context, limit, offset int) ([]models.Pee
 		}
 		peers = append(peers, p)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list all peers rows: %w", err)
+	}
 	return peers, nil
 }
 
@@ -147,6 +156,9 @@ func (r *PeerRepo) ListActiveByServer(ctx context.Context, serverID uuid.UUID) (
 			return nil, err
 		}
 		peers = append(peers, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list active peers rows: %w", err)
 	}
 	return peers, nil
 }
@@ -178,6 +190,9 @@ func (r *PeerRepo) ListStale(ctx context.Context, noHandshakeSince time.Duration
 			return nil, err
 		}
 		peers = append(peers, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list stale peers rows: %w", err)
 	}
 	return peers, nil
 }

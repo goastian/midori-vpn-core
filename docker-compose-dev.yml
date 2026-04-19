@@ -6,9 +6,10 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Host must pre-load the wireguard kernel module:
+    #   modprobe wireguard
     cap_add:
       - NET_ADMIN
-      - SYS_MODULE
     sysctls:
       - net.ipv4.ip_forward=1
       - net.ipv4.conf.all.src_valid_mark=1
@@ -16,6 +17,7 @@ services:
       - .env
     ports:
       - "8080:8080/tcp"
+      - "8888:8888/tcp"
       - "51820:51820/udp"
     volumes:
       - wg-config:/etc/wireguard
@@ -39,7 +41,7 @@ services:
     volumes:
       - pg-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U midori -d midori_vpn"]
+      test: [ "CMD-SHELL", "pg_isready -U midori -d midori_vpn" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -52,7 +54,7 @@ services:
     ports:
       - "6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
       timeout: 5s
       retries: 5

@@ -48,8 +48,15 @@ type Config struct {
 	RateLimitRPS   int // requests per second per IP (0 = disabled)
 	RateLimitBurst int // burst size for rate limiter
 
+	// Trusted reverse proxies (CIDR or IP)
+	TrustedProxies string // comma-separated list of trusted proxy IPs/CIDRs (empty = trust all — NOT recommended for production)
+
 	// Device limits
 	MaxDevicesPerUser int // max active connections per user (0 = unlimited)
+
+	// HTTP CONNECT proxy
+	ProxyEnabled bool // enable the HTTP CONNECT forward proxy
+	ProxyPort    int  // TCP port for the forward proxy (default 8888)
 
 	// WebSocket limits per plan
 	WSMaxGlobal int // max global WS connections (0 = unlimited)
@@ -78,7 +85,7 @@ func Load() *Config {
 		ConfigDir:   getEnv("WG_CONFIG_DIR", "/etc/wireguard"),
 		Endpoint:    getEnv("WG_ENDPOINT", ""),
 
-		CORSAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "https://*.astian.org,http://localhost:5173,http://localhost:3000"),
+		CORSAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", ""),
 
 		DatabaseURL:                       getEnv("DATABASE_URL", ""),
 		RedisURL:                          getEnv("REDIS_URL", ""),
@@ -95,7 +102,12 @@ func Load() *Config {
 		RateLimitRPS:   getEnvInt("RATE_LIMIT_RPS", 20),
 		RateLimitBurst: getEnvInt("RATE_LIMIT_BURST", 40),
 
+		TrustedProxies: getEnv("TRUSTED_PROXIES", ""),
+
 		MaxDevicesPerUser: getEnvInt("MAX_DEVICES_PER_USER", 5),
+
+		ProxyEnabled: getEnvBool("PROXY_ENABLED", false),
+		ProxyPort:    getEnvInt("PROXY_PORT", 8888),
 
 		WSMaxGlobal: getEnvInt("WS_MAX_GLOBAL", 1000),
 		WSMaxFree:   getEnvInt("WS_MAX_FREE", 1),
@@ -107,6 +119,15 @@ func Load() *Config {
 
 	if cfg.AuthToken == "" {
 		slog.Warn("VPN_CORE_TOKEN is empty — all requests will be rejected")
+	}
+
+	// Apply environment-aware CORS default when not explicitly configured
+	if cfg.CORSAllowedOrigins == "" {
+		if cfg.AppEnv == "development" {
+			cfg.CORSAllowedOrigins = "https://*.astian.org,http://localhost:5173,http://localhost:3000"
+		} else {
+			cfg.CORSAllowedOrigins = "https://*.astian.org"
+		}
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -125,6 +146,9 @@ func Load() *Config {
 	}
 	if cfg.MaxDevicesPerUser < 0 {
 		log.Fatalf("FATAL: MAX_DEVICES_PER_USER must be >= 0, got %d", cfg.MaxDevicesPerUser)
+	}
+	if cfg.ProxyPort < 1 || cfg.ProxyPort > 65535 {
+		log.Fatalf("FATAL: PROXY_PORT must be between 1 and 65535, got %d", cfg.ProxyPort)
 	}
 
 	return cfg

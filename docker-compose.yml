@@ -7,9 +7,10 @@ services:
       dockerfile: Dockerfile
     image: goastian/vpn-core:latest
     restart: always
+    # Host must pre-load the wireguard kernel module:
+    #   modprobe wireguard  (or add to /etc/modules-load.d/wireguard.conf)
     cap_add:
       - NET_ADMIN
-      - SYS_MODULE
     sysctls:
       net.ipv4.ip_forward: "1"
       net.ipv4.conf.all.src_valid_mark: "1"
@@ -17,6 +18,7 @@ services:
       - .env
     ports:
       - "8085:8080/tcp"
+      - "8888:8888/tcp"
       - "51820:51820/udp"
     volumes:
       - wg-config:/etc/wireguard
@@ -38,7 +40,7 @@ services:
     volumes:
       - pg-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U midori -d midori_vpn"]
+      test: [ "CMD-SHELL", "pg_isready -U midori -d midori_vpn" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -48,8 +50,9 @@ services:
   redis:
     image: redis:7-alpine
     restart: always
+    command: [ "redis-server", "--requirepass", "${REDIS_PASSWORD:-changeme}" ]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: [ "CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme}", "ping" ]
       interval: 5s
       timeout: 5s
       retries: 5

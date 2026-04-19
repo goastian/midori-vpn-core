@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -68,10 +69,11 @@ func (ipl *ipLimiter) cleanup() {
 // Requests that exceed the limit receive HTTP 429 Too Many Requests.
 func RateLimitMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 	limiter := newIPLimiter(float64(cfg.RateLimitRPS), cfg.RateLimitBurst)
+	trusted := parseTrustedProxies(cfg.TrustedProxies)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := realIP(r)
+			ip := realIP(r, trusted)
 			if !limiter.getLimiter(ip).Allow() {
 				w.Header().Set("Retry-After", "1")
 				respond.JsonError(w, "rate limit exceeded", http.StatusTooManyRequests)
@@ -82,24 +84,77 @@ func RateLimitMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 	}
 }
 
-// realIP extracts the client IP from X-Real-IP, the rightmost non-trusted
-// entry in X-Forwarded-For, or falls back to RemoteAddr.
-func realIP(r *http.Request) string {
-	// Prefer X-Real-IP set by a trusted reverse proxy
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
-	}
-	// Take the rightmost (last) IP from X-Forwarded-For — closest to our proxy
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		return strings.TrimSpace(parts[len(parts)-1])
-	}
-	// Strip port from RemoteAddr
-	addr := r.RemoteAddr
-	for i := len(addr) - 1; i >= 0; i-- {
-		if addr[i] == ':' {
-			return addr[:i]
+// parseTrustedProxies parses a comma-separated list of IPs and CIDRs into a
+// list of *net.IPNet. A bare IP like "10.0.0.1" is treated as /32 (IPv4) or
+// /128 (IPv6).
+func parseTrustedProxies(raw string) []*net.IPNet {
+	var nets []*net.IPNet
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if !strings.Contains(entry, "/") {
+			// Bare IP — convert to single-host CIDR
+			ip := net.ParseIP(entry)
+			if ip == nil {
+				continue
+			}
+			bits := 32
+			if ip.To4() == nil {
+				bits = 128
+			}
+			nets = append(nets, &net.IPNet{IP: ip, Mask: net.CIDRMask(bits, bits)})
+			continue
+		}
+		_, cidr, err := net.ParseCIDR(entry)
+		if err == nil {
+			nets = append(nets, cidr)
 		}
 	}
-	return addr
+	return nets
+}
+
+// isTrustedProxy returns true when remoteAddr is within one of the trusted
+// networks. If no trusted proxies are configured, returns false (default deny).
+func isTrustedProxy(remoteAddr string, trusted []*net.IPNet) bool {
+	if len(trusted) == 0 {
+		return false
+	}
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, n := range trusted {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// realIP extracts the client IP. It only trusts X-Real-IP and X-Forwarded-For
+// headers when the request comes from a trusted proxy.
+func realIP(r *http.Request, trusted []*net.IPNet) string {
+	if isTrustedProxy(r.RemoteAddr, trusted) {
+		// Prefer X-Real-IP set by a trusted reverse proxy
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			return strings.TrimSpace(xri)
+		}
+		// Take the rightmost (last) IP from X-Forwarded-For — closest to our proxy
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			return strings.TrimSpace(parts[len(parts)-1])
+		}
+	}
+	// Strip port from RemoteAddr
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
