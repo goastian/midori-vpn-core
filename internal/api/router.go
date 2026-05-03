@@ -140,6 +140,10 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 			r.Get("/peers", ch.AdminListPeers)
 			r.Delete("/peers/{id}", ch.AdminForceDisconnectPeer)
 
+			// Mesh overview (read-only for admins)
+			adminMeshH := control.NewAdminMeshHandler(pool)
+			r.Get("/mesh", adminMeshH.AdminListMeshes)
+
 			// Audit
 			r.Get("/audit-logs", ch.AdminListAuditLogs)
 		})

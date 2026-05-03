@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -321,4 +322,84 @@ func (r *MeshRepo) UpdateMemberPeer(ctx context.Context, meshID, userID uuid.UUI
 		meshID, userID, peerID,
 	)
 	return err
+}
+
+// ListAll returns every mesh network in the system (admin use only).
+func (r *MeshRepo) ListAll(ctx context.Context) ([]models.MeshNetwork, error) {
+	query := `
+		SELECT n.id, n.name, n.description, n.owner_id, n.subnet, n.invite_code,
+		       n.invite_expires_at, n.max_members, n.is_active, n.created_at, n.updated_at,
+		       COUNT(m.id) AS member_count
+		FROM mesh_networks n
+		LEFT JOIN mesh_members m ON m.mesh_id = n.id
+		GROUP BY n.id
+		ORDER BY n.created_at DESC
+	`
+	rows, err := r.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("mesh: list all: %w", err)
+	}
+	defer rows.Close()
+
+	var meshes []models.MeshNetwork
+	for rows.Next() {
+		var mesh models.MeshNetwork
+		if err := rows.Scan(
+			&mesh.ID, &mesh.Name, &mesh.Description, &mesh.OwnerID, &mesh.Subnet, &mesh.InviteCode,
+			&mesh.InviteExpiresAt, &mesh.MaxMembers, &mesh.IsActive, &mesh.CreatedAt, &mesh.UpdatedAt,
+			&mesh.MemberCount,
+		); err != nil {
+			return nil, err
+		}
+		meshes = append(meshes, mesh)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("mesh: list all rows: %w", err)
+	}
+	return meshes, nil
+}
+
+// AdminMeshMember is an enriched member row returned only to admins.
+type AdminMeshMember struct {
+	MeshIP      string    `json:"mesh_ip"`
+	DisplayName string    `json:"display_name"`
+	Email       string    `json:"email"`
+	UserID      string    `json:"user_id"`
+	Connected   bool      `json:"connected"` // true when peer_id IS NOT NULL
+	JoinedAt    time.Time `json:"joined_at"`
+}
+
+// ListMembersAdmin returns all members of a mesh with user email included,
+// and a Connected flag derived from whether peer_id is set.
+func (r *MeshRepo) ListMembersAdmin(ctx context.Context, meshID uuid.UUID) ([]AdminMeshMember, error) {
+	query := `
+		SELECT m.mesh_ip,
+		       COALESCE(u.display_name, u.email, '') AS display_name,
+		       u.email,
+		       m.user_id::text,
+		       (m.peer_id IS NOT NULL) AS connected,
+		       m.joined_at
+		FROM mesh_members m
+		JOIN users u ON u.id = m.user_id
+		WHERE m.mesh_id = $1
+		ORDER BY connected DESC, m.joined_at ASC
+	`
+	rows, err := r.pool.Query(ctx, query, meshID)
+	if err != nil {
+		return nil, fmt.Errorf("mesh: list members admin: %w", err)
+	}
+	defer rows.Close()
+
+	var members []AdminMeshMember
+	for rows.Next() {
+		var m AdminMeshMember
+		if err := rows.Scan(&m.MeshIP, &m.DisplayName, &m.Email, &m.UserID, &m.Connected, &m.JoinedAt); err != nil {
+			return nil, err
+		}
+		members = append(members, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("mesh: list members admin rows: %w", err)
+	}
+	return members, nil
 }
