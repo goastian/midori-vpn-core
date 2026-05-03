@@ -142,17 +142,20 @@ func (p *Pool) AssignedCount() int {
 	return int(p.count)
 }
 
-// FreeCount returns the number of free usable IPs.
+// FreeCount returns the number of free usable IPs (excludes .0 network, .1 gateway, .maxHost broadcast).
 func (p *Pool) FreeCount() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	// Total words popcount - gives exact assigned count
-	var total int
+	// popcount gives total assigned slots, including the 2 reserved (.0 and .1)
+	// that were pre-marked in New(). Usable range is offsets 2..maxHost-1.
+	var assigned int
 	for _, w := range p.bitset {
-		total += bits.OnesCount64(w)
+		assigned += bits.OnesCount64(w)
 	}
-	usable := int(p.maxHost) - 1 // exclude .0 and broadcast
-	return usable - total + 2    // +2 because network and gateway are in bitset but not usable
+	// usable = maxHost - 1 slots (offsets 2 .. maxHost-1 inclusive)
+	// free  = usable - (assigned - 2)  where 2 = pre-reserved network+gateway
+	usable := int(p.maxHost) - 1
+	return usable - (assigned - 2)
 }
 
 func (p *Pool) offsetToIP(offset uint32) string {

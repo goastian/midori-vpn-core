@@ -115,6 +115,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer targetConn.Close()
 
+	// Enforce a hard maximum tunnel lifetime (2 hours) to prevent indefinite
+	// resource exhaustion. Both sides get a deadline; hitting it closes the tunnel.
+	const maxTunnelDuration = 2 * time.Hour
+	deadline := time.Now().Add(maxTunnelDuration)
+	targetConn.SetDeadline(deadline)
+
 	slog.Info("proxy tunnel established", "user", sub, "target", r.Host)
 
 	// Hijack the client connection
@@ -129,26 +135,40 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer clientConn.Close()
+	clientConn.SetDeadline(deadline)
 
 	// Send 200 Connection Established
 	clientConn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 
+	tunnelStart := time.Now()
+
 	// Bidirectional copy with deadline
 	done := make(chan struct{}, 2)
+	var bytesUp, bytesDown int64
 
 	go func() {
 		n, _ := io.Copy(targetConn, clientConn)
+		bytesUp = n
 		slog.Debug("proxy tunnel client->target done", "target", r.Host, "bytes", n)
 		done <- struct{}{}
 	}()
 	go func() {
 		n, _ := io.Copy(clientConn, targetConn)
+		bytesDown = n
 		slog.Debug("proxy tunnel target->client done", "target", r.Host, "bytes", n)
 		done <- struct{}{}
 	}()
 
 	// Wait for one direction to finish, then let defers close both
 	<-done
+
+	slog.Info("proxy tunnel closed",
+		"user", sub,
+		"target", r.Host,
+		"duration_s", int(time.Since(tunnelStart).Seconds()),
+		"bytes_up", bytesUp,
+		"bytes_down", bytesDown,
+	)
 }
 
 // authenticate extracts and validates the JWT from Proxy-Authorization header.

@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -54,6 +56,9 @@ type Config struct {
 	// Device limits
 	MaxDevicesPerUser int // max active connections per user (0 = unlimited)
 
+	// VPN client configuration
+	VpnDNS string // comma-separated DNS servers pushed to VPN clients
+
 	// HTTP CONNECT proxy
 	ProxyEnabled bool // enable the HTTP CONNECT forward proxy
 	ProxyPort    int  // TCP port for the forward proxy (default 8888)
@@ -66,6 +71,10 @@ type Config struct {
 	WSMaxPro    int // max WS conns for pro plan
 	WSMaxAdmin  int // max WS conns for admins
 }
+
+// wgInterfaceRe allows only safe characters for a WireGuard interface name.
+// Linux netdev names are limited to 15 characters, alphanumeric plus - and _.
+var wgInterfaceRe = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,15}$`)
 
 func Load() *Config {
 	issuer := strings.TrimRight(getEnv("AUTHENTIK_ISSUER", ""), "/")
@@ -106,6 +115,8 @@ func Load() *Config {
 
 		MaxDevicesPerUser: getEnvInt("MAX_DEVICES_PER_USER", 5),
 
+		VpnDNS: getEnv("VPN_DNS", "1.1.1.1, 8.8.8.8"),
+
 		ProxyEnabled: getEnvBool("PROXY_ENABLED", false),
 		ProxyPort:    getEnvInt("PROXY_PORT", 8888),
 
@@ -119,6 +130,34 @@ func Load() *Config {
 
 	if cfg.AuthToken == "" {
 		slog.Warn("VPN_CORE_TOKEN is empty — all requests will be rejected")
+	}
+
+	// Validate WireGuard interface name against a safe character set to prevent
+	// path traversal when writing config files (e.g. ../../../etc/passwd).
+	if !wgInterfaceRe.MatchString(cfg.WGInterface) {
+		log.Fatalf("FATAL: WG_INTERFACE %q is not a valid interface name (only [a-zA-Z0-9_-]{1,15} allowed)", cfg.WGInterface)
+	}
+
+	// Validate Authentik URLs at startup so misconfiguration fails fast.
+	if cfg.AuthentikIssuer != "" {
+		if u, err := url.ParseRequestURI(cfg.AuthentikIssuer); err != nil || u.Host == "" {
+			log.Fatalf("FATAL: AUTHENTIK_ISSUER %q is not a valid URL", cfg.AuthentikIssuer)
+		}
+	}
+	if cfg.AuthentikJWKSURL != "" {
+		if u, err := url.ParseRequestURI(cfg.AuthentikJWKSURL); err != nil || u.Host == "" {
+			log.Fatalf("FATAL: AUTHENTIK_JWKS_URL %q is not a valid URL", cfg.AuthentikJWKSURL)
+		}
+	}
+
+	// Warn on insecure production settings.
+	if cfg.AppEnv == "production" {
+		if cfg.CoreTLSSkipVerify {
+			log.Fatal("FATAL: CORE_TLS_SKIP_VERIFY must not be enabled in production")
+		}
+		if cfg.CoreAllowedHosts == "" {
+			slog.Warn("CORE_ALLOWED_HOSTS is empty in production — all core server hosts are trusted; set CORE_ALLOWED_HOSTS to restrict")
+		}
 	}
 
 	// Apply environment-aware CORS default when not explicitly configured
@@ -259,12 +298,10 @@ func getEnvInt(key string, fallback int) int {
 	if v == "" {
 		return fallback
 	}
-	var n int
-	for _, c := range v {
-		if c < '0' || c > '9' {
-			return fallback
-		}
-		n = n*10 + int(c-'0')
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		slog.Warn("invalid integer env var, using default", "key", key, "value", v, "default", fallback)
+		return fallback
 	}
 	return n
 }

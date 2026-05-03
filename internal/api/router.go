@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 
@@ -230,35 +231,39 @@ func isOriginAllowed(origin string, allowed []string) bool {
 		return true
 	}
 
+	// Parse the incoming origin once for proper scheme/host extraction.
+	parsedOrigin, err := url.Parse(origin)
+	if err != nil || parsedOrigin.Host == "" || parsedOrigin.Scheme == "" {
+		return false
+	}
+	originScheme := parsedOrigin.Scheme
+	originHost := parsedOrigin.Hostname() // strips port, decodes percent-encoding
+
 	for _, pattern := range allowed {
 		if pattern == origin {
 			return true
 		}
 		// Support wildcard subdomain patterns like https://*.astian.org
-		if strings.Contains(pattern, "*") {
-			// Split pattern: "https://*.astian.org" -> scheme "https://" + "*.astian.org"
-			if idx := strings.Index(pattern, "://"); idx != -1 {
-				pScheme := pattern[:idx+3]
-				pHost := pattern[idx+3:]
-				oIdx := strings.Index(origin, "://")
-				if oIdx == -1 {
-					continue
-				}
-				oScheme := origin[:oIdx+3]
-				oHost := origin[oIdx+3:]
-
-				if pScheme != oScheme {
-					continue
-				}
-
-				// "*.astian.org" matches "vpn.astian.org" and "sub.vpn.astian.org"
-				if strings.HasPrefix(pHost, "*.") {
-					suffix := pHost[1:] // ".astian.org"
-					if strings.HasSuffix(oHost, suffix) {
-						return true
-					}
-				}
-			}
+		if !strings.Contains(pattern, "*") {
+			continue
+		}
+		// Replace wildcard with a placeholder so url.Parse works correctly.
+		parsedPattern, pErr := url.Parse(strings.Replace(pattern, "*", "_wc_", 1))
+		if pErr != nil || parsedPattern.Host == "" || parsedPattern.Scheme == "" {
+			continue
+		}
+		if originScheme != parsedPattern.Scheme {
+			continue
+		}
+		// patternHost is like "_wc_.astian.org"; base is ".astian.org"
+		patternHost := parsedPattern.Hostname()
+		baseDomain := strings.TrimPrefix(patternHost, "_wc_")
+		// baseDomain must start with "." (e.g. ".astian.org") and originHost
+		// must end with exactly that suffix AND have a non-empty label before it.
+		if strings.HasPrefix(baseDomain, ".") &&
+			strings.HasSuffix(originHost, baseDomain) &&
+			len(originHost) > len(baseDomain) {
+			return true
 		}
 	}
 	return false

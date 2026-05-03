@@ -1,10 +1,13 @@
-# Production deployment with Caddy TLS reverse proxy.
+# Production deployment with nginx TLS reverse proxy.
 #
 # Prerequisites:
 #   1. Set DOMAIN in .env (e.g. DOMAIN=vpn.astian.org)
-#   2. Ensure the wireguard kernel module is loaded on the host:
+#   2. Place TLS certificates in ./certs/:
+#        certs/fullchain.pem
+#        certs/privkey.pem
+#   3. Ensure the wireguard kernel module is loaded on the host:
 #        modprobe wireguard
-#   3. Set strong passwords in .env:
+#   4. Set strong passwords in .env:
 #        POSTGRES_PASSWORD=<random>
 #        REDIS_PASSWORD=<random>
 #
@@ -14,19 +17,18 @@
 name: vpn-core-prod
 
 services:
-  caddy:
-    image: caddy:2-alpine
+  nginx:
+    image: docker.io/nginx:1.27-alpine
     restart: always
     ports:
       - "80:80"
       - "443:443"
-      - "443:443/udp" # HTTP/3
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
+      - ./nginx.conf:/etc/nginx/templates/default.conf.template:ro,Z
+      - ./certs:/etc/nginx/certs:ro,Z
     environment:
       DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
+      NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx/conf.d
     depends_on:
       - vpn-core
     networks:
@@ -46,15 +48,22 @@ services:
     env_file:
       - .env
     environment:
-      # Trust any container on the internal Docker network.
-      # Adjust to your Docker bridge subnet if customized.
-      TRUSTED_PROXIES: "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16"
+      # Trust only the internal Docker bridge network where nginx runs.
+      # Use 'docker network inspect vpn-core-prod_vpn-net' to find the exact
+      # subnet and narrow this further if needed.
+      TRUSTED_PROXIES: "172.16.0.0/12"
       CORS_ALLOWED_ORIGINS: "https://${DOMAIN:?Set DOMAIN in .env}"
     # No HTTP port exposed to host — only Caddy can reach :8080
     ports:
       - "51820:51820/udp"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     volumes:
-      - wg-config:/etc/wireguard
+      - wg-config:/etc/wireguard:Z
     depends_on:
       postgres:
         condition: service_healthy
@@ -64,14 +73,14 @@ services:
       - vpn-net
 
   postgres:
-    image: postgres:16-alpine
+    image: docker.io/postgres:16-alpine
     restart: always
     environment:
       POSTGRES_USER: midori
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: midori_vpn
     volumes:
-      - pg-data:/var/lib/postgresql/data
+      - pg-data:/var/lib/postgresql/data:Z
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U midori -d midori_vpn" ]
       interval: 5s
@@ -81,7 +90,7 @@ services:
       - vpn-net
 
   redis:
-    image: redis:7-alpine
+    image: docker.io/redis:7-alpine
     restart: always
     command:
       [
@@ -94,6 +103,7 @@ services:
         [
           "CMD",
           "redis-cli",
+          "--no-auth-warning",
           "-a",
           "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}",
           "ping",
@@ -107,8 +117,6 @@ services:
 volumes:
   wg-config:
   pg-data:
-  caddy-data:
-  caddy-config:
 
 networks:
   vpn-net:

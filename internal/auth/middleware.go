@@ -43,12 +43,12 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 				return
 			}
 
-			parts := strings.SplitN(authHeader, " ", 2)
-			if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
+			scheme, tokenStr, found := strings.Cut(authHeader, " ")
+			if !found || !strings.EqualFold(scheme, "bearer") || strings.TrimSpace(tokenStr) == "" {
 				http.Error(w, `{"ok":false,"error":"invalid Authorization format"}`, http.StatusUnauthorized)
 				return
 			}
-			tokenStr := parts[1]
+			tokenStr = strings.TrimSpace(tokenStr)
 			tokenKind := "jwt"
 			if isJWE(tokenStr) {
 				tokenKind = "jwe"

@@ -73,6 +73,12 @@ func (h *WSHub) Run() {
 
 		case message := <-h.broadcast:
 			h.mu.RLock()
+			clientCount := len(h.clients)
+			h.mu.RUnlock()
+			if clientCount == 0 {
+				continue
+			}
+			h.mu.RLock()
 			var dead []*WSClient
 			for client := range h.clients {
 				select {

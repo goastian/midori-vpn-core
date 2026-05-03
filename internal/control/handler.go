@@ -29,6 +29,22 @@ import (
 // deviceNameRe allows only safe characters for Content-Disposition filenames.
 var deviceNameRe = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
 
+// endpointHostRe allows hostnames, IPv4, and bracketed IPv6 addresses.
+// It does not allow slashes, query strings, or protocol schemes.
+var endpointHostRe = regexp.MustCompile(`^[a-zA-Z0-9._\[\]:-]+$`)
+
+// validateServerEndpoint checks that an optional WireGuard endpoint is a safe
+// hostname-or-IP string (not a URL scheme, no path, no query).
+func validateServerEndpoint(ep string) error {
+	if len(ep) > 253 {
+		return fmt.Errorf("endpoint is too long")
+	}
+	if !endpointHostRe.MatchString(ep) {
+		return fmt.Errorf("endpoint must be a valid hostname or IP address (no scheme, path, or query)")
+	}
+	return nil
+}
+
 // sanitizeDeviceName strips unsafe characters, truncates to 64 chars, and
 // defaults to "device" if the result is empty.
 func sanitizeDeviceName(name string) string {
@@ -73,6 +89,7 @@ type Handler struct {
 	maxDevicesPerUser  int
 	appEnv             string
 	coreAllowLoopback  bool
+	vpnDNS             string
 }
 
 func NewHandler(pool *pgxpool.Pool, cfg *config.Config) *Handler {
@@ -84,6 +101,7 @@ func NewHandler(pool *pgxpool.Pool, cfg *config.Config) *Handler {
 		maxDevicesPerUser: cfg.MaxDevicesPerUser,
 		appEnv:            cfg.AppEnv,
 		coreAllowLoopback: cfg.CoreAllowHTTP,
+		vpnDNS:            cfg.VpnDNS,
 	}
 }
 
@@ -362,7 +380,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		PeerIP:          peerIPAddr,
 		ServerPublicKey: serverPubKey,
 		ServerEndpoint:  wireGuardEndpointForServerHost(epHostConnect, server.WGPort),
-		DNS:             "1.1.1.1, 8.8.8.8",
+		DNS:             h.vpnDNS,
 		AllowedIPs:      "0.0.0.0/0, ::/0",
 	}
 
@@ -469,7 +487,7 @@ func (h *Handler) ExportConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ensureServerPublicKey(server)
-	conf := buildWGConfig(peer, server)
+	conf := h.buildWGConfig(peer, server)
 
 	safeName := sanitizeDeviceName(peer.DeviceName)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -505,7 +523,7 @@ func (h *Handler) ExportQR(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ensureServerPublicKey(server)
-	conf := buildWGConfig(peer, server)
+	conf := h.buildWGConfig(peer, server)
 
 	png, err := qrcode.Encode(conf, qrcode.Medium, 512)
 	if err != nil {
@@ -534,7 +552,7 @@ func ensureServerPublicKey(server *models.VPNServer) {
 	}
 }
 
-func buildWGConfig(peer *models.Peer, server *models.VPNServer) string {
+func (h *Handler) buildWGConfig(peer *models.Peer, server *models.VPNServer) string {
 	// Use Endpoint if set (public-facing host), otherwise fall back to Host
 	epHost := server.Endpoint
 	if epHost == "" {
@@ -555,14 +573,14 @@ func buildWGConfig(peer *models.Peer, server *models.VPNServer) string {
 	return fmt.Sprintf(`[Interface]
 PrivateKey = <YOUR_PRIVATE_KEY>
 Address = %s
-DNS = 1.1.1.1, 8.8.8.8
+DNS = %s
 
 [Peer]
 PublicKey = %s
 Endpoint = %s
 AllowedIPs = 0.0.0.0/0, ::/0
 PersistentKeepalive = 25
-`, assignedIP, server.PublicKey, endpoint)
+`, assignedIP, h.vpnDNS, server.PublicKey, endpoint)
 }
 
 func (h *Handler) ListMyConnections(w http.ResponseWriter, r *http.Request) {
@@ -870,6 +888,14 @@ func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 		req.MaxPeers = 250
 	}
 
+	// Validate optional WireGuard endpoint (public IP or hostname used in client configs).
+	if req.Endpoint != "" {
+		if err := validateServerEndpoint(req.Endpoint); err != nil {
+			respond.JsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+
 	normalizedHost, normalizedPort, err := normalizeAdminServerHost(req.Host, req.Port)
 	if err != nil {
 		respond.JsonError(w, err.Error(), http.StatusBadRequest)
@@ -947,7 +973,14 @@ func (h *Handler) AdminUpdateServer(w http.ResponseWriter, r *http.Request) {
 	if req.Name != "" {
 		server.Name = req.Name
 	}
-	// Endpoint may be cleared (set to "") intentionally, so always update it
+	// Endpoint may be cleared (set to "") intentionally, so always update it.
+	// Validate if non-empty.
+	if req.Endpoint != "" {
+		if err := validateServerEndpoint(req.Endpoint); err != nil {
+			respond.JsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	server.Endpoint = req.Endpoint
 	if req.Host != "" || req.Port != 0 {
 		hostInput := server.Host
