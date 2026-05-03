@@ -180,8 +180,14 @@ func (h *WSHub) ClientCount() int {
 }
 
 func (h *WSHub) HandleWS(w http.ResponseWriter, r *http.Request, cfg *config.Config, jwks *auth.JWKSProvider) {
-	// Build origin patterns from CORS config for WebSocket origin validation
-	var originPatterns []string
+	// Build origin patterns from CORS config for WebSocket origin validation.
+	// Always allow browser extension origins regardless of CORS_ALLOWED_ORIGINS,
+	// since extensions use moz-extension:// or chrome-extension:// schemes that
+	// cannot be listed as a traditional CORS origin.
+	originPatterns := []string{
+		"moz-extension://*",
+		"chrome-extension://*",
+	}
 	for _, raw := range strings.Split(cfg.CORSAllowedOrigins, ",") {
 		raw = strings.TrimSpace(raw)
 		if raw != "" {
