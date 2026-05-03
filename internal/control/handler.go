@@ -90,10 +90,11 @@ type Handler struct {
 	appEnv             string
 	coreAllowLoopback  bool
 	vpnDNS             string
+	connectLimiter     *userRateLimiter // per-user rate limit for the /connect endpoint
 }
 
 func NewHandler(pool *pgxpool.Pool, cfg *config.Config) *Handler {
-	return &Handler{
+	h := &Handler{
 		userRepo:          repo.NewUserRepo(pool),
 		serverRepo:        repo.NewServerRepo(pool),
 		peerRepo:          repo.NewPeerRepo(pool),
@@ -103,6 +104,10 @@ func NewHandler(pool *pgxpool.Pool, cfg *config.Config) *Handler {
 		coreAllowLoopback: cfg.CoreAllowHTTP,
 		vpnDNS:            cfg.VpnDNS,
 	}
+	if cfg.ConnectRateLimitRPS > 0 {
+		h.connectLimiter = newUserRateLimiter(cfg.ConnectRateLimitRPS, cfg.ConnectRateLimitBurst)
+	}
+	return h
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -244,6 +249,12 @@ type ConnectRequest struct {
 
 func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r)
+
+	// Per-user rate limit: prevent connection-spam / brute-force reconnects.
+	if h.connectLimiter != nil && !h.connectLimiter.Allow(user.ID.String()) {
+		respond.JsonError(w, "too many connection requests — please wait before trying again", http.StatusTooManyRequests)
+		return
+	}
 
 	var req ConnectRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

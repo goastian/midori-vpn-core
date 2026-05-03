@@ -56,6 +56,10 @@ type Config struct {
 	// Device limits
 	MaxDevicesPerUser int // max active connections per user (0 = unlimited)
 
+	// Per-user rate limit on the /connect endpoint
+	ConnectRateLimitRPS   float64 // token-bucket refill rate in tokens/second (0 = disabled)
+	ConnectRateLimitBurst int     // maximum burst size
+
 	// VPN client configuration
 	VpnDNS string // comma-separated DNS servers pushed to VPN clients
 
@@ -114,6 +118,9 @@ func Load() *Config {
 		TrustedProxies: getEnv("TRUSTED_PROXIES", ""),
 
 		MaxDevicesPerUser: getEnvInt("MAX_DEVICES_PER_USER", 5),
+
+		ConnectRateLimitRPS:   getEnvFloat("CONNECT_RATE_LIMIT_RPS", 0.5),
+		ConnectRateLimitBurst: getEnvInt("CONNECT_RATE_LIMIT_BURST", 3),
 
 		VpnDNS: getEnv("VPN_DNS", "1.1.1.1, 8.8.8.8"),
 
@@ -304,6 +311,19 @@ func getEnvInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func getEnvFloat(key string, fallback float64) float64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		slog.Warn("invalid float env var, using default", "key", key, "value", v, "default", fallback)
+		return fallback
+	}
+	return f
 }
 
 func getEnvBool(key string, fallback bool) bool {
