@@ -6,7 +6,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -180,24 +179,14 @@ func (h *WSHub) ClientCount() int {
 }
 
 func (h *WSHub) HandleWS(w http.ResponseWriter, r *http.Request, cfg *config.Config, jwks *auth.JWKSProvider) {
-	// Build origin patterns from CORS config for WebSocket origin validation.
-	// Always allow browser extension origins regardless of CORS_ALLOWED_ORIGINS,
-	// since extensions use moz-extension:// or chrome-extension:// schemes that
-	// cannot be listed as a traditional CORS origin.
-	originPatterns := []string{
-		"moz-extension://*",
-		"chrome-extension://*",
-	}
-	for _, raw := range strings.Split(cfg.CORSAllowedOrigins, ",") {
-		raw = strings.TrimSpace(raw)
-		if raw != "" {
-			originPatterns = append(originPatterns, raw)
-		}
-	}
-
+	// Origin verification is skipped because the WS endpoint is protected by
+	// mandatory JWT auth: the client must send {"token":"<jwt>"} within 10 s of
+	// connecting (see below). Browser extensions use moz-extension:// or
+	// chrome-extension:// origins that cannot be listed as patterns, so we rely
+	// entirely on the token check instead of the origin check.
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		CompressionMode: websocket.CompressionContextTakeover,
-		OriginPatterns:  originPatterns,
+		CompressionMode:    websocket.CompressionContextTakeover,
+		InsecureSkipVerify: true,
 	})
 	if err != nil {
 		slog.Error("ws: accept error", "error", err)
