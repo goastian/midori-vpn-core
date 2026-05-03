@@ -91,6 +91,16 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 			r.Get("/connections/{id}/qr", ch.ExportQR)
 
 			r.Get("/audit-logs", ch.MyAuditLogs)
+
+			// Mesh networking
+			mh := control.NewMeshHandler(pool, mgr)
+			r.Route("/mesh", func(r chi.Router) {
+				r.Post("/", mh.CreateMesh)
+				r.Get("/", mh.ListMyMeshes)
+				r.Post("/join", mh.JoinMesh)
+				r.Get("/{id}", mh.GetMesh)
+				r.Delete("/{id}", mh.LeaveMesh)
+			})
 		})
 
 		// Admin routes

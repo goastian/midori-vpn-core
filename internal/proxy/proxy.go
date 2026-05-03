@@ -267,6 +267,10 @@ func isPrivateTarget(host string) bool {
 	}
 
 	for _, ip := range ips {
+		// Allow mesh subnet 10.200.0.0/16 — mesh peers must reach each other via proxy.
+		if isMeshIP(ip) {
+			continue
+		}
 		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
 			ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
 			return true
@@ -280,4 +284,15 @@ func isPrivateTarget(host string) bool {
 	}
 
 	return false
+}
+
+// meshSubnet is the overlay network range allocated to mesh networks.
+var meshSubnet = func() *net.IPNet {
+	_, n, _ := net.ParseCIDR("10.200.0.0/16")
+	return n
+}()
+
+// isMeshIP reports whether ip falls within the mesh overlay subnet.
+func isMeshIP(ip net.IP) bool {
+	return meshSubnet != nil && meshSubnet.Contains(ip)
 }

@@ -45,7 +45,8 @@ type Manager struct {
 	cfg        *config.Config
 	client     *wgctrl.Client
 	pool       *ippool.Pool
-	peerIPs    map[string]string // pubkey -> allocated IP
+	peerIPs    map[string]string // pubkey -> allocated VPN pool IP (e.g. "10.8.0.5/32")
+	meshIPs    map[string]string // pubkey -> mesh overlay IP  (e.g. "10.200.1.2")
 	privateKey wgtypes.Key
 }
 
@@ -65,6 +66,7 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		client:  client,
 		pool:    pool,
 		peerIPs: make(map[string]string),
+		meshIPs: make(map[string]string),
 	}
 
 	if err := m.ensureInterface(); err != nil {
@@ -217,8 +219,12 @@ func (m *Manager) loadExistingPeers() error {
 		pubkey := base64.StdEncoding.EncodeToString(peer.PublicKey[:])
 		for _, aip := range peer.AllowedIPs {
 			ip := aip.IP.String()
-			m.peerIPs[pubkey] = ip + "/32"
-			_ = m.pool.Reserve(ip)
+			if meshIPNet != nil && meshIPNet.Contains(aip.IP) {
+				m.meshIPs[pubkey] = ip
+			} else {
+				m.peerIPs[pubkey] = ip + "/32"
+				_ = m.pool.Reserve(ip)
+			}
 		}
 	}
 
@@ -478,4 +484,105 @@ func (m *Manager) persistConfig() {
 	} else {
 		slog.Info("persisted config", "path", confPath)
 	}
+}
+
+// meshIPNet is the overlay network range assigned to mesh networks (10.200.0.0/16).
+// Used to distinguish mesh IPs from regular VPN pool IPs in AllowedIPs lists.
+var meshIPNet = func() *net.IPNet {
+	_, n, _ := net.ParseCIDR("10.200.0.0/16")
+	return n
+}()
+
+// AddMeshIP appends a mesh overlay IP (/32) to the peer's WireGuard AllowedIPs.
+// It reads the peer's current VPN pool IP so that the combined list
+// [vpnPoolIP/32, meshIP/32] is sent atomically to the kernel.
+func (m *Manager) AddMeshIP(pubkeyStr, meshIP string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	pubKeyBytes, err := base64.StdEncoding.DecodeString(pubkeyStr)
+	if err != nil {
+		return fmt.Errorf("invalid public key: %w", err)
+	}
+	var pubKey wgtypes.Key
+	copy(pubKey[:], pubKeyBytes)
+
+	vpnIP, ok := m.peerIPs[pubkeyStr]
+	if !ok {
+		return errors.New("peer not found")
+	}
+
+	_, vpnNet, err := net.ParseCIDR(vpnIP)
+	if err != nil {
+		return fmt.Errorf("internal: invalid VPN IP %q: %w", vpnIP, err)
+	}
+
+	meshIPParsed := net.ParseIP(meshIP)
+	if meshIPParsed == nil {
+		return fmt.Errorf("invalid mesh IP: %q", meshIP)
+	}
+	meshNet := &net.IPNet{IP: meshIPParsed.To4(), Mask: net.CIDRMask(32, 32)}
+
+	peerCfg := wgtypes.PeerConfig{
+		PublicKey:      pubKey,
+		UpdateOnly:     true,
+		AllowedIPs:     []net.IPNet{*vpnNet, *meshNet},
+		ReplaceAllowedIPs: true,
+	}
+
+	if err := m.client.ConfigureDevice(m.cfg.WGInterface, wgtypes.Config{
+		Peers: []wgtypes.PeerConfig{peerCfg},
+	}); err != nil {
+		return fmt.Errorf("add mesh IP: %w", err)
+	}
+
+	m.meshIPs[pubkeyStr] = meshIP
+	m.persistConfig()
+	return nil
+}
+
+// RemoveMeshIP removes the mesh overlay IP from the peer's WireGuard AllowedIPs,
+// leaving only the VPN pool IP in place.
+func (m *Manager) RemoveMeshIP(pubkeyStr string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.meshIPs[pubkeyStr]; !ok {
+		// Nothing to do — peer has no mesh IP registered.
+		return nil
+	}
+
+	pubKeyBytes, err := base64.StdEncoding.DecodeString(pubkeyStr)
+	if err != nil {
+		return fmt.Errorf("invalid public key: %w", err)
+	}
+	var pubKey wgtypes.Key
+	copy(pubKey[:], pubKeyBytes)
+
+	vpnIP, ok := m.peerIPs[pubkeyStr]
+	if !ok {
+		return errors.New("peer not found")
+	}
+
+	_, vpnNet, err := net.ParseCIDR(vpnIP)
+	if err != nil {
+		return fmt.Errorf("internal: invalid VPN IP %q: %w", vpnIP, err)
+	}
+
+	peerCfg := wgtypes.PeerConfig{
+		PublicKey:         pubKey,
+		UpdateOnly:        true,
+		AllowedIPs:        []net.IPNet{*vpnNet},
+		ReplaceAllowedIPs: true,
+	}
+
+	if err := m.client.ConfigureDevice(m.cfg.WGInterface, wgtypes.Config{
+		Peers: []wgtypes.PeerConfig{peerCfg},
+	}); err != nil {
+		return fmt.Errorf("remove mesh IP: %w", err)
+	}
+
+	delete(m.meshIPs, pubkeyStr)
+	m.persistConfig()
+	return nil
 }
