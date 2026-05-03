@@ -127,6 +127,46 @@ func (h *WSHub) Broadcast(data interface{}) {
 	}
 }
 
+// BroadcastToUsers sends data only to connected clients whose userID is in userIDs.
+func (h *WSHub) BroadcastToUsers(userIDs []string, data interface{}) {
+	if len(userIDs) == 0 {
+		return
+	}
+	msg, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
+	set := make(map[string]struct{}, len(userIDs))
+	for _, id := range userIDs {
+		set[id] = struct{}{}
+	}
+
+	h.mu.RLock()
+	var dead []*WSClient
+	for client := range h.clients {
+		if _, ok := set[client.userID]; !ok {
+			continue
+		}
+		select {
+		case client.send <- msg:
+		default:
+			dead = append(dead, client)
+		}
+	}
+	h.mu.RUnlock()
+
+	if len(dead) > 0 {
+		h.mu.Lock()
+		for _, client := range dead {
+			if _, ok := h.clients[client]; ok {
+				close(client.send)
+				delete(h.clients, client)
+			}
+		}
+		h.mu.Unlock()
+	}
+}
+
 func (h *WSHub) ClientCount() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()

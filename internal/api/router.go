@@ -72,6 +72,10 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 		ch := control.NewHandler(pool, cfg)
 		jwtMW := auth.JWTMiddleware(cfg, pool, jwks)
 
+		// Create WS hub early so mesh handler can broadcast to connected clients.
+		wsHub := control.NewWSHub(cfg)
+		go wsHub.Run()
+
 		// User-facing routes
 		r.Route("/api/v1/control", func(r chi.Router) {
 			r.Use(jwtMW)
@@ -93,11 +97,15 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 			r.Get("/audit-logs", ch.MyAuditLogs)
 
 			// Mesh networking
-			mh := control.NewMeshHandler(pool, mgr)
+			mh := control.NewMeshHandler(pool, mgr, wsHub)
 			r.Route("/mesh", func(r chi.Router) {
 				r.Post("/", mh.CreateMesh)
 				r.Get("/", mh.ListMyMeshes)
 				r.Post("/join", mh.JoinMesh)
+				// Node activation (simple toggle — must be before /{id})
+				r.Get("/node", mh.NodeStatus)
+				r.Post("/node", mh.ActivateNode)
+				r.Delete("/node", mh.DeactivateNode)
 				r.Get("/{id}", mh.GetMesh)
 				r.Delete("/{id}", mh.LeaveMesh)
 			})
@@ -136,8 +144,6 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 		})
 
 		// WebSocket for real-time stats (JWT authenticated via first message)
-		wsHub := control.NewWSHub(cfg)
-		go wsHub.Run()
 		r.Get("/ws", func(w http.ResponseWriter, req *http.Request) {
 			wsHub.HandleWS(w, req, cfg, jwks)
 		})
