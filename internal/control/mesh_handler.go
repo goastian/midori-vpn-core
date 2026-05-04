@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -23,12 +24,26 @@ import (
 
 const publicMeshNameFormat = "Servidor Random %s [%s]"
 
+// ipCountryMemCache is a process-level in-memory cache for IP→country lookups.
+// Entries expire after 30 days; the cache is also persisted to/loaded from the
+// ip_country_cache DB table so it survives container restarts.
+var (
+	ipCountryCacheMu sync.RWMutex
+	ipCountryMemCache = make(map[string]ipCacheEntry)
+)
+
+type ipCacheEntry struct {
+	code    string
+	expires time.Time
+}
+
 type MeshHandler struct {
 	meshRepo  *repo.MeshRepo
 	peerRepo  *repo.PeerRepo
 	auditRepo *repo.AuditRepo
 	wgMgr     *wg.Manager
 	hub       *WSHub
+	pool      *pgxpool.Pool
 }
 
 func NewMeshHandler(pool *pgxpool.Pool, wgMgr *wg.Manager, hub *WSHub) *MeshHandler {
@@ -38,6 +53,7 @@ func NewMeshHandler(pool *pgxpool.Pool, wgMgr *wg.Manager, hub *WSHub) *MeshHand
 		auditRepo: repo.NewAuditRepo(pool),
 		wgMgr:     wgMgr,
 		hub:       hub,
+		pool:      pool,
 	}
 }
 
@@ -395,13 +411,41 @@ func statusCreated(created bool) int {
 }
 
 // countryFromIP resolves a 2-letter ISO country code from a public remote IP.
+// Lookup order: in-memory cache → DB cache → ipapi.co API.
+// Successful lookups are stored in both the in-memory cache (30-day TTL) and
+// the ip_country_cache DB table so they survive container restarts.
 // Unknown/private origins are rejected so "[XX]" is never persisted.
-func countryFromIP(ip string) (string, error) {
+func (h *MeshHandler) countryFromIP(ctx context.Context, ip string) (string, error) {
 	parsed := net.ParseIP(ip)
 	if parsed == nil || parsed.IsLoopback() || parsed.IsPrivate() {
 		return "", fmt.Errorf("could not determine public origin country")
 	}
-	client := &http.Client{Timeout: 3 * time.Second}
+
+	// 1. In-memory cache
+	ipCountryCacheMu.RLock()
+	if entry, ok := ipCountryMemCache[ip]; ok && time.Now().Before(entry.expires) {
+		ipCountryCacheMu.RUnlock()
+		return entry.code, nil
+	}
+	ipCountryCacheMu.RUnlock()
+
+	// 2. DB cache
+	if h.pool != nil {
+		var code string
+		err := h.pool.QueryRow(ctx,
+			`SELECT country_code FROM ip_country_cache WHERE ip = $1`, ip,
+		).Scan(&code)
+		if err == nil && isValidCountryCode(code) {
+			// warm in-memory cache and return
+			ipCountryCacheMu.Lock()
+			ipCountryMemCache[ip] = ipCacheEntry{code: code, expires: time.Now().Add(30 * 24 * time.Hour)}
+			ipCountryCacheMu.Unlock()
+			return code, nil
+		}
+	}
+
+	// 3. Remote geo-IP API (ipapi.co)
+	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(fmt.Sprintf("https://ipapi.co/%s/country/", ip))
 	if err != nil || resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("could not determine public origin country")
@@ -415,6 +459,27 @@ func countryFromIP(ip string) (string, error) {
 	if !isValidCountryCode(code) {
 		return "", fmt.Errorf("could not determine public origin country")
 	}
+
+	// Persist to in-memory cache
+	ipCountryCacheMu.Lock()
+	ipCountryMemCache[ip] = ipCacheEntry{code: code, expires: time.Now().Add(30 * 24 * time.Hour)}
+	ipCountryCacheMu.Unlock()
+
+	// Persist to DB (best-effort, non-blocking)
+	if h.pool != nil {
+		go func() {
+			_, dbErr := h.pool.Exec(context.Background(),
+				`INSERT INTO ip_country_cache (ip, country_code, cached_at)
+				 VALUES ($1, $2, NOW())
+				 ON CONFLICT (ip) DO UPDATE SET country_code = EXCLUDED.country_code, cached_at = NOW()`,
+				ip, code,
+			)
+			if dbErr != nil {
+				slog.Warn("ip_country_cache: failed to persist", "ip", ip, "error", dbErr)
+			}
+		}()
+	}
+
 	return code, nil
 }
 
@@ -462,7 +527,7 @@ func (h *MeshHandler) ensureAutoMesh(ctx context.Context, r *http.Request, u *mo
 		}
 	}
 
-	country, err := countryFromIP(realIP(r))
+	country, err := h.countryFromIP(ctx, realIP(r))
 	if err != nil {
 		return nil, nil, false, err
 	}

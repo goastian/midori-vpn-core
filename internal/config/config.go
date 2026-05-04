@@ -76,6 +76,7 @@ type Config struct {
 	WSMaxMedium int // max WS conns for medium plan
 	WSMaxPro    int // max WS conns for pro plan
 	WSMaxAdmin  int // max WS conns for admins
+
 }
 
 // wgInterfaceRe allows only safe characters for a WireGuard interface name.
@@ -136,6 +137,7 @@ func Load() *Config {
 		WSMaxMedium: getEnvInt("WS_MAX_MEDIUM", 3),
 		WSMaxPro:    getEnvInt("WS_MAX_PRO", 5),
 		WSMaxAdmin:  getEnvInt("WS_MAX_ADMIN", 10),
+
 	}
 
 	if cfg.AuthToken == "" {
