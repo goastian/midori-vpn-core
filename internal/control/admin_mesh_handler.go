@@ -23,12 +23,14 @@ func NewAdminMeshHandler(pool *pgxpool.Pool) *AdminMeshHandler {
 
 // adminMeshNetwork is the response shape for the admin mesh list endpoint.
 type adminMeshNetwork struct {
-	ID          string                `json:"id"`
-	Name        string                `json:"name"`
-	Subnet      string                `json:"subnet"`
-	IsActive    bool                  `json:"is_active"`
-	MemberCount int                   `json:"member_count"`
-	CreatedAt   time.Time             `json:"created_at"`
+	ID          string                 `json:"id"`
+	Name        string                 `json:"name"`
+	Subnet      string                 `json:"subnet"`
+	IsActive    bool                   `json:"is_active"`
+	MemberCount int                    `json:"member_count"`
+	CountryCode string                 `json:"country_code"`
+	IsSession   bool                   `json:"is_session"`
+	CreatedAt   time.Time              `json:"created_at"`
 	Members     []repo.AdminMeshMember `json:"members"`
 }
 
@@ -72,6 +74,8 @@ func (h *AdminMeshHandler) AdminListMeshes(w http.ResponseWriter, r *http.Reques
 			Subnet:      m.Subnet,
 			IsActive:    m.IsActive,
 			MemberCount: m.MemberCount,
+			CountryCode: m.CountryCode,
+			IsSession:   m.IsSession,
 			CreatedAt:   m.CreatedAt,
 		}
 	}

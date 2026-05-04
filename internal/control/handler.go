@@ -24,6 +24,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/models"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 	"github.com/goastian/midori-vpn-core/internal/respond"
+	"github.com/goastian/midori-vpn-core/internal/wg"
 )
 
 // deviceNameRe allows only safe characters for Content-Disposition filenames.
@@ -82,23 +83,33 @@ func BannedCheck(next http.Handler) http.Handler {
 }
 
 type Handler struct {
-	userRepo           *repo.UserRepo
-	serverRepo         *repo.ServerRepo
-	peerRepo           *repo.PeerRepo
-	auditRepo          *repo.AuditRepo
-	maxDevicesPerUser  int
-	appEnv             string
-	coreAllowLoopback  bool
-	vpnDNS             string
-	connectLimiter     *userRateLimiter // per-user rate limit for the /connect endpoint
+	userRepo          *repo.UserRepo
+	serverRepo        *repo.ServerRepo
+	peerRepo          *repo.PeerRepo
+	meshRepo          *repo.MeshRepo
+	auditRepo         *repo.AuditRepo
+	wgMgr             *wg.Manager
+	hub               *WSHub
+	maxDevicesPerUser int
+	appEnv            string
+	coreAllowLoopback bool
+	vpnDNS            string
+	connectLimiter    *userRateLimiter // per-user rate limit for the /connect endpoint
 }
 
 func NewHandler(pool *pgxpool.Pool, cfg *config.Config) *Handler {
+	return NewHandlerWithMesh(pool, cfg, nil, nil)
+}
+
+func NewHandlerWithMesh(pool *pgxpool.Pool, cfg *config.Config, wgMgr *wg.Manager, hub *WSHub) *Handler {
 	h := &Handler{
 		userRepo:          repo.NewUserRepo(pool),
 		serverRepo:        repo.NewServerRepo(pool),
 		peerRepo:          repo.NewPeerRepo(pool),
+		meshRepo:          repo.NewMeshRepo(pool),
 		auditRepo:         repo.NewAuditRepo(pool),
+		wgMgr:             wgMgr,
+		hub:               hub,
 		maxDevicesPerUser: cfg.MaxDevicesPerUser,
 		appEnv:            cfg.AppEnv,
 		coreAllowLoopback: cfg.CoreAllowHTTP,
@@ -108,6 +119,61 @@ func NewHandler(pool *pgxpool.Pool, cfg *config.Config) *Handler {
 		h.connectLimiter = newUserRateLimiter(cfg.ConnectRateLimitRPS, cfg.ConnectRateLimitBurst)
 	}
 	return h
+}
+
+func (h *Handler) broadcastMeshListChanged() {
+	if h.hub == nil {
+		return
+	}
+	h.hub.Broadcast(meshEvent{Type: "mesh.list_changed"})
+}
+
+func (h *Handler) attachPeerToMeshSessions(ctx context.Context, userID uuid.UUID, peer *models.Peer) {
+	if h.meshRepo == nil || peer == nil || !peer.IsActive {
+		return
+	}
+	meshes, err := h.meshRepo.ListByUser(ctx, userID)
+	if err != nil {
+		return
+	}
+	changed := false
+	for _, mesh := range meshes {
+		if !isValidPublicMesh(&mesh) {
+			continue
+		}
+		member, err := h.meshRepo.GetMember(ctx, mesh.ID, userID)
+		if err != nil {
+			continue
+		}
+		peerID := peer.ID
+		if err := h.meshRepo.UpdateMemberPeer(ctx, mesh.ID, userID, &peerID); err == nil {
+			changed = true
+		}
+		if h.wgMgr != nil {
+			if wgErr := h.wgMgr.AddMeshIP(peer.PublicKey, member.MeshIP); wgErr != nil {
+				slog.Warn("mesh: could not add mesh IP to WireGuard after connect",
+					"peer_id", peer.ID, "mesh_id", mesh.ID, "error", wgErr)
+			}
+		}
+	}
+	if changed {
+		h.broadcastMeshListChanged()
+	}
+}
+
+func (h *Handler) detachPeerFromMeshSessions(ctx context.Context, peer *models.Peer) {
+	if h.meshRepo == nil || peer == nil {
+		return
+	}
+	if h.wgMgr != nil {
+		if wgErr := h.wgMgr.RemoveMeshIP(peer.PublicKey); wgErr != nil {
+			slog.Warn("mesh: could not remove mesh IP from WireGuard after disconnect",
+				"peer_id", peer.ID, "error", wgErr)
+		}
+	}
+	if err := h.meshRepo.ClearMemberPeerByPeerID(ctx, peer.ID); err == nil {
+		h.broadcastMeshListChanged()
+	}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -351,6 +417,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slotReleased = true // slot is now owned by the peer record
+	h.attachPeerToMeshSessions(r.Context(), user.ID, peer)
 
 	h.auditRepo.Log(r.Context(), &user.ID, "peer.connect",
 		map[string]interface{}{
@@ -424,6 +491,7 @@ func (h *Handler) Disconnect(w http.ResponseWriter, r *http.Request) {
 		_ = h.serverRepo.UpdatePeerCount(r.Context(), peer.ServerID, -1)
 	}
 
+	h.detachPeerFromMeshSessions(r.Context(), peer)
 	_ = h.peerRepo.Deactivate(r.Context(), peerID)
 
 	h.auditRepo.Log(r.Context(), &user.ID, "peer.disconnect",
@@ -459,6 +527,7 @@ func (h *Handler) DeleteConnection(w http.ResponseWriter, r *http.Request) {
 			_ = h.serverRepo.UpdatePeerCount(r.Context(), peer.ServerID, -1)
 		}
 	}
+	h.detachPeerFromMeshSessions(r.Context(), peer)
 
 	if err := h.peerRepo.Delete(r.Context(), peerID); err != nil {
 		respond.JsonError(w, "failed to delete device", http.StatusInternalServerError)
@@ -826,6 +895,7 @@ func (h *Handler) AdminBanUser(w http.ResponseWriter, r *http.Request) {
 			_ = CallCoreRemovePeer(server, p.PublicKey)
 			_ = h.serverRepo.UpdatePeerCount(r.Context(), p.ServerID, -1)
 		}
+		h.detachPeerFromMeshSessions(r.Context(), &p)
 		_ = h.peerRepo.Deactivate(r.Context(), p.ID)
 	}
 
@@ -1104,6 +1174,7 @@ func (h *Handler) AdminForceDisconnectPeer(w http.ResponseWriter, r *http.Reques
 		_ = h.serverRepo.UpdatePeerCount(r.Context(), peer.ServerID, -1)
 	}
 
+	h.detachPeerFromMeshSessions(r.Context(), peer)
 	_ = h.peerRepo.Deactivate(r.Context(), peerID)
 
 	admin := auth.GetUser(r)

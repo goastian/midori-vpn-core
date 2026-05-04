@@ -17,9 +17,11 @@ services:
     env_file:
       - .env
     ports:
-      - "8085:8080/tcp"
-      - "8888:8888/tcp"
-      - "51820:51820/udp"
+      # WireGuard UDP — must be reachable by VPN clients directly.
+      - "51821:51820/udp"
+      # The API (8080) and proxy (8888) are intentionally not exposed here;
+      # they are accessed only through the nginx reverse proxy on the vpn-net
+      # internal network. Expose them in docker-compose-dev.yml for local dev.
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 30s

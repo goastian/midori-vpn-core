@@ -86,44 +86,24 @@ func jsonBody(t *testing.T, v interface{}) *bytes.Buffer {
 
 // ─── CreateMesh ──────────────────────────────────────────────────────────────
 
-func TestCreateMesh_Success(t *testing.T) {
+func TestCreateMesh_Disabled(t *testing.T) {
 	pool := handlerTestPool(t)
 	u := insertUser(t, pool)
 
 	h := control.NewMeshHandler(pool, nil, nil)
-	body := jsonBody(t, map[string]interface{}{
+	req := withUser(httptest.NewRequest(http.MethodPost, "/mesh", jsonBody(t, map[string]interface{}{
 		"name":        "Test Network",
 		"max_members": 5,
-	})
-	req := withUser(httptest.NewRequest(http.MethodPost, "/mesh", body), u)
+	})), u)
 	w := httptest.NewRecorder()
 	h.CreateMesh(w, req)
 
-	if w.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusGone {
+		t.Fatalf("expected 410, got %d: %s", w.Code, w.Body.String())
 	}
-
-	var mesh models.MeshNetwork
-	if err := json.NewDecoder(w.Body).Decode(&mesh); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if mesh.ID == uuid.Nil {
-		t.Error("expected mesh.ID in response")
-	}
-	if mesh.InviteCode == "" {
-		t.Error("expected invite_code in response")
-	}
-	if _, err := uuid.Parse(mesh.InviteCode); err != nil {
-		t.Errorf("invite_code %q is not a valid UUID: %v", mesh.InviteCode, err)
-	}
-
-	// Cleanup
-	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM mesh_networks WHERE id = $1`, mesh.ID)
-	})
 }
 
-func TestCreateMesh_MissingName(t *testing.T) {
+func TestCreateMesh_MissingNameStillDisabled(t *testing.T) {
 	pool := handlerTestPool(t)
 	u := insertUser(t, pool)
 
@@ -134,46 +114,14 @@ func TestCreateMesh_MissingName(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.CreateMesh(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
+	if w.Code != http.StatusGone {
+		t.Fatalf("expected 410, got %d", w.Code)
 	}
-}
-
-func TestCreateMesh_ExpiryInHours(t *testing.T) {
-	pool := handlerTestPool(t)
-	u := insertUser(t, pool)
-
-	h := control.NewMeshHandler(pool, nil, nil)
-	req := withUser(httptest.NewRequest(http.MethodPost, "/mesh", jsonBody(t, map[string]interface{}{
-		"name":                   "Expiring Mesh",
-		"invite_expires_in_hours": 48,
-	})), u)
-	w := httptest.NewRecorder()
-	h.CreateMesh(w, req)
-
-	if w.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var mesh models.MeshNetwork
-	json.NewDecoder(w.Body).Decode(&mesh)
-
-	if mesh.InviteExpiresAt == nil {
-		t.Fatal("expected invite_expires_at to be set")
-	}
-	expected := time.Now().Add(47 * time.Hour) // allow up to 1h clock drift
-	if mesh.InviteExpiresAt.Before(expected) {
-		t.Errorf("invite_expires_at %v is earlier than expected ~48h from now", mesh.InviteExpiresAt)
-	}
-
-	t.Cleanup(func() {
-		pool.Exec(context.Background(), `DELETE FROM mesh_networks WHERE id = $1`, mesh.ID)
-	})
 }
 
 // ─── JoinMesh ────────────────────────────────────────────────────────────────
 
-func TestJoinMesh_Success(t *testing.T) {
+func TestJoinMesh_Disabled(t *testing.T) {
 	pool := handlerTestPool(t)
 	owner := insertUser(t, pool)
 	joiner := insertUser(t, pool)
@@ -198,12 +146,12 @@ func TestJoinMesh_Success(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.JoinMesh(w, req)
 
-	if w.Code != http.StatusCreated {
-		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusGone {
+		t.Fatalf("expected 410, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestJoinMesh_InvalidCode(t *testing.T) {
+func TestJoinMesh_InvalidCodeStillDisabled(t *testing.T) {
 	pool := handlerTestPool(t)
 	u := insertUser(t, pool)
 
@@ -214,12 +162,12 @@ func TestJoinMesh_InvalidCode(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.JoinMesh(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
+	if w.Code != http.StatusGone {
+		t.Fatalf("expected 410, got %d", w.Code)
 	}
 }
 
-func TestJoinMesh_AlreadyMember(t *testing.T) {
+func TestJoinMesh_AlreadyMemberStillDisabled(t *testing.T) {
 	pool := handlerTestPool(t)
 	owner := insertUser(t, pool)
 
@@ -237,12 +185,12 @@ func TestJoinMesh_AlreadyMember(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.JoinMesh(w, req)
 
-	if w.Code != http.StatusConflict {
-		t.Fatalf("expected 409, got %d", w.Code)
+	if w.Code != http.StatusGone {
+		t.Fatalf("expected 410, got %d", w.Code)
 	}
 }
 
-func TestJoinMesh_MeshFull(t *testing.T) {
+func TestJoinMesh_MeshFullStillDisabled(t *testing.T) {
 	pool := handlerTestPool(t)
 	owner := insertUser(t, pool)
 	extra := insertUser(t, pool)
@@ -261,14 +209,14 @@ func TestJoinMesh_MeshFull(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.JoinMesh(w, req)
 
-	if w.Code != http.StatusConflict {
-		t.Fatalf("expected 409 (mesh full), got %d", w.Code)
+	if w.Code != http.StatusGone {
+		t.Fatalf("expected 410, got %d", w.Code)
 	}
 }
 
 // ─── RegenerateInvite ─────────────────────────────────────────────────────────
 
-func TestRegenerateInvite_Success(t *testing.T) {
+func TestRegenerateInvite_Disabled(t *testing.T) {
 	pool := handlerTestPool(t)
 	owner := insertUser(t, pool)
 
@@ -279,8 +227,6 @@ func TestRegenerateInvite_Success(t *testing.T) {
 	t.Cleanup(func() { r.Delete(context.Background(), mesh.ID) })
 	r.AddMember(context.Background(), mesh.ID, &models.MeshMember{UserID: owner.ID})
 
-	originalCode := mesh.InviteCode
-
 	h := control.NewMeshHandler(pool, nil, nil)
 	req := withUser(
 		withChiParam(httptest.NewRequest(http.MethodPost, "/mesh/"+mesh.ID.String()+"/invite", jsonBody(t, map[string]interface{}{})), "id", mesh.ID.String()),
@@ -289,32 +235,12 @@ func TestRegenerateInvite_Success(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.RegenerateInvite(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var resp struct {
-		InviteCode      string     `json:"invite_code"`
-		InviteExpiresAt *time.Time `json:"invite_expires_at"`
-	}
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp.InviteCode == "" {
-		t.Error("expected non-empty invite_code in response")
-	}
-	if resp.InviteCode == originalCode {
-		t.Error("new invite_code should differ from original")
-	}
-	if _, err := uuid.Parse(resp.InviteCode); err != nil {
-		t.Errorf("invite_code %q is not a valid UUID: %v", resp.InviteCode, err)
-	}
-	if resp.InviteExpiresAt != nil {
-		t.Errorf("expected nil invite_expires_at, got %v", resp.InviteExpiresAt)
+	if w.Code != http.StatusGone {
+		t.Fatalf("expected 410, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestRegenerateInvite_WithExpiry(t *testing.T) {
+func TestRegenerateInvite_WithExpiryStillDisabled(t *testing.T) {
 	pool := handlerTestPool(t)
 	owner := insertUser(t, pool)
 
@@ -333,24 +259,12 @@ func TestRegenerateInvite_WithExpiry(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.RegenerateInvite(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var resp struct {
-		InviteCode      string     `json:"invite_code"`
-		InviteExpiresAt *time.Time `json:"invite_expires_at"`
-	}
-	json.NewDecoder(w.Body).Decode(&resp)
-	if resp.InviteExpiresAt == nil {
-		t.Fatal("expected invite_expires_at to be set")
-	}
-	if resp.InviteExpiresAt.Before(time.Now().Add(23 * time.Hour)) {
-		t.Errorf("invite_expires_at %v should be ~24h in the future", resp.InviteExpiresAt)
+	if w.Code != http.StatusGone {
+		t.Fatalf("expected 410, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestRegenerateInvite_ForbiddenForNonOwner(t *testing.T) {
+func TestRegenerateInvite_NonOwnerStillDisabled(t *testing.T) {
 	pool := handlerTestPool(t)
 	owner := insertUser(t, pool)
 	nonOwner := insertUser(t, pool)
@@ -372,12 +286,12 @@ func TestRegenerateInvite_ForbiddenForNonOwner(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.RegenerateInvite(w, req)
 
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusGone {
+		t.Fatalf("expected 410, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestRegenerateInvite_InvalidMeshID(t *testing.T) {
+func TestRegenerateInvite_InvalidMeshIDStillDisabled(t *testing.T) {
 	pool := handlerTestPool(t)
 	u := insertUser(t, pool)
 
@@ -390,8 +304,8 @@ func TestRegenerateInvite_InvalidMeshID(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.RegenerateInvite(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d", w.Code)
+	if w.Code != http.StatusGone {
+		t.Fatalf("expected 410, got %d", w.Code)
 	}
 }
 

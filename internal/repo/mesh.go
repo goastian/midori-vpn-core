@@ -258,6 +258,49 @@ func (r *MeshRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]models.M
 	return meshes, nil
 }
 
+// ListPublicDirectory returns the public global mesh directory. It only exposes
+// auto-managed session meshes with a valid country code and normalized name.
+func (r *MeshRepo) ListPublicDirectory(ctx context.Context) ([]models.MeshNetwork, error) {
+	query := `
+		SELECT n.id, n.name, n.description, n.owner_id, n.subnet, '' AS invite_code,
+		       n.invite_expires_at, n.max_members, n.is_active, n.created_at, n.updated_at,
+		       COUNT(m.id) AS member_count, n.country_code, n.is_session
+		FROM mesh_networks n
+		LEFT JOIN mesh_members m ON m.mesh_id = n.id
+		WHERE n.is_session = TRUE
+		  AND n.is_active = TRUE
+		  AND n.country_code ~ '^[A-Z]{2}$'
+		  AND n.country_code <> 'XX'
+		  AND n.name ~ '^Servidor mesh random \[[A-Z]{2}\]$'
+		GROUP BY n.id
+		ORDER BY n.created_at DESC
+	`
+	rows, err := r.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("mesh: list public directory: %w", err)
+	}
+	defer rows.Close()
+
+	var meshes []models.MeshNetwork
+	for rows.Next() {
+		var mesh models.MeshNetwork
+		if err := rows.Scan(
+			&mesh.ID, &mesh.Name, &mesh.Description, &mesh.OwnerID, &mesh.Subnet, &mesh.InviteCode,
+			&mesh.InviteExpiresAt, &mesh.MaxMembers, &mesh.IsActive, &mesh.CreatedAt, &mesh.UpdatedAt,
+			&mesh.MemberCount, &mesh.CountryCode, &mesh.IsSession,
+		); err != nil {
+			return nil, err
+		}
+		mesh.InviteCode = ""
+		mesh.OwnerID = uuid.Nil
+		meshes = append(meshes, mesh)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("mesh: list public directory rows: %w", err)
+	}
+	return meshes, nil
+}
+
 // Delete removes a mesh network (owner only, enforced at handler level).
 func (r *MeshRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	_, err := r.pool.Exec(ctx, `DELETE FROM mesh_networks WHERE id = $1`, id)
@@ -411,6 +454,16 @@ func (r *MeshRepo) DeleteStaleSessions(ctx context.Context, olderThan time.Durat
 	return tag.RowsAffected(), nil
 }
 
+// TouchSession refreshes the session mesh heartbeat so active clients are not
+// reclaimed by stale-session cleanup.
+func (r *MeshRepo) TouchSession(ctx context.Context, meshID uuid.UUID) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE mesh_networks SET updated_at = NOW() WHERE id = $1 AND is_session = TRUE`,
+		meshID,
+	)
+	return err
+}
+
 // UpdateMemberPeer links a member's mesh record to their active VPN peer.
 func (r *MeshRepo) UpdateMemberPeer(ctx context.Context, meshID, userID uuid.UUID, peerID *uuid.UUID) error {
 	_, err := r.pool.Exec(ctx,
@@ -420,7 +473,17 @@ func (r *MeshRepo) UpdateMemberPeer(ctx context.Context, meshID, userID uuid.UUI
 	return err
 }
 
-// ListAll returns every mesh network in the system (admin use only).
+// ClearMemberPeerByPeerID detaches a VPN peer from every mesh member row that
+// references it. This is used when a VPN connection is disconnected.
+func (r *MeshRepo) ClearMemberPeerByPeerID(ctx context.Context, peerID uuid.UUID) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE mesh_members SET peer_id = NULL WHERE peer_id = $1`,
+		peerID,
+	)
+	return err
+}
+
+// ListAll returns every valid public mesh network in the system (admin use only).
 func (r *MeshRepo) ListAll(ctx context.Context) ([]models.MeshNetwork, error) {
 	query := `
 		SELECT n.id, n.name, n.description, n.owner_id, n.subnet, n.invite_code,
@@ -428,6 +491,10 @@ func (r *MeshRepo) ListAll(ctx context.Context) ([]models.MeshNetwork, error) {
 		       COUNT(m.id) AS member_count, n.country_code, n.is_session
 		FROM mesh_networks n
 		LEFT JOIN mesh_members m ON m.mesh_id = n.id
+		WHERE n.is_session = TRUE
+		  AND n.country_code ~ '^[A-Z]{2}$'
+		  AND n.country_code <> 'XX'
+		  AND n.name ~ '^Servidor mesh random \[[A-Z]{2}\]$'
 		GROUP BY n.id
 		ORDER BY n.created_at DESC
 	`
@@ -461,13 +528,14 @@ type AdminMeshMember struct {
 	DisplayName string    `json:"display_name"`
 	Email       string    `json:"email"`
 	UserID      string    `json:"user_id"`
-	PublicIP    string    `json:"public_ip"`  // peer assigned_ip (VPN tunnel IP)
+	PublicIP    string    `json:"public_ip"` // peer assigned_ip (VPN tunnel IP)
 	Connected   bool      `json:"connected"` // true when peer_id IS NOT NULL
 	JoinedAt    time.Time `json:"joined_at"`
 }
 
-// ListMembersAdmin returns all members of a mesh with user email included,
-// and a Connected flag derived from whether peer_id is set.
+// ListMembersAdmin returns all members of a mesh with user email included.
+// Connected means the linked peer is active and either has a recent handshake
+// or was just created and has not had time to handshake yet.
 func (r *MeshRepo) ListMembersAdmin(ctx context.Context, meshID uuid.UUID) ([]AdminMeshMember, error) {
 	query := `
 		SELECT m.mesh_ip,
@@ -475,7 +543,14 @@ func (r *MeshRepo) ListMembersAdmin(ctx context.Context, meshID uuid.UUID) ([]Ad
 		       u.email,
 		       m.user_id::text,
 		       COALESCE(p.assigned_ip, '') AS public_ip,
-		       (m.peer_id IS NOT NULL) AS connected,
+		       (
+		         p.id IS NOT NULL
+		         AND p.is_active = TRUE
+		         AND (
+		           p.last_handshake > NOW() - INTERVAL '5 minutes'
+		           OR (p.last_handshake IS NULL AND p.created_at > NOW() - INTERVAL '2 minutes')
+		         )
+		       ) AS connected,
 		       m.joined_at
 		FROM mesh_members m
 		JOIN users u ON u.id = m.user_id

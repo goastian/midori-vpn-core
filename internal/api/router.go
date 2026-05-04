@@ -71,12 +71,12 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 		r.Post("/api/v1/auth/logout", oauthH.Logout)
 		r.Get("/api/v1/auth/config", oauthH.OIDCConfig)
 
-		ch := control.NewHandler(pool, cfg)
 		jwtMW := auth.JWTMiddleware(cfg, pool, jwks)
 
 		// Create WS hub early so mesh handler can broadcast to connected clients.
 		wsHub := control.NewWSHub(cfg)
 		go wsHub.Run()
+		ch := control.NewHandlerWithMesh(pool, cfg, mgr, wsHub)
 
 		// User-facing routes
 		r.Route("/api/v1/control", func(r chi.Router) {
