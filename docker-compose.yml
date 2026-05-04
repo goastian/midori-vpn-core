@@ -18,7 +18,7 @@ services:
       - .env
     ports:
       # WireGuard UDP — must be reachable by VPN clients directly.
-      - "51821:51820/udp"
+      - "51820:51820/udp"
       # The API (8080) and proxy (8888) are intentionally not exposed here;
       # they are accessed only through the nginx reverse proxy on the vpn-net
       # internal network. Expose them in docker-compose-dev.yml for local dev.
