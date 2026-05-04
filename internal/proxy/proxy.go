@@ -142,25 +142,35 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	tunnelStart := time.Now()
 
-	// Bidirectional copy with deadline
-	done := make(chan struct{}, 2)
-	var bytesUp, bytesDown int64
+	// Bidirectional copy: use sync.Once to close both sides when either
+	// direction finishes, then wait for both goroutines to complete so that
+	// byte counts from both directions are accurately captured.
+	var (
+		wg        sync.WaitGroup
+		bytesUp   int64
+		bytesDown int64
+		closeOnce sync.Once
+	)
+	closeAll := func() {
+		closeOnce.Do(func() {
+			targetConn.Close()
+			clientConn.Close()
+		})
+	}
 
+	wg.Add(2)
 	go func() {
-		n, _ := io.Copy(targetConn, clientConn)
-		bytesUp = n
-		slog.Debug("proxy tunnel client->target done", "target", r.Host, "bytes", n)
-		done <- struct{}{}
+		defer wg.Done()
+		defer closeAll()
+		bytesUp, _ = io.Copy(targetConn, clientConn)
 	}()
 	go func() {
-		n, _ := io.Copy(clientConn, targetConn)
-		bytesDown = n
-		slog.Debug("proxy tunnel target->client done", "target", r.Host, "bytes", n)
-		done <- struct{}{}
+		defer wg.Done()
+		defer closeAll()
+		bytesDown, _ = io.Copy(clientConn, targetConn)
 	}()
 
-	// Wait for one direction to finish, then let defers close both
-	<-done
+	wg.Wait()
 
 	slog.Info("proxy tunnel closed",
 		"user", sub,
