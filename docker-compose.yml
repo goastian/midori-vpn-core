@@ -19,9 +19,9 @@ services:
     ports:
       # WireGuard UDP — must be reachable by VPN clients directly.
       - "51820:51820/udp"
-      # The API (8080) and proxy (8888) are intentionally not exposed here;
-      # they are accessed only through the nginx reverse proxy on the vpn-net
-      # internal network. Expose them in docker-compose-dev.yml for local dev.
+      # Host nginx proxies vpn.astian.org to 127.0.0.1:8085.
+      # Keep the API bound to loopback only so it is not directly exposed.
+      - "127.0.0.1:8085:8080/tcp"
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 30s
