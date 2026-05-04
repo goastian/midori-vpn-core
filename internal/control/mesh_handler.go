@@ -22,7 +22,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/wg"
 )
 
-const publicMeshNameFormat = "Servidor Random %s [%s]"
+const publicMeshNameFormat = "Servidor Comunitario %s [%s]"
 
 // ipCountryMemCache is a process-level in-memory cache for IP→country lookups.
 // Entries expire after 30 days; the cache is also persisted to/loaded from the
@@ -370,7 +370,7 @@ func (h *MeshHandler) ActivateNode(w http.ResponseWriter, r *http.Request) {
 // Session mesh (auto) — POST /mesh/auto  &  DELETE /mesh/auto
 //
 // The extension calls POST on login → gets (or creates) a session mesh named
-// "Servidor Random 🇩🇴 [CC]" where CC is the 2-letter country from the request IP.
+// "Servidor Comunitario 🇩🇴 [CC]" where CC is the 2-letter country from the request IP.
 // DELETE /mesh/auto is called on logout / browser close to purge the data.
 // ═══════════════════════════════════════════════════════════════════════════
 

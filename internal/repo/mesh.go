@@ -55,7 +55,7 @@ func normalizePublicMeshName(mesh *models.MeshNetwork) {
 	if !validMeshCountryCode(mesh.CountryCode) {
 		return
 	}
-	mesh.Name = fmt.Sprintf("Servidor Random %s [%s]", meshCountryFlag(mesh.CountryCode), mesh.CountryCode)
+	mesh.Name = fmt.Sprintf("Servidor Comunitario %s [%s]", meshCountryFlag(mesh.CountryCode), mesh.CountryCode)
 }
 
 // generateInviteCode returns a new random UUID v4 string for use as an invite code.
