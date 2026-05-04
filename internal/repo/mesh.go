@@ -115,13 +115,20 @@ func (r *MeshRepo) Create(ctx context.Context, mesh *models.MeshNetwork) error {
 	mesh.InviteCode = code
 
 	query := `
-		INSERT INTO mesh_networks (name, description, owner_id, subnet, invite_code, max_members, invite_expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO mesh_networks (name, description, owner_id, subnet, invite_code, max_members, invite_expires_at, country_code, is_session)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING id, is_active, created_at, updated_at
 	`
 	return r.pool.QueryRow(ctx, query,
-		mesh.Name, mesh.Description, mesh.OwnerID, mesh.Subnet, mesh.InviteCode, mesh.MaxMembers, mesh.InviteExpiresAt,
+		mesh.Name, mesh.Description, mesh.OwnerID, mesh.Subnet, mesh.InviteCode,
+		mesh.MaxMembers, mesh.InviteExpiresAt, mesh.CountryCode, mesh.IsSession,
 	).Scan(&mesh.ID, &mesh.IsActive, &mesh.CreatedAt, &mesh.UpdatedAt)
+}
+
+// CreateSession is like Create but marks the mesh as a session mesh (is_session=true).
+func (r *MeshRepo) CreateSession(ctx context.Context, mesh *models.MeshNetwork) error {
+	mesh.IsSession = true
+	return r.Create(ctx, mesh)
 }
 
 // GetByID returns a mesh network by its UUID, including member count.
@@ -130,7 +137,7 @@ func (r *MeshRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.MeshNetwo
 	query := `
 		SELECT n.id, n.name, n.description, n.owner_id, n.subnet, n.invite_code,
 		       n.invite_expires_at, n.max_members, n.is_active, n.created_at, n.updated_at,
-		       COUNT(m.id) AS member_count
+		       COUNT(m.id) AS member_count, n.country_code, n.is_session
 		FROM mesh_networks n
 		LEFT JOIN mesh_members m ON m.mesh_id = n.id
 		WHERE n.id = $1
@@ -140,7 +147,7 @@ func (r *MeshRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.MeshNetwo
 	err := r.pool.QueryRow(ctx, query, id).Scan(
 		&mesh.ID, &mesh.Name, &mesh.Description, &mesh.OwnerID, &mesh.Subnet, &mesh.InviteCode,
 		&mesh.InviteExpiresAt, &mesh.MaxMembers, &mesh.IsActive, &mesh.CreatedAt, &mesh.UpdatedAt,
-		&mesh.MemberCount,
+		&mesh.MemberCount, &mesh.CountryCode, &mesh.IsSession,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("mesh: get by id: %w", err)
@@ -154,7 +161,7 @@ func (r *MeshRepo) GetByInviteCode(ctx context.Context, code string) (*models.Me
 	query := `
 		SELECT n.id, n.name, n.description, n.owner_id, n.subnet, n.invite_code,
 		       n.invite_expires_at, n.max_members, n.is_active, n.created_at, n.updated_at,
-		       COUNT(m.id) AS member_count
+		       COUNT(m.id) AS member_count, n.country_code, n.is_session
 		FROM mesh_networks n
 		LEFT JOIN mesh_members m ON m.mesh_id = n.id
 		WHERE n.invite_code = $1
@@ -165,7 +172,7 @@ func (r *MeshRepo) GetByInviteCode(ctx context.Context, code string) (*models.Me
 	err := r.pool.QueryRow(ctx, query, code).Scan(
 		&mesh.ID, &mesh.Name, &mesh.Description, &mesh.OwnerID, &mesh.Subnet, &mesh.InviteCode,
 		&mesh.InviteExpiresAt, &mesh.MaxMembers, &mesh.IsActive, &mesh.CreatedAt, &mesh.UpdatedAt,
-		&mesh.MemberCount,
+		&mesh.MemberCount, &mesh.CountryCode, &mesh.IsSession,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("mesh: get by invite code: %w", err)
@@ -178,7 +185,7 @@ func (r *MeshRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]models.M
 	query := `
 		SELECT DISTINCT n.id, n.name, n.description, n.owner_id, n.subnet, n.invite_code,
 		       n.invite_expires_at, n.max_members, n.is_active, n.created_at, n.updated_at,
-		       COUNT(m2.id) AS member_count
+		       COUNT(m2.id) AS member_count, n.country_code, n.is_session
 		FROM mesh_networks n
 		LEFT JOIN mesh_members m2 ON m2.mesh_id = n.id
 		WHERE n.owner_id = $1
@@ -198,7 +205,7 @@ func (r *MeshRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]models.M
 		if err := rows.Scan(
 			&mesh.ID, &mesh.Name, &mesh.Description, &mesh.OwnerID, &mesh.Subnet, &mesh.InviteCode,
 			&mesh.InviteExpiresAt, &mesh.MaxMembers, &mesh.IsActive, &mesh.CreatedAt, &mesh.UpdatedAt,
-			&mesh.MemberCount,
+			&mesh.MemberCount, &mesh.CountryCode, &mesh.IsSession,
 		); err != nil {
 			return nil, err
 		}
@@ -329,7 +336,7 @@ func (r *MeshRepo) ListAll(ctx context.Context) ([]models.MeshNetwork, error) {
 	query := `
 		SELECT n.id, n.name, n.description, n.owner_id, n.subnet, n.invite_code,
 		       n.invite_expires_at, n.max_members, n.is_active, n.created_at, n.updated_at,
-		       COUNT(m.id) AS member_count
+		       COUNT(m.id) AS member_count, n.country_code, n.is_session
 		FROM mesh_networks n
 		LEFT JOIN mesh_members m ON m.mesh_id = n.id
 		GROUP BY n.id
@@ -347,7 +354,7 @@ func (r *MeshRepo) ListAll(ctx context.Context) ([]models.MeshNetwork, error) {
 		if err := rows.Scan(
 			&mesh.ID, &mesh.Name, &mesh.Description, &mesh.OwnerID, &mesh.Subnet, &mesh.InviteCode,
 			&mesh.InviteExpiresAt, &mesh.MaxMembers, &mesh.IsActive, &mesh.CreatedAt, &mesh.UpdatedAt,
-			&mesh.MemberCount,
+			&mesh.MemberCount, &mesh.CountryCode, &mesh.IsSession,
 		); err != nil {
 			return nil, err
 		}
@@ -365,6 +372,7 @@ type AdminMeshMember struct {
 	DisplayName string    `json:"display_name"`
 	Email       string    `json:"email"`
 	UserID      string    `json:"user_id"`
+	PublicIP    string    `json:"public_ip"`  // peer assigned_ip (VPN tunnel IP)
 	Connected   bool      `json:"connected"` // true when peer_id IS NOT NULL
 	JoinedAt    time.Time `json:"joined_at"`
 }
@@ -377,10 +385,12 @@ func (r *MeshRepo) ListMembersAdmin(ctx context.Context, meshID uuid.UUID) ([]Ad
 		       COALESCE(u.display_name, u.email, '') AS display_name,
 		       u.email,
 		       m.user_id::text,
+		       COALESCE(p.assigned_ip, '') AS public_ip,
 		       (m.peer_id IS NOT NULL) AS connected,
 		       m.joined_at
 		FROM mesh_members m
 		JOIN users u ON u.id = m.user_id
+		LEFT JOIN peers p ON p.id = m.peer_id
 		WHERE m.mesh_id = $1
 		ORDER BY connected DESC, m.joined_at ASC
 	`
@@ -393,7 +403,7 @@ func (r *MeshRepo) ListMembersAdmin(ctx context.Context, meshID uuid.UUID) ([]Ad
 	var members []AdminMeshMember
 	for rows.Next() {
 		var m AdminMeshMember
-		if err := rows.Scan(&m.MeshIP, &m.DisplayName, &m.Email, &m.UserID, &m.Connected, &m.JoinedAt); err != nil {
+		if err := rows.Scan(&m.MeshIP, &m.DisplayName, &m.Email, &m.UserID, &m.PublicIP, &m.Connected, &m.JoinedAt); err != nil {
 			return nil, err
 		}
 		members = append(members, m)

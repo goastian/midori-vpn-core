@@ -3,7 +3,10 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -565,6 +568,147 @@ func (h *MeshHandler) ActivateNode(w http.ResponseWriter, r *http.Request) {
 		meshNodeStatus{Active: true, MeshIP: member.MeshIP, MeshID: mesh.ID.String(), Peers: []nodeP{}},
 		http.StatusCreated,
 	)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Session mesh (auto) — POST /mesh/auto  &  DELETE /mesh/auto
+//
+// The extension calls POST on login → gets (or creates) a session mesh named
+// "Servidor random [XX]" where XX is the 2-letter country from the request IP.
+// DELETE /mesh/auto is called on logout / browser close to purge the data.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// countryFromIP resolves a 2-letter ISO country code from a remote IP.
+// Falls back to "XX" on any error so the caller always gets a valid name.
+func countryFromIP(ip string) string {
+	// Skip private/loopback addresses
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.IsLoopback() || parsed.IsPrivate() {
+		return "XX"
+	}
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("https://ipapi.co/%s/country/", ip))
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return "XX"
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8))
+	if err != nil {
+		return "XX"
+	}
+	code := strings.TrimSpace(string(body))
+	if len(code) != 2 {
+		return "XX"
+	}
+	return strings.ToUpper(code)
+}
+
+// realIP extracts the client IP from X-Forwarded-For or RemoteAddr.
+func realIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		if ip := strings.TrimSpace(parts[0]); ip != "" {
+			return ip
+		}
+	}
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if ip == "" {
+		return r.RemoteAddr
+	}
+	return ip
+}
+
+// POST /mesh/auto — create or return the user's session mesh
+func (h *MeshHandler) AutoMesh(w http.ResponseWriter, r *http.Request) {
+	u := auth.GetUser(r)
+
+	// Return existing session mesh if one is active.
+	meshes, err := h.meshRepo.ListByUser(r.Context(), u.ID)
+	if err == nil {
+		for i := range meshes {
+			if meshes[i].IsSession && meshes[i].OwnerID == u.ID {
+				respond.JsonOK(w, meshes[i], http.StatusOK)
+				return
+			}
+		}
+	}
+
+	// Detect country and build name.
+	country := countryFromIP(realIP(r))
+	name := fmt.Sprintf("Servidor random [%s]", country)
+
+	subnet, err := h.meshRepo.NextAvailableSubnet(r.Context())
+	if err != nil {
+		slog.Error("auto-mesh: no available subnet", "error", err)
+		respond.JsonError(w, "no mesh subnets available", http.StatusServiceUnavailable)
+		return
+	}
+
+	mesh := &models.MeshNetwork{
+		Name:        name,
+		OwnerID:     u.ID,
+		Subnet:      subnet,
+		MaxMembers:  50,
+		IsSession:   true,
+		CountryCode: country,
+	}
+	if err := h.meshRepo.CreateSession(r.Context(), mesh); err != nil {
+		slog.Error("auto-mesh: create error", "error", err)
+		respond.JsonError(w, "failed to create session mesh", http.StatusInternalServerError)
+		return
+	}
+
+	member := &models.MeshMember{UserID: u.ID}
+	if err := h.meshRepo.AddMember(r.Context(), mesh.ID, member); err != nil {
+		slog.Error("auto-mesh: add member — rolling back", "error", err)
+		_ = h.meshRepo.Delete(r.Context(), mesh.ID)
+		respond.JsonError(w, "failed to initialize mesh", http.StatusInternalServerError)
+		return
+	}
+
+	h.auditRepo.Log(r.Context(), &u.ID, "mesh.auto.create",
+		map[string]interface{}{"mesh_id": mesh.ID, "country": country}, r.RemoteAddr)
+
+	respond.JsonOK(w, mesh, http.StatusCreated)
+}
+
+// DELETE /mesh/auto — delete all session meshes for this user (logout/close)
+func (h *MeshHandler) DeleteAutoMesh(w http.ResponseWriter, r *http.Request) {
+	u := auth.GetUser(r)
+
+	meshes, err := h.meshRepo.ListByUser(r.Context(), u.ID)
+	if err != nil {
+		respond.JsonError(w, "failed to list meshes", http.StatusInternalServerError)
+		return
+	}
+
+	deleted := 0
+	for _, m := range meshes {
+		if !m.IsSession || m.OwnerID != u.ID {
+			continue
+		}
+		// Clean up WireGuard routes for all members.
+		if h.wgMgr != nil {
+			if members, err := h.meshRepo.ListMembers(r.Context(), m.ID); err == nil {
+				for _, mem := range members {
+					if mem.PeerID == nil {
+						continue
+					}
+					if peer, err := h.peerRepo.GetByID(r.Context(), *mem.PeerID); err == nil {
+						_ = h.wgMgr.RemoveMeshIP(peer.PublicKey)
+					}
+				}
+			}
+		}
+		if err := h.meshRepo.Delete(r.Context(), m.ID); err == nil {
+			deleted++
+		}
+	}
+
+	h.auditRepo.Log(r.Context(), &u.ID, "mesh.auto.delete",
+		map[string]interface{}{"deleted": deleted}, r.RemoteAddr)
+
+	respond.JsonOK(w, map[string]int{"deleted": deleted}, http.StatusOK)
 }
 
 // DELETE /mesh/node — deactivate; leaves or deletes every mesh the user belongs to

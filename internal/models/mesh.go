@@ -20,6 +20,8 @@ type MeshNetwork struct {
 	MaxMembers  int       `json:"max_members"`
 	IsActive    bool      `json:"is_active"`
 	MemberCount int       `json:"member_count"`
+	CountryCode string    `json:"country_code,omitempty"`
+	IsSession   bool      `json:"is_session"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
