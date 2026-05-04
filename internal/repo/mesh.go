@@ -579,13 +579,14 @@ func (r *MeshRepo) ListMembersAdmin(ctx context.Context, meshID uuid.UUID) ([]Ad
 		       u.email,
 		       m.user_id::text,
 		       COALESCE(p.assigned_ip::text, '') AS public_ip,
-		       (
+		       COALESCE(
 		         p.id IS NOT NULL
 		         AND p.is_active = TRUE
 		         AND (
 		           p.last_handshake > NOW() - INTERVAL '5 minutes'
 		           OR (p.last_handshake IS NULL AND p.created_at > NOW() - INTERVAL '2 minutes')
-		         )
+		         ),
+		         false
 		       ) AS connected,
 		       m.joined_at
 		FROM mesh_members m
