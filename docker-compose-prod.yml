@@ -56,6 +56,9 @@ services:
     # No HTTP port exposed to host — only Caddy can reach :8080
     ports:
       - "51820:51820/udp"
+      # HTTP CONNECT proxy — used by the browser extension to tunnel traffic.
+      # Authenticated via Proxy-Authorization Bearer token.
+      - "8888:8888/tcp"
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 30s
