@@ -37,7 +37,7 @@ func New(cfg *config.Config, jwks *auth.JWKSProvider) *Server {
 		jwks:     jwks,
 		addr:     fmt.Sprintf(":%d", cfg.ProxyPort),
 		active:   make(map[string]int),
-		maxConns: 20, // max concurrent tunnels per user
+		maxConns: cfg.ProxyMaxConnsPerUser,
 	}
 }
 

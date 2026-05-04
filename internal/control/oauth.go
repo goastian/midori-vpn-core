@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/respond"
 )
@@ -331,4 +332,69 @@ func (h *OAuthHandler) isAllowedRedirectURI(redirectURI string) bool {
 	}
 	origin := parsed.Scheme + "://" + parsed.Host
 	return h.isAllowedOrigin(origin)
+}
+
+// LogoutRequest carries the token(s) to invalidate on logout.
+type LogoutRequest struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token,omitempty"`
+}
+
+// Logout invalidates the provided access token from the introspection cache so
+// that it cannot be reused, even within its normal TTL window. It optionally
+// also revokes the refresh token at the Authentik token revocation endpoint.
+// The endpoint is idempotent: unknown or already-invalidated tokens return 200.
+func (h *OAuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	slog.Info("[AUTH] Logout hit", "remote", r.RemoteAddr)
+
+	if !h.csrfCheck(w, r) {
+		slog.Warn("[AUTH] Logout CSRF check failed")
+		return
+	}
+
+	var req LogoutRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		slog.Warn("[AUTH] Logout invalid request body", "error", err)
+		respond.JsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Immediately evict the token from the local introspection cache.
+	if req.AccessToken != "" {
+		auth.InvalidateIntrospection(req.AccessToken)
+		slog.Info("[AUTH] Logout access token evicted from introspection cache")
+	}
+
+	// Best-effort revocation at Authentik (refresh token).
+	// Failures are logged but do not affect the 200 response — the local cache
+	// invalidation above is sufficient for same-node protection.
+	if req.RefreshToken != "" && h.cfg.AuthentikClientID != "" {
+		go func() {
+			revokeURL := strings.TrimRight(h.cfg.AuthentikIssuer, "/") + "/application/o/revoke-token/"
+			form := url.Values{}
+			form.Set("token", req.RefreshToken)
+			form.Set("token_type_hint", "refresh_token")
+			form.Set("client_id", h.cfg.AuthentikClientID)
+			if h.cfg.AuthentikClientSecret != "" {
+				form.Set("client_secret", h.cfg.AuthentikClientSecret)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			revokeReq, err := http.NewRequestWithContext(ctx, http.MethodPost, revokeURL, strings.NewReader(form.Encode()))
+			if err != nil {
+				slog.Warn("[AUTH] Logout failed to build revocation request", "error", err)
+				return
+			}
+			revokeReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			resp, err := http.DefaultClient.Do(revokeReq)
+			if err != nil {
+				slog.Warn("[AUTH] Logout revocation request failed", "error", err)
+				return
+			}
+			resp.Body.Close()
+			slog.Info("[AUTH] Logout refresh token revocation", "status", resp.StatusCode)
+		}()
+	}
+
+	respond.JsonOK(w, map[string]string{"status": "logged_out"}, http.StatusOK)
 }

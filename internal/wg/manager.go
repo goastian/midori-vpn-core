@@ -102,7 +102,9 @@ func (m *Manager) ensureInterface() error {
 	m.privateKey = dev.PrivateKey
 	pubKey := base64.StdEncoding.EncodeToString(dev.PublicKey[:])
 	slog.Info("interface already exists", "interface", m.cfg.WGInterface, "listen_port", dev.ListenPort, "peers", len(dev.Peers), "public_key", pubKey)
-	m.ensureNATRules()
+	if err := m.ensureNATRules(); err != nil {
+		return fmt.Errorf("ensureInterface: %w", err)
+	}
 	return nil
 }
 
@@ -126,7 +128,9 @@ func (m *Manager) createNetworkInterface() error {
 	}
 
 	slog.Info("created network interface", "interface", iface, "address", gatewayIP)
-	m.ensureNATRules()
+	if err := m.ensureNATRules(); err != nil {
+		return fmt.Errorf("createNetworkInterface: %w", err)
+	}
 	return nil
 }
 
@@ -169,7 +173,7 @@ func (m *Manager) configureNewInterface() error {
 // masquerade traffic from WireGuard peers to the internet.
 // Called on interface creation and on startup (in case rules were lost after
 // a container restart with a pre-existing interface).
-func (m *Manager) ensureNATRules() {
+func (m *Manager) ensureNATRules() error {
 	iface := m.cfg.WGInterface
 	subnet := m.cfg.Subnet
 
@@ -197,16 +201,13 @@ func (m *Manager) ensureNATRules() {
 		if err := exec.Command(r.check[0], r.check[1:]...).Run(); err != nil {
 			// Rule doesn't exist yet — add it
 			if out, addErr := exec.Command(r.add[0], r.add[1:]...).CombinedOutput(); addErr != nil {
-				slog.Warn("failed to add iptables rule",
-					"rule", strings.Join(r.add[3:], " "),
-					"error", addErr,
-					"output", strings.TrimSpace(string(out)),
-				)
-			} else {
-				slog.Info("added iptables rule", "rule", strings.Join(r.add[3:], " "))
+				return fmt.Errorf("iptables rule %q: %w (output: %s)",
+					strings.Join(r.add[3:], " "), addErr, strings.TrimSpace(string(out)))
 			}
+			slog.Info("added iptables rule", "rule", strings.Join(r.add[3:], " "))
 		}
 	}
+	return nil
 }
 
 func (m *Manager) loadExistingPeers() error {

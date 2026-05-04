@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/goastian/midori-vpn-core/internal/models"
@@ -97,6 +98,48 @@ func (r *MeshRepo) nextAvailableMeshIP(ctx context.Context, meshID uuid.UUID, su
 	}
 
 	// .1 is reserved as the gateway; start from .2
+	for i := 2; i <= 254; i++ {
+		candidate := fmt.Sprintf("%d.%d.%d.%d", base[0], base[1], base[2], i)
+		if !used[candidate] {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("mesh: subnet %s is full", subnet)
+}
+
+// nextAvailableMeshIPTx is identical to nextAvailableMeshIP but operates
+// within an existing transaction (pgx.Tx) so it sees the locked state of the
+// mesh_networks row held by AddMember.
+func (r *MeshRepo) nextAvailableMeshIPTx(ctx context.Context, tx pgx.Tx, meshID uuid.UUID, subnet string) (string, error) {
+	_, ipNet, err := net.ParseCIDR(subnet)
+	if err != nil {
+		return "", fmt.Errorf("mesh: parse subnet %q: %w", subnet, err)
+	}
+
+	rows, err := tx.Query(ctx,
+		`SELECT mesh_ip FROM mesh_members WHERE mesh_id = $1`, meshID)
+	if err != nil {
+		return "", fmt.Errorf("mesh: list ips in tx: %w", err)
+	}
+	defer rows.Close()
+
+	used := make(map[string]bool)
+	for rows.Next() {
+		var ip string
+		if err := rows.Scan(&ip); err != nil {
+			return "", err
+		}
+		used[ip] = true
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+
+	base := ipNet.IP.To4()
+	if base == nil {
+		return "", fmt.Errorf("mesh: only IPv4 subnets are supported")
+	}
+
 	for i := 2; i <= 254; i++ {
 		candidate := fmt.Sprintf("%d.%d.%d.%d", base[0], base[1], base[2], i)
 		if !used[candidate] {
@@ -242,27 +285,43 @@ func (r *MeshRepo) GetMember(ctx context.Context, meshID, userID uuid.UUID) (*mo
 
 // AddMember inserts a new member into a mesh, auto-assigning a mesh IP.
 // The member's PeerID may be nil if the user has no active VPN peer yet.
+// The IP assignment and INSERT are wrapped in a transaction with a row-level
+// lock on the mesh_networks row to prevent concurrent callers from racing to
+// claim the same mesh_ip.
 func (r *MeshRepo) AddMember(ctx context.Context, meshID uuid.UUID, member *models.MeshMember) error {
-	mesh, err := r.GetByID(ctx, meshID)
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("mesh: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Lock the mesh_networks row for the duration of this transaction so that
+	// no other concurrent AddMember call for the same mesh can interleave the
+	// IP scan and INSERT.
+	var subnet string
+	if err := tx.QueryRow(ctx,
+		`SELECT subnet FROM mesh_networks WHERE id = $1 FOR UPDATE`, meshID,
+	).Scan(&subnet); err != nil {
+		return fmt.Errorf("mesh: lock mesh row: %w", err)
 	}
 
-	ip, err := r.nextAvailableMeshIP(ctx, meshID, mesh.Subnet)
+	ip, err := r.nextAvailableMeshIPTx(ctx, tx, meshID, subnet)
 	if err != nil {
 		return err
 	}
 	member.MeshIP = ip
 	member.MeshID = meshID
 
-	query := `
-		INSERT INTO mesh_members (mesh_id, user_id, peer_id, mesh_ip)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, joined_at
-	`
-	return r.pool.QueryRow(ctx, query,
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO mesh_members (mesh_id, user_id, peer_id, mesh_ip)
+		 VALUES ($1, $2, $3, $4)
+		 RETURNING id, joined_at`,
 		meshID, member.UserID, member.PeerID, member.MeshIP,
-	).Scan(&member.ID, &member.JoinedAt)
+	).Scan(&member.ID, &member.JoinedAt); err != nil {
+		return fmt.Errorf("mesh: insert member: %w", err)
+	}
+
+	return tx.Commit(ctx)
 }
 
 // RemoveMember deletes a membership record.

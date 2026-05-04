@@ -3,6 +3,7 @@ package config
 import (
 	"log"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"regexp"
@@ -64,8 +65,9 @@ type Config struct {
 	VpnDNS string // comma-separated DNS servers pushed to VPN clients
 
 	// HTTP CONNECT proxy
-	ProxyEnabled bool // enable the HTTP CONNECT forward proxy
-	ProxyPort    int  // TCP port for the forward proxy (default 8888)
+	ProxyEnabled        bool // enable the HTTP CONNECT forward proxy
+	ProxyPort           int  // TCP port for the forward proxy (default 8888)
+	ProxyMaxConnsPerUser int  // max concurrent CONNECT tunnels per user (default 20)
 
 	// WebSocket limits per plan
 	WSMaxGlobal int // max global WS connections (0 = unlimited)
@@ -124,8 +126,9 @@ func Load() *Config {
 
 		VpnDNS: getEnv("VPN_DNS", "1.1.1.1, 8.8.8.8"),
 
-		ProxyEnabled: getEnvBool("PROXY_ENABLED", false),
-		ProxyPort:    getEnvInt("PROXY_PORT", 8888),
+		ProxyEnabled:        getEnvBool("PROXY_ENABLED", false),
+		ProxyPort:           getEnvInt("PROXY_PORT", 8888),
+		ProxyMaxConnsPerUser: getEnvInt("PROXY_MAX_CONNS_PER_USER", 20),
 
 		WSMaxGlobal: getEnvInt("WS_MAX_GLOBAL", 1000),
 		WSMaxFree:   getEnvInt("WS_MAX_FREE", 1),
@@ -136,7 +139,7 @@ func Load() *Config {
 	}
 
 	if cfg.AuthToken == "" {
-		slog.Warn("VPN_CORE_TOKEN is empty — all requests will be rejected")
+		log.Fatal("FATAL: VPN_CORE_TOKEN is not set — the core API cannot authenticate any request; set VPN_CORE_TOKEN to a strong random secret")
 	}
 
 	// Validate WireGuard interface name against a safe character set to prevent
@@ -157,13 +160,16 @@ func Load() *Config {
 		}
 	}
 
-	// Warn on insecure production settings.
+	// Reject insecure production settings.
 	if cfg.AppEnv == "production" {
 		if cfg.CoreTLSSkipVerify {
 			log.Fatal("FATAL: CORE_TLS_SKIP_VERIFY must not be enabled in production")
 		}
 		if cfg.CoreAllowedHosts == "" {
-			slog.Warn("CORE_ALLOWED_HOSTS is empty in production — all core server hosts are trusted; set CORE_ALLOWED_HOSTS to restrict")
+			log.Fatal("FATAL: CORE_ALLOWED_HOSTS must be set in production; an empty value trusts all core server hosts and allows any host to register as a VPN server")
+		}
+		if cfg.TrustedProxies == "" {
+			log.Fatal("FATAL: TRUSTED_PROXIES must be set in production; an empty value accepts X-Forwarded-For from any client, making IP-based rate limiting bypassable")
 		}
 	}
 
@@ -195,6 +201,20 @@ func Load() *Config {
 	}
 	if cfg.ProxyPort < 1 || cfg.ProxyPort > 65535 {
 		log.Fatalf("FATAL: PROXY_PORT must be between 1 and 65535, got %d", cfg.ProxyPort)
+	}
+	if cfg.ProxyMaxConnsPerUser < 1 {
+		log.Fatalf("FATAL: PROXY_MAX_CONNS_PER_USER must be >= 1, got %d", cfg.ProxyMaxConnsPerUser)
+	}
+
+	// Validate VPN_DNS entries are parseable IP addresses.
+	for _, entry := range strings.Split(cfg.VpnDNS, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if net.ParseIP(entry) == nil {
+			log.Fatalf("FATAL: VPN_DNS contains invalid IP address %q", entry)
+		}
 	}
 
 	return cfg
