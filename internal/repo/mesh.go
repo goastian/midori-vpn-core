@@ -271,7 +271,6 @@ func (r *MeshRepo) ListPublicDirectory(ctx context.Context) ([]models.MeshNetwor
 		  AND n.is_active = TRUE
 		  AND n.country_code ~ '^[A-Z]{2}$'
 		  AND n.country_code <> 'XX'
-		  AND n.name ~ '^Servidor mesh random \[[A-Z]{2}\]$'
 		GROUP BY n.id
 		ORDER BY n.created_at DESC
 	`
@@ -494,7 +493,6 @@ func (r *MeshRepo) ListAll(ctx context.Context) ([]models.MeshNetwork, error) {
 		WHERE n.is_session = TRUE
 		  AND n.country_code ~ '^[A-Z]{2}$'
 		  AND n.country_code <> 'XX'
-		  AND n.name ~ '^Servidor mesh random \[[A-Z]{2}\]$'
 		GROUP BY n.id
 		ORDER BY n.created_at DESC
 	`
@@ -542,7 +540,7 @@ func (r *MeshRepo) ListMembersAdmin(ctx context.Context, meshID uuid.UUID) ([]Ad
 		       COALESCE(u.display_name, u.email, '') AS display_name,
 		       u.email,
 		       m.user_id::text,
-		       COALESCE(p.assigned_ip, '') AS public_ip,
+		       COALESCE(p.assigned_ip::text, '') AS public_ip,
 		       (
 		         p.id IS NOT NULL
 		         AND p.is_active = TRUE

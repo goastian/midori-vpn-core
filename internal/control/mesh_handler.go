@@ -21,7 +21,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/wg"
 )
 
-const publicMeshNameFormat = "Servidor mesh random [%s]"
+const publicMeshNameFormat = "Servidor Random %s [%s]"
 
 type MeshHandler struct {
 	meshRepo  *repo.MeshRepo
@@ -351,7 +351,7 @@ func (h *MeshHandler) ActivateNode(w http.ResponseWriter, r *http.Request) {
 // Session mesh (auto) — POST /mesh/auto  &  DELETE /mesh/auto
 //
 // The extension calls POST on login → gets (or creates) a session mesh named
-// "Servidor mesh random [CC]" where CC is the 2-letter country from the request IP.
+// "Servidor Random 🇩🇴 [CC]" where CC is the 2-letter country from the request IP.
 // DELETE /mesh/auto is called on logout / browser close to purge the data.
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -368,15 +368,23 @@ func isValidCountryCode(code string) bool {
 }
 
 func meshNameForCountry(country string) string {
-	return fmt.Sprintf(publicMeshNameFormat, country)
+	return fmt.Sprintf(publicMeshNameFormat, countryFlag(country), country)
 }
 
 func isValidPublicMesh(mesh *models.MeshNetwork) bool {
 	return mesh != nil &&
 		mesh.IsSession &&
 		mesh.IsActive &&
-		isValidCountryCode(mesh.CountryCode) &&
-		mesh.Name == meshNameForCountry(mesh.CountryCode)
+		isValidCountryCode(mesh.CountryCode)
+}
+
+func countryFlag(country string) string {
+	country = strings.ToUpper(country)
+	if !isValidCountryCode(country) {
+		return "🏳️"
+	}
+	runes := []rune(country)
+	return string([]rune{0x1F1E6 + (runes[0] - 'A'), 0x1F1E6 + (runes[1] - 'A')})
 }
 
 func statusCreated(created bool) int {
