@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -96,6 +97,11 @@ func (m *Manager) ensureInterface() error {
 	dev, err := m.client.Device(m.cfg.WGInterface)
 	if err != nil {
 		slog.Info("interface not found, attempting to configure", "interface", m.cfg.WGInterface)
+		confPath := filepath.Join(m.cfg.ConfigDir, m.cfg.WGInterface+".conf")
+		if _, statErr := os.Stat(confPath); statErr == nil {
+			slog.Info("found saved config, restoring interface and peers", "path", confPath)
+			return m.restoreFromConfig(confPath)
+		}
 		return m.configureNewInterface()
 	}
 
@@ -169,6 +175,129 @@ func (m *Manager) configureNewInterface() error {
 	return nil
 }
 
+// restoreFromConfig recreates the WireGuard interface from a previously-persisted
+// wg0.conf file. This preserves the server keypair and restores all peer entries
+// so that clients do not need to reconfigure after a container restart.
+func (m *Manager) restoreFromConfig(confPath string) error {
+	data, err := os.ReadFile(confPath)
+	if err != nil {
+		slog.Warn("restore: cannot read saved config, creating fresh interface", "path", confPath, "error", err)
+		return m.configureNewInterface()
+	}
+
+	type peerConf struct {
+		pubkey     wgtypes.Key
+		allowedIPs []net.IPNet
+		keepalive  time.Duration
+	}
+
+	var privKey wgtypes.Key
+	var privKeyFound bool
+	var peers []peerConf
+	var curPeer *peerConf
+
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "" || strings.HasPrefix(line, "#"):
+			continue
+		case line == "[Interface]":
+			if curPeer != nil {
+				peers = append(peers, *curPeer)
+				curPeer = nil
+			}
+		case line == "[Peer]":
+			if curPeer != nil {
+				peers = append(peers, *curPeer)
+			}
+			curPeer = &peerConf{}
+		default:
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			k, v := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+			if curPeer == nil {
+				if k == "PrivateKey" {
+					raw, decErr := base64.StdEncoding.DecodeString(v)
+					if decErr == nil && len(raw) == 32 {
+						copy(privKey[:], raw)
+						privKeyFound = true
+					}
+				}
+			} else {
+				switch k {
+				case "PublicKey":
+					raw, decErr := base64.StdEncoding.DecodeString(v)
+					if decErr != nil || len(raw) != 32 {
+						slog.Warn("restore: invalid peer public key, skipping", "key", v)
+						curPeer = nil
+						continue
+					}
+					copy(curPeer.pubkey[:], raw)
+				case "AllowedIPs":
+					for _, cidr := range strings.Split(v, ",") {
+						cidr = strings.TrimSpace(cidr)
+						_, ipNet, parseErr := net.ParseCIDR(cidr)
+						if parseErr == nil {
+							curPeer.allowedIPs = append(curPeer.allowedIPs, *ipNet)
+						}
+					}
+				case "PersistentKeepalive":
+					if secs, convErr := strconv.Atoi(v); convErr == nil {
+						curPeer.keepalive = time.Duration(secs) * time.Second
+					}
+				}
+			}
+		}
+	}
+	if curPeer != nil {
+		peers = append(peers, *curPeer)
+	}
+
+	if !privKeyFound {
+		slog.Warn("restore: no valid PrivateKey found in saved config, creating fresh interface", "path", confPath)
+		return m.configureNewInterface()
+	}
+
+	// Recreate the network namespace interface.
+	if err := m.createNetworkInterface(); err != nil {
+		return err
+	}
+	m.privateKey = privKey
+
+	// Build WireGuard device config: private key + listen port + all saved peers.
+	peerCfgs := make([]wgtypes.PeerConfig, 0, len(peers))
+	for _, p := range peers {
+		pc := wgtypes.PeerConfig{
+			PublicKey:  p.pubkey,
+			AllowedIPs: p.allowedIPs,
+		}
+		if p.keepalive > 0 {
+			pc.PersistentKeepaliveInterval = &p.keepalive
+		}
+		peerCfgs = append(peerCfgs, pc)
+	}
+	port := m.cfg.WGPort
+	wgCfg := wgtypes.Config{
+		PrivateKey: &privKey,
+		ListenPort: &port,
+		Peers:      peerCfgs,
+	}
+	if err := m.client.ConfigureDevice(m.cfg.WGInterface, wgCfg); err != nil {
+		return fmt.Errorf("restore: configure device: %w", err)
+	}
+
+	pubKey := m.privateKey.PublicKey()
+	slog.Info("restored interface from saved config",
+		"interface", m.cfg.WGInterface,
+		"port", m.cfg.WGPort,
+		"public_key", base64.StdEncoding.EncodeToString(pubKey[:]),
+		"peers_restored", len(peers),
+	)
+	return nil
+}
+
 // ensureNATRules idempotently adds the iptables rules needed to forward and
 // masquerade traffic from WireGuard peers to the internet.
 // Called on interface creation and on startup (in case rules were lost after
@@ -195,6 +324,22 @@ func (m *Manager) ensureNATRules() error {
 			)
 		} else {
 			slog.Info("added iptables rule", "rule", strings.Join(masqAdd[3:], " "))
+		}
+	}
+
+	// Best-effort MASQUERADE for the mesh overlay subnet so that mesh peers
+	// can reach the internet through this server.
+	const meshSubnet = "10.200.0.0/16"
+	meshMasqCheck := []string{"iptables", "-t", "nat", "-C", "POSTROUTING", "-s", meshSubnet, "-j", "MASQUERADE"}
+	meshMasqAdd := []string{"iptables", "-t", "nat", "-A", "POSTROUTING", "-s", meshSubnet, "-j", "MASQUERADE"}
+	if err := exec.Command(meshMasqCheck[0], meshMasqCheck[1:]...).Run(); err != nil {
+		if out, addErr := exec.Command(meshMasqAdd[0], meshMasqAdd[1:]...).CombinedOutput(); addErr != nil {
+			slog.Warn("failed to add mesh MASQUERADE rule — mesh internet access may require host-level NAT",
+				"error", addErr,
+				"output", strings.TrimSpace(string(out)),
+			)
+		} else {
+			slog.Info("added iptables rule", "rule", strings.Join(meshMasqAdd[3:], " "))
 		}
 	}
 
