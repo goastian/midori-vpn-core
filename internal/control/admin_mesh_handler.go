@@ -1,6 +1,7 @@
 package control
 
 import (
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -49,24 +50,24 @@ func (h *AdminMeshHandler) AdminListMeshes(w http.ResponseWriter, r *http.Reques
 	result := make([]adminMeshNetwork, len(meshes))
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	var firstErr error
 
 	for i, m := range meshes {
 		wg.Add(1)
-		go func(idx int, meshID uuid.UUID) {
+		go func(idx int, meshID uuid.UUID, meshName string) {
 			defer wg.Done()
 			members, err := h.meshRepo.ListMembersAdmin(ctx, meshID)
 			mu.Lock()
 			defer mu.Unlock()
-			if err != nil && firstErr == nil {
-				firstErr = err
+			if err != nil {
+				slog.Warn("admin mesh: failed to load members", "mesh_id", meshID, "mesh", meshName, "error", err)
+				result[idx].Members = []repo.AdminMeshMember{}
 				return
 			}
 			if members == nil {
 				members = []repo.AdminMeshMember{}
 			}
 			result[idx].Members = members
-		}(i, m.ID)
+		}(i, m.ID, m.Name)
 
 		result[i] = adminMeshNetwork{
 			ID:          m.ID.String(),
@@ -80,11 +81,6 @@ func (h *AdminMeshHandler) AdminListMeshes(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	wg.Wait()
-
-	if firstErr != nil {
-		respond.JsonError(w, "failed to load mesh members", http.StatusInternalServerError)
-		return
-	}
 
 	respond.JsonOK(w, result, http.StatusOK)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,6 +24,38 @@ type MeshRepo struct {
 
 func NewMeshRepo(pool *pgxpool.Pool) *MeshRepo {
 	return &MeshRepo{pool: pool}
+}
+
+func validMeshCountryCode(code string) bool {
+	if len(code) != 2 {
+		return false
+	}
+	for _, ch := range code {
+		if ch < 'A' || ch > 'Z' {
+			return false
+		}
+	}
+	return code != "XX"
+}
+
+func meshCountryFlag(code string) string {
+	code = strings.ToUpper(code)
+	if !validMeshCountryCode(code) {
+		return "🏳️"
+	}
+	runes := []rune(code)
+	return string([]rune{0x1F1E6 + (runes[0] - 'A'), 0x1F1E6 + (runes[1] - 'A')})
+}
+
+func normalizePublicMeshName(mesh *models.MeshNetwork) {
+	if mesh == nil || !mesh.IsSession {
+		return
+	}
+	mesh.CountryCode = strings.ToUpper(mesh.CountryCode)
+	if !validMeshCountryCode(mesh.CountryCode) {
+		return
+	}
+	mesh.Name = fmt.Sprintf("Servidor Random %s [%s]", meshCountryFlag(mesh.CountryCode), mesh.CountryCode)
 }
 
 // generateInviteCode returns a new random UUID v4 string for use as an invite code.
@@ -193,6 +226,7 @@ func (r *MeshRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.MeshNetwo
 	if err != nil {
 		return nil, fmt.Errorf("mesh: get by id: %w", err)
 	}
+	normalizePublicMeshName(&mesh)
 	return &mesh, nil
 }
 
@@ -218,6 +252,7 @@ func (r *MeshRepo) GetByInviteCode(ctx context.Context, code string) (*models.Me
 	if err != nil {
 		return nil, fmt.Errorf("mesh: get by invite code: %w", err)
 	}
+	normalizePublicMeshName(&mesh)
 	return &mesh, nil
 }
 
@@ -250,6 +285,7 @@ func (r *MeshRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]models.M
 		); err != nil {
 			return nil, err
 		}
+		normalizePublicMeshName(&mesh)
 		meshes = append(meshes, mesh)
 	}
 	if err := rows.Err(); err != nil {
@@ -290,6 +326,7 @@ func (r *MeshRepo) ListPublicDirectory(ctx context.Context) ([]models.MeshNetwor
 		); err != nil {
 			return nil, err
 		}
+		normalizePublicMeshName(&mesh)
 		mesh.InviteCode = ""
 		mesh.OwnerID = uuid.Nil
 		meshes = append(meshes, mesh)
@@ -512,6 +549,7 @@ func (r *MeshRepo) ListAll(ctx context.Context) ([]models.MeshNetwork, error) {
 		); err != nil {
 			return nil, err
 		}
+		normalizePublicMeshName(&mesh)
 		meshes = append(meshes, mesh)
 	}
 	if err := rows.Err(); err != nil {
