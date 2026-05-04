@@ -173,20 +173,38 @@ func (m *Manager) configureNewInterface() error {
 // masquerade traffic from WireGuard peers to the internet.
 // Called on interface creation and on startup (in case rules were lost after
 // a container restart with a pre-existing interface).
+//
+// MASQUERADE (NAT) failure is treated as a warning — some host environments
+// (e.g. kernels using nf_tables without legacy compat) do not support it
+// inside containers. The VPN can still route peer-to-peer traffic; internet
+// NAT must be configured on the host in that case.
+// FORWARD rule failures are returned as hard errors because without them
+// the kernel will silently drop all VPN traffic.
 func (m *Manager) ensureNATRules() error {
 	iface := m.cfg.WGInterface
 	subnet := m.cfg.Subnet
 
+	// Best-effort MASQUERADE rule: warn and continue on failure.
+	masqCheck := []string{"iptables", "-t", "nat", "-C", "POSTROUTING", "-s", subnet, "-j", "MASQUERADE"}
+	masqAdd := []string{"iptables", "-t", "nat", "-A", "POSTROUTING", "-s", subnet, "-j", "MASQUERADE"}
+	if err := exec.Command(masqCheck[0], masqCheck[1:]...).Run(); err != nil {
+		if out, addErr := exec.Command(masqAdd[0], masqAdd[1:]...).CombinedOutput(); addErr != nil {
+			slog.Warn("failed to add iptables MASQUERADE rule — internet access for VPN peers may require host-level NAT",
+				"error", addErr,
+				"output", strings.TrimSpace(string(out)),
+			)
+		} else {
+			slog.Info("added iptables rule", "rule", strings.Join(masqAdd[3:], " "))
+		}
+	}
+
+	// Mandatory FORWARD rules: return an error if these fail, because without
+	// them the kernel drops all traffic through the WireGuard interface.
 	type rule struct {
 		check []string
 		add   []string
 	}
-
-	rules := []rule{
-		{
-			check: []string{"iptables", "-t", "nat", "-C", "POSTROUTING", "-s", subnet, "-j", "MASQUERADE"},
-			add:   []string{"iptables", "-t", "nat", "-A", "POSTROUTING", "-s", subnet, "-j", "MASQUERADE"},
-		},
+	forwardRules := []rule{
 		{
 			check: []string{"iptables", "-C", "FORWARD", "-i", iface, "-j", "ACCEPT"},
 			add:   []string{"iptables", "-A", "FORWARD", "-i", iface, "-j", "ACCEPT"},
@@ -196,10 +214,8 @@ func (m *Manager) ensureNATRules() error {
 			add:   []string{"iptables", "-A", "FORWARD", "-o", iface, "-j", "ACCEPT"},
 		},
 	}
-
-	for _, r := range rules {
+	for _, r := range forwardRules {
 		if err := exec.Command(r.check[0], r.check[1:]...).Run(); err != nil {
-			// Rule doesn't exist yet — add it
 			if out, addErr := exec.Command(r.add[0], r.add[1:]...).CombinedOutput(); addErr != nil {
 				return fmt.Errorf("iptables rule %q: %w (output: %s)",
 					strings.Join(r.add[3:], " "), addErr, strings.TrimSpace(string(out)))
