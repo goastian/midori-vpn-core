@@ -9,21 +9,22 @@ import (
 // MeshNetwork is a named private overlay network. Members within a mesh can
 // reach each other using their assigned mesh IPs routed through the VPN servers.
 type MeshNetwork struct {
-	ID          uuid.UUID  `json:"id"`
-	Name        string     `json:"name"`
-	Description string     `json:"description"`
-	OwnerID     uuid.UUID  `json:"owner_id"`
-	Subnet      string     `json:"subnet"`
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	OwnerID     uuid.UUID `json:"owner_id"`
+	Subnet      string    `json:"subnet"`
 	// InviteCode is only returned to the owner and to the invite endpoint.
-	InviteCode       string     `json:"invite_code,omitempty"`
-	InviteExpiresAt  *time.Time `json:"invite_expires_at,omitempty"`
-	MaxMembers  int       `json:"max_members"`
-	IsActive    bool      `json:"is_active"`
-	MemberCount int       `json:"member_count"`
-	CountryCode string    `json:"country_code,omitempty"`
-	IsSession   bool      `json:"is_session"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	InviteCode      string     `json:"invite_code,omitempty"`
+	InviteExpiresAt *time.Time `json:"invite_expires_at,omitempty"`
+	MaxMembers      int        `json:"max_members"`
+	IsActive        bool       `json:"is_active"`
+	MemberCount     int        `json:"member_count"`
+	CountryCode     string     `json:"country_code,omitempty"`
+	PublicIP        string     `json:"public_ip,omitempty"`
+	IsSession       bool       `json:"is_session"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 // MeshMember links a user (and optionally their active VPN peer) to a

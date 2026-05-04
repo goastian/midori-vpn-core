@@ -1,0 +1,1 @@
+ALTER TABLE mesh_networks ADD COLUMN IF NOT EXISTS public_ip TEXT NOT NULL DEFAULT '';

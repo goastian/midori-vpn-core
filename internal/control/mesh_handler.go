@@ -28,7 +28,7 @@ const publicMeshNameFormat = "Servidor Random %s [%s]"
 // Entries expire after 30 days; the cache is also persisted to/loaded from the
 // ip_country_cache DB table so it survives container restarts.
 var (
-	ipCountryCacheMu sync.RWMutex
+	ipCountryCacheMu  sync.RWMutex
 	ipCountryMemCache = make(map[string]ipCacheEntry)
 )
 
@@ -73,6 +73,7 @@ type publicMeshNetwork struct {
 	IsActive    bool      `json:"is_active"`
 	MemberCount int       `json:"member_count"`
 	CountryCode string    `json:"country_code,omitempty"`
+	PublicIP    string    `json:"public_ip,omitempty"`
 	IsSession   bool      `json:"is_session"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
@@ -88,6 +89,7 @@ func toPublicMeshNetwork(mesh models.MeshNetwork) publicMeshNetwork {
 		IsActive:    mesh.IsActive,
 		MemberCount: mesh.MemberCount,
 		CountryCode: mesh.CountryCode,
+		PublicIP:    mesh.PublicIP,
 		IsSession:   mesh.IsSession,
 		CreatedAt:   mesh.CreatedAt,
 		UpdatedAt:   mesh.UpdatedAt,
@@ -294,10 +296,11 @@ func (h *MeshHandler) LeaveMesh(w http.ResponseWriter, r *http.Request) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 type meshNodeStatus struct {
-	Active bool    `json:"active"`
-	MeshIP string  `json:"mesh_ip,omitempty"`
-	MeshID string  `json:"mesh_id,omitempty"`
-	Peers  []nodeP `json:"peers"`
+	Active   bool    `json:"active"`
+	MeshIP   string  `json:"mesh_ip,omitempty"`
+	MeshID   string  `json:"mesh_id,omitempty"`
+	PublicIP string  `json:"public_ip,omitempty"`
+	Peers    []nodeP `json:"peers"`
 }
 
 type nodeP struct {
@@ -328,7 +331,7 @@ func (h *MeshHandler) nodeStatusForUser(ctx context.Context, userID uuid.UUID) m
 				peers = append(peers, nodeP{MeshIP: p.MeshIP, DisplayName: p.DisplayName})
 			}
 		}
-		return meshNodeStatus{Active: true, MeshIP: member.MeshIP, MeshID: m.ID.String(), Peers: peers}
+		return meshNodeStatus{Active: true, MeshIP: member.MeshIP, MeshID: m.ID.String(), PublicIP: m.PublicIP, Peers: peers}
 	}
 	return meshNodeStatus{Active: false, Peers: []nodeP{}}
 }
@@ -358,7 +361,7 @@ func (h *MeshHandler) ActivateNode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respond.JsonOK(w,
-		meshNodeStatus{Active: true, MeshIP: member.MeshIP, MeshID: mesh.ID.String(), Peers: []nodeP{}},
+		meshNodeStatus{Active: true, MeshIP: member.MeshIP, MeshID: mesh.ID.String(), PublicIP: mesh.PublicIP, Peers: []nodeP{}},
 		statusCreated(created),
 	)
 }
@@ -505,6 +508,7 @@ func realIP(r *http.Request) string {
 }
 
 func (h *MeshHandler) ensureAutoMesh(ctx context.Context, r *http.Request, u *models.User) (*models.MeshNetwork, *models.MeshMember, bool, error) {
+	originIP := realIP(r)
 	meshes, err := h.meshRepo.ListByUser(ctx, u.ID)
 	if err == nil {
 		for i := range meshes {
@@ -523,11 +527,19 @@ func (h *MeshHandler) ensureAutoMesh(ctx context.Context, r *http.Request, u *mo
 				}
 			}
 			_ = h.meshRepo.TouchSession(ctx, meshes[i].ID)
+			if originIP != "" && meshes[i].PublicIP != originIP {
+				if country, err := h.countryFromIP(ctx, originIP); err == nil {
+					meshes[i].CountryCode = country
+					meshes[i].Name = meshNameForCountry(country)
+					meshes[i].PublicIP = originIP
+					_ = h.meshRepo.UpdateSessionOrigin(ctx, meshes[i].ID, meshes[i].Name, country, originIP)
+				}
+			}
 			return &meshes[i], member, false, nil
 		}
 	}
 
-	country, err := h.countryFromIP(ctx, realIP(r))
+	country, err := h.countryFromIP(ctx, originIP)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -545,6 +557,7 @@ func (h *MeshHandler) ensureAutoMesh(ctx context.Context, r *http.Request, u *mo
 		MaxMembers:  50,
 		IsSession:   true,
 		CountryCode: country,
+		PublicIP:    originIP,
 	}
 	if err := h.meshRepo.CreateSession(ctx, mesh); err != nil {
 		slog.Error("auto-mesh: create error", "error", err)

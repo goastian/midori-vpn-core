@@ -30,6 +30,7 @@ type adminMeshNetwork struct {
 	IsActive    bool                   `json:"is_active"`
 	MemberCount int                    `json:"member_count"`
 	CountryCode string                 `json:"country_code"`
+	PublicIP    string                 `json:"public_ip,omitempty"`
 	IsSession   bool                   `json:"is_session"`
 	CreatedAt   time.Time              `json:"created_at"`
 	Members     []repo.AdminMeshMember `json:"members"`
@@ -76,6 +77,7 @@ func (h *AdminMeshHandler) AdminListMeshes(w http.ResponseWriter, r *http.Reques
 			IsActive:    m.IsActive,
 			MemberCount: m.MemberCount,
 			CountryCode: m.CountryCode,
+			PublicIP:    m.PublicIP,
 			IsSession:   m.IsSession,
 			CreatedAt:   m.CreatedAt,
 		}

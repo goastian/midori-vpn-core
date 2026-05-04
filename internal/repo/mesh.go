@@ -189,13 +189,13 @@ func (r *MeshRepo) Create(ctx context.Context, mesh *models.MeshNetwork) error {
 	mesh.InviteCode = code
 
 	query := `
-		INSERT INTO mesh_networks (name, description, owner_id, subnet, invite_code, max_members, invite_expires_at, country_code, is_session)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO mesh_networks (name, description, owner_id, subnet, invite_code, max_members, invite_expires_at, country_code, public_ip, is_session)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING id, is_active, created_at, updated_at
 	`
 	return r.pool.QueryRow(ctx, query,
 		mesh.Name, mesh.Description, mesh.OwnerID, mesh.Subnet, mesh.InviteCode,
-		mesh.MaxMembers, mesh.InviteExpiresAt, mesh.CountryCode, mesh.IsSession,
+		mesh.MaxMembers, mesh.InviteExpiresAt, mesh.CountryCode, mesh.PublicIP, mesh.IsSession,
 	).Scan(&mesh.ID, &mesh.IsActive, &mesh.CreatedAt, &mesh.UpdatedAt)
 }
 
@@ -211,7 +211,7 @@ func (r *MeshRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.MeshNetwo
 	query := `
 		SELECT n.id, n.name, n.description, n.owner_id, n.subnet, n.invite_code,
 		       n.invite_expires_at, n.max_members, n.is_active, n.created_at, n.updated_at,
-		       COUNT(m.id) AS member_count, n.country_code, n.is_session
+		       COUNT(m.id) AS member_count, n.country_code, n.public_ip, n.is_session
 		FROM mesh_networks n
 		LEFT JOIN mesh_members m ON m.mesh_id = n.id
 		WHERE n.id = $1
@@ -221,7 +221,7 @@ func (r *MeshRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.MeshNetwo
 	err := r.pool.QueryRow(ctx, query, id).Scan(
 		&mesh.ID, &mesh.Name, &mesh.Description, &mesh.OwnerID, &mesh.Subnet, &mesh.InviteCode,
 		&mesh.InviteExpiresAt, &mesh.MaxMembers, &mesh.IsActive, &mesh.CreatedAt, &mesh.UpdatedAt,
-		&mesh.MemberCount, &mesh.CountryCode, &mesh.IsSession,
+		&mesh.MemberCount, &mesh.CountryCode, &mesh.PublicIP, &mesh.IsSession,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("mesh: get by id: %w", err)
@@ -236,7 +236,7 @@ func (r *MeshRepo) GetByInviteCode(ctx context.Context, code string) (*models.Me
 	query := `
 		SELECT n.id, n.name, n.description, n.owner_id, n.subnet, n.invite_code,
 		       n.invite_expires_at, n.max_members, n.is_active, n.created_at, n.updated_at,
-		       COUNT(m.id) AS member_count, n.country_code, n.is_session
+		       COUNT(m.id) AS member_count, n.country_code, n.public_ip, n.is_session
 		FROM mesh_networks n
 		LEFT JOIN mesh_members m ON m.mesh_id = n.id
 		WHERE n.invite_code = $1
@@ -247,7 +247,7 @@ func (r *MeshRepo) GetByInviteCode(ctx context.Context, code string) (*models.Me
 	err := r.pool.QueryRow(ctx, query, code).Scan(
 		&mesh.ID, &mesh.Name, &mesh.Description, &mesh.OwnerID, &mesh.Subnet, &mesh.InviteCode,
 		&mesh.InviteExpiresAt, &mesh.MaxMembers, &mesh.IsActive, &mesh.CreatedAt, &mesh.UpdatedAt,
-		&mesh.MemberCount, &mesh.CountryCode, &mesh.IsSession,
+		&mesh.MemberCount, &mesh.CountryCode, &mesh.PublicIP, &mesh.IsSession,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("mesh: get by invite code: %w", err)
@@ -261,7 +261,7 @@ func (r *MeshRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]models.M
 	query := `
 		SELECT DISTINCT n.id, n.name, n.description, n.owner_id, n.subnet, n.invite_code,
 		       n.invite_expires_at, n.max_members, n.is_active, n.created_at, n.updated_at,
-		       COUNT(m2.id) AS member_count, n.country_code, n.is_session
+		       COUNT(m2.id) AS member_count, n.country_code, n.public_ip, n.is_session
 		FROM mesh_networks n
 		LEFT JOIN mesh_members m2 ON m2.mesh_id = n.id
 		WHERE n.owner_id = $1
@@ -281,7 +281,7 @@ func (r *MeshRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]models.M
 		if err := rows.Scan(
 			&mesh.ID, &mesh.Name, &mesh.Description, &mesh.OwnerID, &mesh.Subnet, &mesh.InviteCode,
 			&mesh.InviteExpiresAt, &mesh.MaxMembers, &mesh.IsActive, &mesh.CreatedAt, &mesh.UpdatedAt,
-			&mesh.MemberCount, &mesh.CountryCode, &mesh.IsSession,
+			&mesh.MemberCount, &mesh.CountryCode, &mesh.PublicIP, &mesh.IsSession,
 		); err != nil {
 			return nil, err
 		}
@@ -300,7 +300,7 @@ func (r *MeshRepo) ListPublicDirectory(ctx context.Context) ([]models.MeshNetwor
 	query := `
 		SELECT n.id, n.name, n.description, n.owner_id, n.subnet, '' AS invite_code,
 		       n.invite_expires_at, n.max_members, n.is_active, n.created_at, n.updated_at,
-		       COUNT(m.id) AS member_count, n.country_code, n.is_session
+		       COUNT(m.id) AS member_count, n.country_code, n.public_ip, n.is_session
 		FROM mesh_networks n
 		LEFT JOIN mesh_members m ON m.mesh_id = n.id
 		WHERE n.is_session = TRUE
@@ -322,7 +322,7 @@ func (r *MeshRepo) ListPublicDirectory(ctx context.Context) ([]models.MeshNetwor
 		if err := rows.Scan(
 			&mesh.ID, &mesh.Name, &mesh.Description, &mesh.OwnerID, &mesh.Subnet, &mesh.InviteCode,
 			&mesh.InviteExpiresAt, &mesh.MaxMembers, &mesh.IsActive, &mesh.CreatedAt, &mesh.UpdatedAt,
-			&mesh.MemberCount, &mesh.CountryCode, &mesh.IsSession,
+			&mesh.MemberCount, &mesh.CountryCode, &mesh.PublicIP, &mesh.IsSession,
 		); err != nil {
 			return nil, err
 		}
@@ -500,6 +500,18 @@ func (r *MeshRepo) TouchSession(ctx context.Context, meshID uuid.UUID) error {
 	return err
 }
 
+// UpdateSessionOrigin refreshes the public origin metadata for an auto-managed
+// session mesh.
+func (r *MeshRepo) UpdateSessionOrigin(ctx context.Context, meshID uuid.UUID, name, countryCode, publicIP string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE mesh_networks
+		 SET name = $2, country_code = $3, public_ip = $4, updated_at = NOW()
+		 WHERE id = $1 AND is_session = TRUE`,
+		meshID, name, countryCode, publicIP,
+	)
+	return err
+}
+
 // UpdateMemberPeer links a member's mesh record to their active VPN peer.
 func (r *MeshRepo) UpdateMemberPeer(ctx context.Context, meshID, userID uuid.UUID, peerID *uuid.UUID) error {
 	_, err := r.pool.Exec(ctx,
@@ -524,7 +536,7 @@ func (r *MeshRepo) ListAll(ctx context.Context) ([]models.MeshNetwork, error) {
 	query := `
 		SELECT n.id, n.name, n.description, n.owner_id, n.subnet, n.invite_code,
 		       n.invite_expires_at, n.max_members, n.is_active, n.created_at, n.updated_at,
-		       COUNT(m.id) AS member_count, n.country_code, n.is_session
+		       COUNT(m.id) AS member_count, n.country_code, n.public_ip, n.is_session
 		FROM mesh_networks n
 		LEFT JOIN mesh_members m ON m.mesh_id = n.id
 		WHERE n.is_session = TRUE
@@ -545,7 +557,7 @@ func (r *MeshRepo) ListAll(ctx context.Context) ([]models.MeshNetwork, error) {
 		if err := rows.Scan(
 			&mesh.ID, &mesh.Name, &mesh.Description, &mesh.OwnerID, &mesh.Subnet, &mesh.InviteCode,
 			&mesh.InviteExpiresAt, &mesh.MaxMembers, &mesh.IsActive, &mesh.CreatedAt, &mesh.UpdatedAt,
-			&mesh.MemberCount, &mesh.CountryCode, &mesh.IsSession,
+			&mesh.MemberCount, &mesh.CountryCode, &mesh.PublicIP, &mesh.IsSession,
 		); err != nil {
 			return nil, err
 		}
