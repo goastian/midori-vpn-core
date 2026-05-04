@@ -2,8 +2,6 @@ package repo
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"net"
 	"time"
@@ -27,13 +25,13 @@ func NewMeshRepo(pool *pgxpool.Pool) *MeshRepo {
 	return &MeshRepo{pool: pool}
 }
 
-// generateInviteCode returns a random 16-byte hex string suitable for invite codes.
+// generateInviteCode returns a new random UUID v4 string for use as an invite code.
 func generateInviteCode() (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
+	id, err := uuid.NewRandom()
+	if err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(b), nil
+	return id.String(), nil
 }
 
 // NextAvailableSubnet picks the first unused /24 in the 10.200.x.0/24 range.
@@ -379,6 +377,38 @@ func (r *MeshRepo) CountByOwner(ctx context.Context, ownerID uuid.UUID) (int, er
 		`SELECT COUNT(*) FROM mesh_networks WHERE owner_id = $1`, ownerID,
 	).Scan(&count)
 	return count, err
+}
+
+// RegenerateInviteCode replaces the invite code for a mesh the caller owns.
+// If expiresAt is non-nil the new code expires at that time; passing nil
+// creates a non-expiring code. Returns the new code and its expiry.
+func (r *MeshRepo) RegenerateInviteCode(ctx context.Context, meshID uuid.UUID, expiresAt *time.Time) (string, *time.Time, error) {
+	newCode, err := generateInviteCode()
+	if err != nil {
+		return "", nil, fmt.Errorf("mesh: generate invite code: %w", err)
+	}
+	_, err = r.pool.Exec(ctx,
+		`UPDATE mesh_networks SET invite_code = $2, invite_expires_at = $3, updated_at = NOW() WHERE id = $1`,
+		meshID, newCode, expiresAt,
+	)
+	if err != nil {
+		return "", nil, fmt.Errorf("mesh: regenerate invite code: %w", err)
+	}
+	return newCode, expiresAt, nil
+}
+
+// DeleteStaleSessions removes session meshes that have not been updated in the
+// given staleness window. This cleans up orphaned session meshes when the
+// extension is closed abruptly without calling DELETE /mesh/auto.
+func (r *MeshRepo) DeleteStaleSessions(ctx context.Context, olderThan time.Duration) (int64, error) {
+	tag, err := r.pool.Exec(ctx,
+		`DELETE FROM mesh_networks WHERE is_session = TRUE AND updated_at < NOW() - $1::interval`,
+		olderThan.String(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("mesh: delete stale sessions: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // UpdateMemberPeer links a member's mesh record to their active VPN peer.

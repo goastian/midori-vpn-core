@@ -113,6 +113,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 				r.Delete("/node", mh.DeactivateNode)
 				r.Get("/{id}", mh.GetMesh)
 				r.Delete("/{id}", mh.LeaveMesh)
+				r.Post("/{id}/invite", mh.RegenerateInvite)
 			})
 		})
 
@@ -161,6 +162,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 		jobCtx, jobCancel := context.WithCancel(context.Background())
 		go control.StartStatsSync(jobCtx, pool, wsHub)
 		go control.StartPeerCleanup(jobCtx, pool)
+		go control.StartSessionMeshCleanup(jobCtx, pool)
 		SetJobCancel(jobCancel)
 	}
 

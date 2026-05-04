@@ -105,8 +105,35 @@ func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub) {
 	}
 }
 
-// StartPeerCleanup runs every 5min: deactivates expired peers or peers
-// without a handshake in the last 30 minutes.
+// StartSessionMeshCleanup runs every hour and removes session meshes that
+// have not been updated in the last 2 hours. This reclaims orphaned session
+// meshes when the extension is closed without calling DELETE /mesh/auto.
+func StartSessionMeshCleanup(parentCtx context.Context, pool *pgxpool.Pool) {
+	meshRepo := repo.NewMeshRepo(pool)
+
+	const staleWindow = 2 * time.Hour
+	slog.Info("job started", "job", "session-mesh-cleanup", "interval", "1h", "stale_threshold", "2h")
+
+	for {
+		select {
+		case <-parentCtx.Done():
+			slog.Info("job stopped", "job", "session-mesh-cleanup")
+			return
+		case <-time.After(time.Hour):
+		}
+		ctx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
+
+		deleted, err := meshRepo.DeleteStaleSessions(ctx, staleWindow)
+		if err != nil {
+			slog.Error("session-mesh-cleanup error", "error", err)
+		} else if deleted > 0 {
+			slog.Info("session-mesh-cleanup removed stale sessions", "count", deleted)
+		}
+
+		cancel()
+	}
+}
+
 func StartPeerCleanup(parentCtx context.Context, pool *pgxpool.Pool) {
 	serverRepo := repo.NewServerRepo(pool)
 	peerRepo := repo.NewPeerRepo(pool)

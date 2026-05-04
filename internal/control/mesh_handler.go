@@ -80,10 +80,10 @@ func sanitizeMeshName(s string) string {
 // ═══════════════════════════════════════════════════════════════════════════
 
 type createMeshRequest struct {
-	Name               string `json:"name"`
-	Description        string `json:"description"`
-	MaxMembers         int    `json:"max_members"`
-	InviteExpiresInDays int   `json:"invite_expires_in_days"`
+	Name                 string `json:"name"`
+	Description          string `json:"description"`
+	MaxMembers           int    `json:"max_members"`
+	InviteExpiresInHours int    `json:"invite_expires_in_hours"`
 }
 
 func (h *MeshHandler) CreateMesh(w http.ResponseWriter, r *http.Request) {
@@ -130,8 +130,8 @@ func (h *MeshHandler) CreateMesh(w http.ResponseWriter, r *http.Request) {
 		Subnet:      subnet,
 		MaxMembers:  req.MaxMembers,
 	}
-	if req.InviteExpiresInDays > 0 {
-		exp := time.Now().UTC().AddDate(0, 0, req.InviteExpiresInDays)
+	if req.InviteExpiresInHours > 0 {
+		exp := time.Now().UTC().Add(time.Duration(req.InviteExpiresInHours) * time.Hour)
 		mesh.InviteExpiresAt = &exp
 	}
 
@@ -709,6 +709,67 @@ func (h *MeshHandler) DeleteAutoMesh(w http.ResponseWriter, r *http.Request) {
 		map[string]interface{}{"deleted": deleted}, r.RemoteAddr)
 
 	respond.JsonOK(w, map[string]int{"deleted": deleted}, http.StatusOK)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// POST /mesh/{id}/invite — regenerate invite code (owner only)
+// ═══════════════════════════════════════════════════════════════════════════
+
+type regenerateInviteRequest struct {
+	ExpiresInHours int `json:"expires_in_hours"`
+}
+
+type regenerateInviteResponse struct {
+	InviteCode      string     `json:"invite_code"`
+	InviteExpiresAt *time.Time `json:"invite_expires_at,omitempty"`
+}
+
+func (h *MeshHandler) RegenerateInvite(w http.ResponseWriter, r *http.Request) {
+	user := auth.GetUser(r)
+
+	meshID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		respond.JsonError(w, "invalid mesh id", http.StatusBadRequest)
+		return
+	}
+
+	mesh, err := h.meshRepo.GetByID(r.Context(), meshID)
+	if err != nil {
+		respond.JsonError(w, "mesh not found", http.StatusNotFound)
+		return
+	}
+
+	if mesh.OwnerID != user.ID {
+		respond.JsonError(w, "only the mesh owner can regenerate the invite code", http.StatusForbidden)
+		return
+	}
+
+	var req regenerateInviteRequest
+	// Body is optional — empty body is a valid non-expiring request.
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			respond.JsonError(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+	}
+
+	var expiresAt *time.Time
+	if req.ExpiresInHours > 0 {
+		exp := time.Now().UTC().Add(time.Duration(req.ExpiresInHours) * time.Hour)
+		expiresAt = &exp
+	}
+
+	newCode, newExpiry, err := h.meshRepo.RegenerateInviteCode(r.Context(), meshID, expiresAt)
+	if err != nil {
+		slog.Error("mesh: regenerate invite code error", "mesh_id", meshID, "error", err)
+		respond.JsonError(w, "failed to regenerate invite code", http.StatusInternalServerError)
+		return
+	}
+
+	h.auditRepo.Log(r.Context(), &user.ID, "mesh.invite.regenerate",
+		map[string]interface{}{"mesh_id": meshID}, r.RemoteAddr)
+
+	respond.JsonOK(w, regenerateInviteResponse{InviteCode: newCode, InviteExpiresAt: newExpiry}, http.StatusOK)
 }
 
 // DELETE /mesh/node — deactivate; leaves or deletes every mesh the user belongs to
