@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -215,7 +216,7 @@ func (s *Server) dialTarget(ctx context.Context, sub string, target string) (net
 // dialViaProxy chains an HTTP CONNECT through an upstream proxy at host:port
 // to reach target.
 func dialViaProxy(proxyHost string, proxyPort int, target string) (net.Conn, error) {
-	proxyAddr := fmt.Sprintf("%s:%d", proxyHost, proxyPort)
+	proxyAddr := net.JoinHostPort(proxyHost, strconv.Itoa(proxyPort))
 	conn, err := net.DialTimeout("tcp", proxyAddr, 10*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("dial exit proxy %s: %w", proxyAddr, err)

@@ -23,18 +23,18 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	coreMaxRetries       = 3
-	coreRetryBaseDelay   = 500 * time.Millisecond
-	coreRequestTimeout   = 10 * time.Second
-	cbFailureThreshold   = 5
-	cbResetTimeout       = 30 * time.Second
+	coreMaxRetries     = 3
+	coreRetryBaseDelay = 500 * time.Millisecond
+	coreRequestTimeout = 10 * time.Second
+	cbFailureThreshold = 5
+	cbResetTimeout     = 30 * time.Second
 )
 
 var (
-	coreHTTP = &http.Client{Timeout: coreRequestTimeout}
-	coreTLSSkipVerify bool
+	coreHTTP              = &http.Client{Timeout: coreRequestTimeout}
+	coreTLSSkipVerify     bool
 	coreAllowInsecureHTTP bool
-	coreAllowedHosts map[string]bool
+	coreAllowedHosts      map[string]bool
 )
 
 // InitCoreClient configures the core HTTP client with TLS settings.
@@ -242,7 +242,7 @@ type CoreAddPeerResponse struct {
 }
 
 type CorePeerStatsResponse struct {
-	PublicKey      string `json:"public_key"`
+	PublicKey     string `json:"public_key"`
 	AllowedIP     string `json:"allowed_ip"`
 	LastHandshake string `json:"last_handshake"`
 	BytesSent     int64  `json:"tx_bytes"`

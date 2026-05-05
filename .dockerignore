@@ -11,7 +11,7 @@ Dockerfile
 video.mp4
 *.md
 !README.MD
-web/node_modules/
-web/dist/
-***midorivpn-extension/
-***midori-vpn-control/
+package-lock.json
+midori-vpn-control/
+midorivpn-desktop/
+midorivpn-extension/

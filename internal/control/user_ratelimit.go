@@ -11,10 +11,10 @@ import (
 // stale entries. It mirrors the IP-based limiter in internal/api/ratelimit.go
 // but is keyed by user ID string instead of IP address.
 type userRateLimiter struct {
-	mu       sync.Mutex
-	entries  map[string]*userEntry
-	rps      rate.Limit
-	burst    int
+	mu      sync.Mutex
+	entries map[string]*userEntry
+	rps     rate.Limit
+	burst   int
 }
 
 type userEntry struct {

@@ -10,22 +10,35 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/repo"
 )
 
+const (
+	statsSyncInterval          = 60 * time.Second
+	statsSyncTimeout           = 30 * time.Second
+	sessionMeshCleanupInterval = time.Hour
+	sessionMeshStaleWindow     = 2 * time.Hour
+	sessionMeshCleanupTimeout  = 30 * time.Second
+	peerCleanupInterval        = 5 * time.Minute
+	peerCleanupStaleWindow     = 30 * time.Minute
+	peerCleanupTimeout         = 60 * time.Second
+)
+
 // StartStatsSync runs every 60s: syncs peer stats from all cores via REST
 // and broadcasts updated stats to WebSocket clients.
 func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub) {
 	serverRepo := repo.NewServerRepo(pool)
 	peerRepo := repo.NewPeerRepo(pool)
 
-	slog.Info("job started", "job", "stats-sync", "interval", "60s")
+	slog.Info("job started", "job", "stats-sync", "interval", statsSyncInterval.String())
+	ticker := time.NewTicker(statsSyncInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-parentCtx.Done():
 			slog.Info("job stopped", "job", "stats-sync")
 			return
-		case <-time.After(60 * time.Second):
+		case <-ticker.C:
 		}
-		ctx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
+		ctx, cancel := context.WithTimeout(parentCtx, statsSyncTimeout)
 
 		servers, err := serverRepo.ListAll(ctx)
 		if err != nil {
@@ -111,19 +124,20 @@ func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub) {
 func StartSessionMeshCleanup(parentCtx context.Context, pool *pgxpool.Pool) {
 	meshRepo := repo.NewMeshRepo(pool)
 
-	const staleWindow = 2 * time.Hour
-	slog.Info("job started", "job", "session-mesh-cleanup", "interval", "1h", "stale_threshold", "2h")
+	slog.Info("job started", "job", "session-mesh-cleanup", "interval", sessionMeshCleanupInterval.String(), "stale_threshold", sessionMeshStaleWindow.String())
+	ticker := time.NewTicker(sessionMeshCleanupInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-parentCtx.Done():
 			slog.Info("job stopped", "job", "session-mesh-cleanup")
 			return
-		case <-time.After(time.Hour):
+		case <-ticker.C:
 		}
-		ctx, cancel := context.WithTimeout(parentCtx, 30*time.Second)
+		ctx, cancel := context.WithTimeout(parentCtx, sessionMeshCleanupTimeout)
 
-		deleted, err := meshRepo.DeleteStaleSessions(ctx, staleWindow)
+		deleted, err := meshRepo.DeleteStaleSessions(ctx, sessionMeshStaleWindow)
 		if err != nil {
 			slog.Error("session-mesh-cleanup error", "error", err)
 		} else if deleted > 0 {
@@ -139,18 +153,20 @@ func StartPeerCleanup(parentCtx context.Context, pool *pgxpool.Pool) {
 	peerRepo := repo.NewPeerRepo(pool)
 	auditRepo := repo.NewAuditRepo(pool)
 
-	slog.Info("job started", "job", "peer-cleanup", "interval", "5min", "stale_threshold", "30min")
+	slog.Info("job started", "job", "peer-cleanup", "interval", peerCleanupInterval.String(), "stale_threshold", peerCleanupStaleWindow.String())
+	ticker := time.NewTicker(peerCleanupInterval)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-parentCtx.Done():
 			slog.Info("job stopped", "job", "peer-cleanup")
 			return
-		case <-time.After(5 * time.Minute):
+		case <-ticker.C:
 		}
-		ctx, cancel := context.WithTimeout(parentCtx, 60*time.Second)
+		ctx, cancel := context.WithTimeout(parentCtx, peerCleanupTimeout)
 
-		stalePeers, err := peerRepo.ListStale(ctx, 30*time.Minute)
+		stalePeers, err := peerRepo.ListStale(ctx, peerCleanupStaleWindow)
 		if err != nil {
 			slog.Error("peer-cleanup list stale error", "error", err)
 			cancel()

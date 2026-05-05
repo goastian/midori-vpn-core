@@ -425,7 +425,7 @@ func (m *Manager) AddPeer(pubkeyStr string, keepalive int) (string, error) {
 	ka := time.Duration(keepalive) * time.Second
 	peerCfg := wgtypes.PeerConfig{
 		PublicKey:                   pubKey,
-		AllowedIPs:                 []net.IPNet{*ipNet},
+		AllowedIPs:                  []net.IPNet{*ipNet},
 		PersistentKeepaliveInterval: &ka,
 	}
 
@@ -455,7 +455,7 @@ func (m *Manager) RemovePeer(pubkeyStr string) error {
 
 	peerCfg := wgtypes.PeerConfig{
 		PublicKey: pubKey,
-		Remove:   true,
+		Remove:    true,
 	}
 
 	if err := m.client.ConfigureDevice(m.cfg.WGInterface, wgtypes.Config{
@@ -497,8 +497,8 @@ func (m *Manager) UpdatePeer(pubkeyStr string, keepalive int) error {
 	ka := time.Duration(keepalive) * time.Second
 	peerCfg := wgtypes.PeerConfig{
 		PublicKey:                   pubKey,
-		UpdateOnly:                 true,
-		AllowedIPs:                 []net.IPNet{*ipNet},
+		UpdateOnly:                  true,
+		AllowedIPs:                  []net.IPNet{*ipNet},
 		PersistentKeepaliveInterval: &ka,
 	}
 
@@ -686,9 +686,9 @@ func (m *Manager) AddMeshIP(pubkeyStr, meshIP string) error {
 	meshNet := &net.IPNet{IP: meshIPParsed.To4(), Mask: net.CIDRMask(32, 32)}
 
 	peerCfg := wgtypes.PeerConfig{
-		PublicKey:      pubKey,
-		UpdateOnly:     true,
-		AllowedIPs:     []net.IPNet{*vpnNet, *meshNet},
+		PublicKey:         pubKey,
+		UpdateOnly:        true,
+		AllowedIPs:        []net.IPNet{*vpnNet, *meshNet},
 		ReplaceAllowedIPs: true,
 	}
 

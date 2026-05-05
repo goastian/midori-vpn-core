@@ -17,14 +17,12 @@ import (
 
 // ExitNodeHandler handles the exit-node sub-routes under /api/v1/control/mesh.
 type ExitNodeHandler struct {
-	repo     *repo.ExitNodeRepo
-	meshRepo *repo.MeshRepo
+	repo *repo.ExitNodeRepo
 }
 
 func NewExitNodeHandler(pool *pgxpool.Pool) *ExitNodeHandler {
 	return &ExitNodeHandler{
-		repo:     repo.NewExitNodeRepo(pool),
-		meshRepo: repo.NewMeshRepo(pool),
+		repo: repo.NewExitNodeRepo(pool),
 	}
 }
 
@@ -141,10 +139,9 @@ func (h *ExitNodeHandler) SetExitNode(w http.ResponseWriter, r *http.Request) {
 	callerID := user.ID
 
 	var req struct {
-		UserID      uuid.UUID `json:"user_id"`
-		MeshIP      string    `json:"mesh_ip"`
-		ProxyScheme string    `json:"proxy_scheme"`
-		ProxyPort   int       `json:"proxy_port"`
+		MeshIP      string `json:"mesh_ip"`
+		ProxyScheme string `json:"proxy_scheme"`
+		ProxyPort   int    `json:"proxy_port"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respond.JsonError(w, "invalid request body", http.StatusBadRequest)

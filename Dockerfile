@@ -4,8 +4,12 @@ FROM golang:1.22-alpine AS builder
 RUN apk add --no-cache git
 
 WORKDIR /src
-COPY . .
-RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -o /vpn-core ./cmd/vpn-core
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY cmd ./cmd
+COPY internal ./internal
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /vpn-core ./cmd/vpn-core
 
 # ── Stage 2: Runtime ──
 FROM alpine:3.20

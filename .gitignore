@@ -8,7 +8,6 @@
 *.test
 *.out
 vendor/
-*.md
 
 # Config & secrets
 .env
@@ -27,9 +26,10 @@ Thumbs.db
 # Docker
 docker/
 
-# Node / Vue (control frontend)
-control/node_modules/
-control/dist/
+# Independent local checkouts
+midori-vpn-control/
+midorivpn-desktop/
+midorivpn-extension/
 
 # Legacy
 __pycache__

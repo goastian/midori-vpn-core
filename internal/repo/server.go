@@ -22,6 +22,17 @@ type ServerRepo struct {
 	cacheTTL     time.Duration
 }
 
+const (
+	serverColumnsPublic = `id, name, host, endpoint, port, wg_port, public_key, location, country_code,
+		max_peers, current_peers, is_active, proxy_port, created_at, updated_at`
+	serverColumnsWithToken = `id, name, host, endpoint, port, wg_port, public_key, core_token, location, country_code,
+		max_peers, current_peers, is_active, proxy_port, created_at, updated_at`
+)
+
+type rowScanner interface {
+	Scan(dest ...interface{}) error
+}
+
 func NewServerRepo(pool *pgxpool.Pool) *ServerRepo {
 	return &ServerRepo{
 		pool:     pool,
@@ -50,22 +61,12 @@ func (r *ServerRepo) Create(ctx context.Context, s *models.VPNServer) error {
 }
 
 func (r *ServerRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.VPNServer, error) {
-	query := `
-		SELECT id, name, host, endpoint, port, wg_port, public_key, core_token, location, country_code,
-		       max_peers, current_peers, is_active, proxy_port, created_at, updated_at
-		FROM vpn_servers WHERE id = $1
-	`
-	var s models.VPNServer
-	err := r.pool.QueryRow(ctx, query, id).Scan(
-		&s.ID, &s.Name, &s.Host, &s.Endpoint, &s.Port, &s.WGPort, &s.PublicKey, &s.CoreToken,
-		&s.Location, &s.CountryCode, &s.MaxPeers, &s.CurrentPeers, &s.IsActive, &s.ProxyPort,
-		&s.CreatedAt, &s.UpdatedAt,
-	)
+	query := `SELECT ` + serverColumnsWithToken + ` FROM vpn_servers WHERE id = $1`
+	s, err := scanServerWithToken(r.pool.QueryRow(ctx, query, id))
 	if err != nil {
 		return nil, fmt.Errorf("get server: %w", err)
 	}
-	s.ApplyCapabilities()
-	return &s, nil
+	return s, nil
 }
 
 func (r *ServerRepo) ListActive(ctx context.Context) ([]models.VPNServer, error) {
@@ -79,11 +80,7 @@ func (r *ServerRepo) ListActive(ctx context.Context) ([]models.VPNServer, error)
 	}
 	r.cacheMu.RUnlock()
 
-	query := `
-		SELECT id, name, host, endpoint, port, wg_port, public_key, location, country_code,
-		       max_peers, current_peers, is_active, proxy_port, created_at, updated_at
-		FROM vpn_servers WHERE is_active = TRUE ORDER BY name
-	`
+	query := `SELECT ` + serverColumnsPublic + ` FROM vpn_servers WHERE is_active = TRUE ORDER BY name`
 	rows, err := r.pool.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("list servers: %w", err)
@@ -92,16 +89,11 @@ func (r *ServerRepo) ListActive(ctx context.Context) ([]models.VPNServer, error)
 
 	var servers []models.VPNServer
 	for rows.Next() {
-		var s models.VPNServer
-		if err := rows.Scan(
-			&s.ID, &s.Name, &s.Host, &s.Endpoint, &s.Port, &s.WGPort, &s.PublicKey,
-			&s.Location, &s.CountryCode, &s.MaxPeers, &s.CurrentPeers, &s.IsActive, &s.ProxyPort,
-			&s.CreatedAt, &s.UpdatedAt,
-		); err != nil {
+		s, err := scanServerPublic(rows)
+		if err != nil {
 			return nil, err
 		}
-		s.ApplyCapabilities()
-		servers = append(servers, s)
+		servers = append(servers, *s)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list servers rows: %w", err)
@@ -118,11 +110,7 @@ func (r *ServerRepo) ListActive(ctx context.Context) ([]models.VPNServer, error)
 }
 
 func (r *ServerRepo) ListAll(ctx context.Context) ([]models.VPNServer, error) {
-	query := `
-		SELECT id, name, host, endpoint, port, wg_port, public_key, core_token, location, country_code,
-		       max_peers, current_peers, is_active, proxy_port, created_at, updated_at
-		FROM vpn_servers ORDER BY name
-	`
+	query := `SELECT ` + serverColumnsWithToken + ` FROM vpn_servers ORDER BY name`
 	rows, err := r.pool.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("list all servers: %w", err)
@@ -131,16 +119,11 @@ func (r *ServerRepo) ListAll(ctx context.Context) ([]models.VPNServer, error) {
 
 	var servers []models.VPNServer
 	for rows.Next() {
-		var s models.VPNServer
-		if err := rows.Scan(
-			&s.ID, &s.Name, &s.Host, &s.Endpoint, &s.Port, &s.WGPort, &s.PublicKey, &s.CoreToken,
-			&s.Location, &s.CountryCode, &s.MaxPeers, &s.CurrentPeers, &s.IsActive, &s.ProxyPort,
-			&s.CreatedAt, &s.UpdatedAt,
-		); err != nil {
+		s, err := scanServerWithToken(rows)
+		if err != nil {
 			return nil, err
 		}
-		s.ApplyCapabilities()
-		servers = append(servers, s)
+		servers = append(servers, *s)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list all servers rows: %w", err)
@@ -150,24 +133,17 @@ func (r *ServerRepo) ListAll(ctx context.Context) ([]models.VPNServer, error) {
 
 func (r *ServerRepo) LeastLoaded(ctx context.Context) (*models.VPNServer, error) {
 	query := `
-		SELECT id, name, host, endpoint, port, wg_port, public_key, core_token, location, country_code,
-		       max_peers, current_peers, is_active, proxy_port, created_at, updated_at
+		SELECT ` + serverColumnsWithToken + `
 		FROM vpn_servers
 		WHERE is_active = TRUE AND current_peers < max_peers
 		ORDER BY (current_peers::float / GREATEST(max_peers, 1)) ASC
 		LIMIT 1
 	`
-	var s models.VPNServer
-	err := r.pool.QueryRow(ctx, query).Scan(
-		&s.ID, &s.Name, &s.Host, &s.Endpoint, &s.Port, &s.WGPort, &s.PublicKey, &s.CoreToken,
-		&s.Location, &s.CountryCode, &s.MaxPeers, &s.CurrentPeers, &s.IsActive, &s.ProxyPort,
-		&s.CreatedAt, &s.UpdatedAt,
-	)
+	s, err := scanServerWithToken(r.pool.QueryRow(ctx, query))
 	if err != nil {
 		return nil, fmt.Errorf("no available server: %w", err)
 	}
-	s.ApplyCapabilities()
-	return &s, nil
+	return s, nil
 }
 
 func (r *ServerRepo) Update(ctx context.Context, s *models.VPNServer) error {
@@ -225,4 +201,30 @@ func (r *ServerRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	defer r.InvalidateCache()
 	_, err := r.pool.Exec(ctx, `DELETE FROM vpn_servers WHERE id = $1`, id)
 	return err
+}
+
+func scanServerPublic(row rowScanner) (*models.VPNServer, error) {
+	var s models.VPNServer
+	if err := row.Scan(
+		&s.ID, &s.Name, &s.Host, &s.Endpoint, &s.Port, &s.WGPort, &s.PublicKey,
+		&s.Location, &s.CountryCode, &s.MaxPeers, &s.CurrentPeers, &s.IsActive, &s.ProxyPort,
+		&s.CreatedAt, &s.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+	s.ApplyCapabilities()
+	return &s, nil
+}
+
+func scanServerWithToken(row rowScanner) (*models.VPNServer, error) {
+	var s models.VPNServer
+	if err := row.Scan(
+		&s.ID, &s.Name, &s.Host, &s.Endpoint, &s.Port, &s.WGPort, &s.PublicKey, &s.CoreToken,
+		&s.Location, &s.CountryCode, &s.MaxPeers, &s.CurrentPeers, &s.IsActive, &s.ProxyPort,
+		&s.CreatedAt, &s.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+	s.ApplyCapabilities()
+	return &s, nil
 }

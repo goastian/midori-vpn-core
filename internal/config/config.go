@@ -65,8 +65,8 @@ type Config struct {
 	VpnDNS string // comma-separated DNS servers pushed to VPN clients
 
 	// HTTP CONNECT proxy
-	ProxyEnabled        bool // enable the HTTP CONNECT forward proxy
-	ProxyPort           int  // TCP port for the forward proxy (default 8888)
+	ProxyEnabled         bool // enable the HTTP CONNECT forward proxy
+	ProxyPort            int  // TCP port for the forward proxy (default 8888)
 	ProxyMaxConnsPerUser int  // max concurrent CONNECT tunnels per user (default 20)
 
 	// WebSocket limits per plan
@@ -127,8 +127,8 @@ func Load() *Config {
 
 		VpnDNS: getEnv("VPN_DNS", "1.1.1.1, 8.8.8.8"),
 
-		ProxyEnabled:        getEnvBool("PROXY_ENABLED", false),
-		ProxyPort:           getEnvInt("PROXY_PORT", 8888),
+		ProxyEnabled:         getEnvBool("PROXY_ENABLED", false),
+		ProxyPort:            getEnvInt("PROXY_PORT", 8888),
 		ProxyMaxConnsPerUser: getEnvInt("PROXY_MAX_CONNS_PER_USER", 20),
 
 		WSMaxGlobal: getEnvInt("WS_MAX_GLOBAL", 1000),
@@ -137,7 +137,6 @@ func Load() *Config {
 		WSMaxMedium: getEnvInt("WS_MAX_MEDIUM", 3),
 		WSMaxPro:    getEnvInt("WS_MAX_PRO", 5),
 		WSMaxAdmin:  getEnvInt("WS_MAX_ADMIN", 10),
-
 	}
 
 	if cfg.AuthToken == "" {
