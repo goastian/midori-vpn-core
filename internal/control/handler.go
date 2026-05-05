@@ -1009,6 +1009,7 @@ func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, "failed to create server", http.StatusInternalServerError)
 		return
 	}
+	server.ApplyCapabilities()
 
 	admin := auth.GetUser(r)
 	h.auditRepo.Log(r.Context(), &admin.ID, "admin.server.create",
@@ -1116,6 +1117,7 @@ func (h *Handler) AdminUpdateServer(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, "failed to update server", http.StatusInternalServerError)
 		return
 	}
+	server.ApplyCapabilities()
 
 	admin := auth.GetUser(r)
 	h.auditRepo.Log(r.Context(), &admin.ID, "admin.server.update",

@@ -1,39 +1,36 @@
-# ── Go (vpn-core) ────────────────────────────────────────────────────────
+# Go
 /vpn-core
 /vpn-core.exe
-*.test
-*.out
-vendor/
-
-# ── Compiled / binary ────────────────────────────────────────────────────
 *.exe
 *.dll
 *.so
 *.dylib
+*.test
+*.out
+vendor/
+*.md
 
-# ── Config & secrets ─────────────────────────────────────────────────────
+# Config & secrets
 .env
-.env.*
-!.env.example
 tmp/
 
-# ── IDE ──────────────────────────────────────────────────────────────────
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# ── OS ───────────────────────────────────────────────────────────────────
+# OS
 .DS_Store
 Thumbs.db
 
-# ── Docker ───────────────────────────────────────────────────────────────
+# Docker
 docker/
 
-# ── Node / Vue (midori-vpn-control) ──────────────────────────────────────
-midori-vpn-control/node_modules/
-midori-vpn-control/dist/
+# Node / Vue (control frontend)
+control/node_modules/
+control/dist/
 
-# ── Legacy ───────────────────────────────────────────────────────────────
+# Legacy
 __pycache__
 venv/

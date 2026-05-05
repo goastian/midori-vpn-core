@@ -64,6 +64,7 @@ func (r *ServerRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.VPNServ
 	if err != nil {
 		return nil, fmt.Errorf("get server: %w", err)
 	}
+	s.ApplyCapabilities()
 	return &s, nil
 }
 
@@ -99,6 +100,7 @@ func (r *ServerRepo) ListActive(ctx context.Context) ([]models.VPNServer, error)
 		); err != nil {
 			return nil, err
 		}
+		s.ApplyCapabilities()
 		servers = append(servers, s)
 	}
 	if err := rows.Err(); err != nil {
@@ -137,6 +139,7 @@ func (r *ServerRepo) ListAll(ctx context.Context) ([]models.VPNServer, error) {
 		); err != nil {
 			return nil, err
 		}
+		s.ApplyCapabilities()
 		servers = append(servers, s)
 	}
 	if err := rows.Err(); err != nil {
@@ -163,6 +166,7 @@ func (r *ServerRepo) LeastLoaded(ctx context.Context) (*models.VPNServer, error)
 	if err != nil {
 		return nil, fmt.Errorf("no available server: %w", err)
 	}
+	s.ApplyCapabilities()
 	return &s, nil
 }
 

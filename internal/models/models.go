@@ -20,22 +20,31 @@ type User struct {
 }
 
 type VPNServer struct {
-	ID           uuid.UUID `json:"id"`
-	Name         string    `json:"name"`
-	Host         string    `json:"host"`
-	Endpoint     string    `json:"endpoint"`
-	Port         int       `json:"port"`
-	WGPort       int       `json:"wg_port"`
-	PublicKey    string    `json:"public_key"`
-	CoreToken    string    `json:"-"`
-	Location     string    `json:"location"`
-	CountryCode  string    `json:"country_code"`
-	MaxPeers     int       `json:"max_peers"`
-	CurrentPeers int       `json:"current_peers"`
-	IsActive     bool      `json:"is_active"`
-	ProxyPort    int       `json:"proxy_port"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID                uuid.UUID `json:"id"`
+	Name              string    `json:"name"`
+	Host              string    `json:"host"`
+	Endpoint          string    `json:"endpoint"`
+	Port              int       `json:"port"`
+	WGPort            int       `json:"wg_port"`
+	PublicKey         string    `json:"public_key"`
+	CoreToken         string    `json:"-"`
+	Location          string    `json:"location"`
+	CountryCode       string    `json:"country_code"`
+	MaxPeers          int       `json:"max_peers"`
+	CurrentPeers      int       `json:"current_peers"`
+	IsActive          bool      `json:"is_active"`
+	ProxyPort         int       `json:"proxy_port"`
+	SupportsWireGuard bool      `json:"supports_wireguard"`
+	SupportsProxy     bool      `json:"supports_proxy"`
+	SupportsMeshExit  bool      `json:"supports_mesh_exit"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+func (s *VPNServer) ApplyCapabilities() {
+	s.SupportsWireGuard = s.IsActive && s.WGPort > 0 && s.PublicKey != ""
+	s.SupportsProxy = s.IsActive && s.ProxyPort > 0
+	s.SupportsMeshExit = s.SupportsProxy
 }
 
 type Peer struct {
@@ -72,11 +81,11 @@ type ConnectionConfig struct {
 }
 
 type AdminStats struct {
-	TotalUsers         int   `json:"total_users"`
-	TotalServers       int   `json:"total_servers"`
-	ActiveServers      int   `json:"active_servers"`
-	TotalPeers         int   `json:"total_peers"`
-	ActivePeers        int   `json:"active_peers"`
-	TotalBytesSent     int64 `json:"total_bytes_sent"`
-	TotalBytesRecv     int64 `json:"total_bytes_received"`
+	TotalUsers     int   `json:"total_users"`
+	TotalServers   int   `json:"total_servers"`
+	ActiveServers  int   `json:"active_servers"`
+	TotalPeers     int   `json:"total_peers"`
+	ActivePeers    int   `json:"active_peers"`
+	TotalBytesSent int64 `json:"total_bytes_sent"`
+	TotalBytesRecv int64 `json:"total_bytes_received"`
 }

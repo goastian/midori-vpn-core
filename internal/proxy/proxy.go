@@ -204,7 +204,7 @@ func (s *Server) dialTarget(ctx context.Context, sub string, target string) (net
 		if err == nil {
 			exitRepo := repo.NewExitNodeRepo(s.pool)
 			sel, err := exitRepo.GetUserExitNode(ctx, userUUID)
-			if err == nil && sel != nil && sel.MeshIP != "" && sel.ProxyPort > 0 {
+			if err == nil && sel != nil && sel.MeshIP != "" && sel.ProxyPort > 0 && sel.ProxyScheme == "http-connect" {
 				return dialViaProxy(sel.MeshIP, sel.ProxyPort, target)
 			}
 		}
