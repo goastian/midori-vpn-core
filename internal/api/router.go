@@ -100,6 +100,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 
 			// Mesh networking
 			mh := control.NewMeshHandler(pool, mgr, wsHub)
+			exitH := control.NewExitNodeHandler(pool)
 			r.Route("/mesh", func(r chi.Router) {
 				r.Post("/", mh.CreateMesh)
 				r.Get("/", mh.ListMyMeshes)
@@ -111,6 +112,12 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 				r.Get("/node", mh.NodeStatus)
 				r.Post("/node", mh.ActivateNode)
 				r.Delete("/node", mh.DeactivateNode)
+				// Exit node management
+				r.Get("/exit-nodes", exitH.ListExitNodes)
+				r.Post("/exit-node/register", exitH.RegisterExitNode)
+				r.Delete("/exit-node/register", exitH.DeregisterExitNode)
+				r.Put("/exit-node", exitH.SetExitNode)
+				r.Delete("/exit-node", exitH.ClearExitNode)
 				r.Get("/{id}", mh.GetMesh)
 				r.Delete("/{id}", mh.LeaveMesh)
 				r.Post("/{id}/invite", mh.RegenerateInvite)

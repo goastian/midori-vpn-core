@@ -59,7 +59,7 @@ func main() {
 
 		// Start HTTP CONNECT proxy if enabled
 		if cfg.ProxyEnabled {
-			proxySrv := proxy.New(cfg, jwks)
+			proxySrv := proxy.NewWithDB(cfg, jwks, pool)
 			go func() {
 				if err := proxySrv.Start(shutdownCtx); err != nil {
 					slog.Error("proxy server stopped", "error", err)

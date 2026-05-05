@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -12,10 +13,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/lestrrat-go/jwx/v2/jwt"
 
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/config"
+	"github.com/goastian/midori-vpn-core/internal/repo"
 )
 
 // Server implements an HTTP CONNECT forward proxy with JWT authentication.
@@ -23,6 +27,9 @@ type Server struct {
 	cfg  *config.Config
 	jwks *auth.JWKSProvider
 	addr string
+
+	// Optional DB pool for exit-node lookup
+	pool *pgxpool.Pool
 
 	// Per-user concurrency limiter
 	mu       sync.Mutex
@@ -39,6 +46,14 @@ func New(cfg *config.Config, jwks *auth.JWKSProvider) *Server {
 		active:   make(map[string]int),
 		maxConns: cfg.ProxyMaxConnsPerUser,
 	}
+}
+
+// NewWithDB creates a proxy server that can chain connections through a user's
+// selected exit node when one is configured in the database.
+func NewWithDB(cfg *config.Config, jwks *auth.JWKSProvider, pool *pgxpool.Pool) *Server {
+	s := New(cfg, jwks)
+	s.pool = pool
+	return s
 }
 
 // Start listens and serves until the context is cancelled.
@@ -106,8 +121,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Block requests to privileged ports (< 1) — port is already validated by SplitHostPort
 	_ = port
 
-	// Dial the target
-	targetConn, err := net.DialTimeout("tcp", r.Host, 10*time.Second)
+	// Dial the target (or chain through exit node if configured)
+	targetConn, err := s.dialTarget(r.Context(), sub, r.Host)
 	if err != nil {
 		slog.Warn("proxy dial failed", "user", sub, "target", r.Host, "error", err)
 		http.Error(w, "failed to connect to target", http.StatusBadGateway)
@@ -179,6 +194,55 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"bytes_up", bytesUp,
 		"bytes_down", bytesDown,
 	)
+}
+
+// dialTarget opens a TCP connection to target, optionally chaining through
+// the user's selected exit-node proxy (CONNECT-over-CONNECT).
+func (s *Server) dialTarget(ctx context.Context, sub string, target string) (net.Conn, error) {
+	if s.pool != nil {
+		userUUID, err := uuid.Parse(sub)
+		if err == nil {
+			exitRepo := repo.NewExitNodeRepo(s.pool)
+			sel, err := exitRepo.GetUserExitNode(ctx, userUUID)
+			if err == nil && sel != nil && sel.MeshIP != "" && sel.ProxyPort > 0 {
+				return dialViaProxy(sel.MeshIP, sel.ProxyPort, target)
+			}
+		}
+	}
+	return net.DialTimeout("tcp", target, 10*time.Second)
+}
+
+// dialViaProxy chains an HTTP CONNECT through an upstream proxy at host:port
+// to reach target.
+func dialViaProxy(proxyHost string, proxyPort int, target string) (net.Conn, error) {
+	proxyAddr := fmt.Sprintf("%s:%d", proxyHost, proxyPort)
+	conn, err := net.DialTimeout("tcp", proxyAddr, 10*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("dial exit proxy %s: %w", proxyAddr, err)
+	}
+
+	// Send CONNECT request to upstream proxy (no auth — mesh-internal)
+	req := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
+	if _, err := conn.Write([]byte(req)); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("write CONNECT to exit proxy: %w", err)
+	}
+
+	// Read response: must be "HTTP/1.1 200 ..."
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("read CONNECT response from exit proxy: %w", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		conn.Close()
+		return nil, fmt.Errorf("exit proxy CONNECT failed: %s", resp.Status)
+	}
+
+	slog.Info("proxy chained via exit node", "exit_proxy", proxyAddr, "target", target)
+	return conn, nil
 }
 
 // authenticate extracts and validates the JWT from Proxy-Authorization header.
