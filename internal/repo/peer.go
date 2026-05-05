@@ -107,9 +107,12 @@ func (r *PeerRepo) ListByServer(ctx context.Context, serverID uuid.UUID) ([]mode
 
 func (r *PeerRepo) ListAll(ctx context.Context, limit, offset int) ([]models.Peer, error) {
 	query := `
-		SELECT id, user_id, server_id, public_key, assigned_ip, is_active, device_name,
-		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
-		FROM peers ORDER BY created_at DESC LIMIT $1 OFFSET $2
+		SELECT p.id, p.user_id, COALESCE(u.email, ''), p.server_id, p.public_key, p.assigned_ip,
+		       p.is_active, p.device_name, p.last_handshake, p.bytes_sent, p.bytes_received,
+		       p.created_at, p.expires_at
+		FROM peers p
+		LEFT JOIN users u ON u.id = p.user_id
+		ORDER BY p.created_at DESC LIMIT $1 OFFSET $2
 	`
 	rows, err := r.pool.Query(ctx, query, limit, offset)
 	if err != nil {
@@ -121,7 +124,7 @@ func (r *PeerRepo) ListAll(ctx context.Context, limit, offset int) ([]models.Pee
 	for rows.Next() {
 		var p models.Peer
 		if err := rows.Scan(
-			&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.AssignedIP, &p.IsActive, &p.DeviceName,
+			&p.ID, &p.UserID, &p.UserEmail, &p.ServerID, &p.PublicKey, &p.AssignedIP, &p.IsActive, &p.DeviceName,
 			&p.LastHandshake, &p.BytesSent, &p.BytesReceived, &p.CreatedAt, &p.ExpiresAt,
 		); err != nil {
 			return nil, err

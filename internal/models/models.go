@@ -50,6 +50,7 @@ func (s *VPNServer) ApplyCapabilities() {
 type Peer struct {
 	ID            uuid.UUID  `json:"id"`
 	UserID        uuid.UUID  `json:"user_id"`
+	UserEmail     string     `json:"user_email,omitempty"`
 	ServerID      uuid.UUID  `json:"server_id"`
 	PublicKey     string     `json:"public_key"`
 	AssignedIP    string     `json:"assigned_ip"`
@@ -65,6 +66,7 @@ type Peer struct {
 type AuditLog struct {
 	ID        uuid.UUID              `json:"id"`
 	UserID    *uuid.UUID             `json:"user_id,omitempty"`
+	UserEmail string                 `json:"user_email,omitempty"`
 	Action    string                 `json:"action"`
 	Metadata  map[string]interface{} `json:"metadata"`
 	IPAddress string                 `json:"ip_address"`
