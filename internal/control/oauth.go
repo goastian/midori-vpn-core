@@ -12,16 +12,18 @@ import (
 
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/config"
+	"github.com/goastian/midori-vpn-core/internal/repo"
 	"github.com/goastian/midori-vpn-core/internal/respond"
 )
 
 type OAuthHandler struct {
-	cfg                    *config.Config
-	allowedOrigins         []string
-	allowedExtensionOrigins []string // nil means any extension is allowed
+	cfg                     *config.Config
+	allowedOrigins          []string
+	allowedExtensionOrigins []string // nil means TOFU is active (DB-backed allow-list)
+	trustedExt              *repo.TrustedExtensionRepo
 }
 
-func NewOAuthHandler(cfg *config.Config) *OAuthHandler {
+func NewOAuthHandler(cfg *config.Config, trustedExt *repo.TrustedExtensionRepo) *OAuthHandler {
 	origins := make([]string, 0)
 	for _, o := range strings.Split(cfg.CORSAllowedOrigins, ",") {
 		o = strings.TrimSpace(o)
@@ -38,7 +40,18 @@ func NewOAuthHandler(cfg *config.Config) *OAuthHandler {
 		}
 	}
 
-	return &OAuthHandler{cfg: cfg, allowedOrigins: origins, allowedExtensionOrigins: extOrigins}
+	return &OAuthHandler{
+		cfg:                     cfg,
+		allowedOrigins:          origins,
+		allowedExtensionOrigins: extOrigins,
+		trustedExt:              trustedExt,
+	}
+}
+
+// isExtensionOrigin reports whether origin is a browser-extension URL.
+func isExtensionOrigin(origin string) bool {
+	return strings.HasPrefix(origin, "moz-extension://") ||
+		strings.HasPrefix(origin, "chrome-extension://")
 }
 
 // csrfCheck validates Origin (or Referer) header against allowed origins.
@@ -66,22 +79,41 @@ func (h *OAuthHandler) csrfCheck(w http.ResponseWriter, r *http.Request) bool {
 
 // isAllowedOrigin checks if the origin matches any of the configured CORS origins.
 func (h *OAuthHandler) isAllowedOrigin(origin string) bool {
-	// Browser extensions have dynamic origin URLs. If AllowedExtensionOrigins is
-	// configured, only those specific extension IDs are accepted. Otherwise, any
-	// extension origin is allowed (for development / self-hosted deployments).
-	if strings.HasPrefix(origin, "moz-extension://") ||
-		strings.HasPrefix(origin, "chrome-extension://") {
-		if len(h.allowedExtensionOrigins) == 0 {
-			slog.Warn("extension origin allowed because ALLOWED_EXTENSION_ORIGINS is not configured",
-				"origin", origin)
-			return true
-		}
-		for _, allowed := range h.allowedExtensionOrigins {
-			if origin == allowed {
-				return true
+	// Browser extensions have dynamic origin URLs.
+	//
+	// Resolution order:
+	//   1. If ALLOWED_EXTENSION_ORIGINS is set, only those exact origins pass.
+	//   2. Otherwise, fall back to TOFU: an origin is allowed if it has been
+	//      previously registered (via a successful OAuth callback) and is not
+	//      revoked.
+	//   3. If neither list is available, the request is rejected.
+	//
+	// New origins become trusted via the Callback handler, which performs the
+	// registration only after Authentik successfully exchanges the code.
+	if isExtensionOrigin(origin) {
+		if len(h.allowedExtensionOrigins) > 0 {
+			for _, allowed := range h.allowedExtensionOrigins {
+				if origin == allowed {
+					return true
+				}
 			}
+			slog.Warn("extension origin rejected: not in ALLOWED_EXTENSION_ORIGINS", "origin", origin)
+			return false
 		}
-		slog.Warn("extension origin rejected: not in ALLOWED_EXTENSION_ORIGINS", "origin", origin)
+		if h.trustedExt != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			ok, err := h.trustedExt.IsTrusted(ctx, origin)
+			if err != nil {
+				slog.Error("trusted extension origin lookup failed", "origin", origin, "error", err)
+				return false
+			}
+			if !ok {
+				slog.Warn("extension origin rejected: not yet registered (TOFU)", "origin", origin)
+			}
+			return ok
+		}
+		slog.Warn("extension origin rejected: no allow-list and no TOFU repo", "origin", origin)
 		return false
 	}
 
@@ -173,7 +205,9 @@ func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		form.Set("client_secret", h.cfg.AuthentikClientSecret)
 	}
 
-	tokenCtx, tokenCancel := context.WithTimeout(r.Context(), 15*time.Second)
+	// Use context.Background so that a client disconnect does not abort the
+	// token exchange mid-flight. The 15-second timeout still applies.
+	tokenCtx, tokenCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer tokenCancel()
 	tokenReq, err := http.NewRequestWithContext(tokenCtx, http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -288,7 +322,9 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		form.Set("code_verifier", req.CodeVerifier)
 	}
 
-	tokenCtx, tokenCancel := context.WithTimeout(r.Context(), 15*time.Second)
+	// Use context.Background so that a client disconnect does not abort the
+	// token exchange mid-flight. The 15-second timeout still applies.
+	tokenCtx, tokenCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer tokenCancel()
 	tokenReq, err := http.NewRequestWithContext(tokenCtx, http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -341,6 +377,23 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		"has_id_token", tokenResp.IDToken != "",
 		"expires_in", tokenResp.ExpiresIn,
 	)
+
+	// TOFU: register the requesting extension origin once Authentik confirmed
+	// the authorization code. Only runs when ALLOWED_EXTENSION_ORIGINS is empty
+	// (otherwise the static allow-list is authoritative). Failures here must
+	// not block the response — the user has already authenticated.
+	if h.trustedExt != nil && len(h.allowedExtensionOrigins) == 0 {
+		if origin := r.Header.Get("Origin"); isExtensionOrigin(origin) {
+			regCtx, regCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if err := h.trustedExt.Register(regCtx, origin, nil); err != nil {
+				slog.Warn("[AUTH] Callback failed to register trusted extension origin",
+					"origin", origin, "error", err)
+			} else {
+				slog.Info("[AUTH] Callback registered trusted extension origin", "origin", origin)
+			}
+			regCancel()
+		}
+	}
 
 	respond.JsonOK(w, tokenResp, http.StatusOK)
 }

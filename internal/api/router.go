@@ -15,6 +15,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/control"
 	"github.com/goastian/midori-vpn-core/internal/core"
+	"github.com/goastian/midori-vpn-core/internal/repo"
 	"github.com/goastian/midori-vpn-core/internal/wg"
 )
 
@@ -65,7 +66,8 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 
 	// Control API (JWT/Authentik protected) — only if DB is available
 	if pool != nil && jwks != nil {
-		oauthH := control.NewOAuthHandler(cfg)
+		trustedExtRepo := repo.NewTrustedExtensionRepo(pool)
+		oauthH := control.NewOAuthHandler(cfg, trustedExtRepo)
 		r.Post("/api/v1/auth/callback", oauthH.Callback)
 		r.Post("/api/v1/auth/refresh", oauthH.Refresh)
 		r.Post("/api/v1/auth/logout", oauthH.Logout)

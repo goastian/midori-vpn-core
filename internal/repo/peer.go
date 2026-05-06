@@ -175,6 +175,7 @@ func (r *PeerRepo) ListStale(ctx context.Context, noHandshakeSince time.Duration
 		  AND (
 		    (expires_at IS NOT NULL AND expires_at < NOW())
 		    OR (last_handshake IS NOT NULL AND last_handshake < NOW() - $1::interval)
+		    OR (last_handshake IS NULL AND created_at < NOW() - $1::interval)
 		  )
 	`
 	rows, err := r.pool.Query(ctx, query, fmt.Sprintf("%d seconds", int(noHandshakeSince.Seconds())))

@@ -589,12 +589,16 @@ func (h *MeshHandler) attachMemberToActivePeer(ctx context.Context, userID, mesh
 			continue
 		}
 		peerID := peers[i].ID
-		_ = h.meshRepo.UpdateMemberPeer(ctx, meshID, userID, &peerID)
 		if h.wgMgr != nil {
 			if wgErr := h.wgMgr.AddMeshIP(peers[i].PublicKey, meshIP); wgErr != nil {
+				// This peer is marked active in the DB but not present in WireGuard
+				// (e.g. the WG peer was removed while the DB record was not yet cleaned up).
+				// Skip and try the next active peer.
 				slog.Warn("mesh: could not add mesh IP to WireGuard", "peer_id", peerID, "error", wgErr)
+				continue
 			}
 		}
+		_ = h.meshRepo.UpdateMemberPeer(ctx, meshID, userID, &peerID)
 		return
 	}
 }
