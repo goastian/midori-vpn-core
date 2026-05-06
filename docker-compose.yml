@@ -25,6 +25,12 @@ services:
       # Host nginx proxies vpn.astian.org to 127.0.0.1:8085.
       # Keep the API bound to loopback only so it is not directly exposed.
       - "127.0.0.1:8085:8080/tcp"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 30s
@@ -40,6 +46,11 @@ services:
         condition: service_healthy
     networks:
       - vpn-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   postgres:
     image: docker.io/postgres:16-alpine
@@ -51,7 +62,7 @@ services:
     volumes:
       - pg-data:/var/lib/postgresql/data:Z
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U midori -d midori_vpn" ]
+      test: [ "CMD", "pg_isready", "-q", "-d", "midori_vpn", "-U", "midori" ]
       interval: 5s
       timeout: 5s
       retries: 5

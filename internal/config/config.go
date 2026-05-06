@@ -21,6 +21,10 @@ type Config struct {
 
 	// CORS
 	CORSAllowedOrigins string // comma-separated list of allowed origins
+	// Allowed browser-extension origins for CORS (comma-separated, e.g.
+	// "chrome-extension://abcdef...,moz-extension://xxxxxxxx-...").
+	// If empty, any extension origin is permitted (development default).
+	AllowedExtensionOrigins string
 
 	// WireGuard
 	WGInterface string
@@ -101,7 +105,8 @@ func Load() *Config {
 		ConfigDir:   getEnv("WG_CONFIG_DIR", "/etc/wireguard"),
 		Endpoint:    getEnv("WG_ENDPOINT", ""),
 
-		CORSAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", ""),
+		CORSAllowedOrigins:             getEnv("CORS_ALLOWED_ORIGINS", ""),
+		AllowedExtensionOrigins:        getEnv("ALLOWED_EXTENSION_ORIGINS", ""),
 
 		DatabaseURL:                       getEnv("DATABASE_URL", ""),
 		RedisURL:                          getEnv("REDIS_URL", ""),

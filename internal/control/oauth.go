@@ -16,8 +16,9 @@ import (
 )
 
 type OAuthHandler struct {
-	cfg            *config.Config
-	allowedOrigins []string
+	cfg                    *config.Config
+	allowedOrigins         []string
+	allowedExtensionOrigins []string // nil means any extension is allowed
 }
 
 func NewOAuthHandler(cfg *config.Config) *OAuthHandler {
@@ -28,7 +29,16 @@ func NewOAuthHandler(cfg *config.Config) *OAuthHandler {
 			origins = append(origins, o)
 		}
 	}
-	return &OAuthHandler{cfg: cfg, allowedOrigins: origins}
+
+	var extOrigins []string
+	for _, o := range strings.Split(cfg.AllowedExtensionOrigins, ",") {
+		o = strings.TrimSpace(o)
+		if o != "" {
+			extOrigins = append(extOrigins, o)
+		}
+	}
+
+	return &OAuthHandler{cfg: cfg, allowedOrigins: origins, allowedExtensionOrigins: extOrigins}
 }
 
 // csrfCheck validates Origin (or Referer) header against allowed origins.
@@ -56,11 +66,23 @@ func (h *OAuthHandler) csrfCheck(w http.ResponseWriter, r *http.Request) bool {
 
 // isAllowedOrigin checks if the origin matches any of the configured CORS origins.
 func (h *OAuthHandler) isAllowedOrigin(origin string) bool {
-	// Browser extensions have dynamic origin URLs that cannot be predicted;
-	// treat them as trusted clients.
+	// Browser extensions have dynamic origin URLs. If AllowedExtensionOrigins is
+	// configured, only those specific extension IDs are accepted. Otherwise, any
+	// extension origin is allowed (for development / self-hosted deployments).
 	if strings.HasPrefix(origin, "moz-extension://") ||
 		strings.HasPrefix(origin, "chrome-extension://") {
-		return true
+		if len(h.allowedExtensionOrigins) == 0 {
+			slog.Warn("extension origin allowed because ALLOWED_EXTENSION_ORIGINS is not configured",
+				"origin", origin)
+			return true
+		}
+		for _, allowed := range h.allowedExtensionOrigins {
+			if origin == allowed {
+				return true
+			}
+		}
+		slog.Warn("extension origin rejected: not in ALLOWED_EXTENSION_ORIGINS", "origin", origin)
+		return false
 	}
 
 	parsed, err := url.Parse(origin)

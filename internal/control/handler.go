@@ -876,7 +876,10 @@ func (h *Handler) AdminBanUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req BanRequest
-	_ = json.NewDecoder(r.Body).Decode(&req)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respond.JsonError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
 
 	if err := h.userRepo.Ban(r.Context(), id, req.Reason); err != nil {
 		slog.Error("admin ban user error", "user_id", id, "error", err)

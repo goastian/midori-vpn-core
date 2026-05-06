@@ -172,7 +172,13 @@ func (h *MeshHandler) GetMesh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respond.JsonOK(w, meshDetailResponse{publicMeshNetwork: toPublicMeshNetwork(*mesh), Members: []models.MeshMember{}}, http.StatusOK)
+	members, err := h.meshRepo.ListMembers(r.Context(), meshID)
+	if err != nil {
+		slog.Warn("GetMesh: failed to list members", "mesh_id", meshID, "error", err)
+		members = []models.MeshMember{}
+	}
+
+	respond.JsonOK(w, meshDetailResponse{publicMeshNetwork: toPublicMeshNetwork(*mesh), Members: members}, http.StatusOK)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
