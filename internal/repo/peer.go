@@ -223,6 +223,29 @@ func (r *PeerRepo) CountByUser(ctx context.Context, userID uuid.UUID) (int, erro
 	return count, err
 }
 
+// GetActiveByUserAndPublicKey returns the active peer record for the given user
+// and WireGuard public key, or (nil, pgx.ErrNoRows) if none exists.
+// This is used for idempotent connect: if the client retries with the same key
+// we return the existing allocation instead of counting it as a new device.
+func (r *PeerRepo) GetActiveByUserAndPublicKey(ctx context.Context, userID uuid.UUID, publicKey string) (*models.Peer, error) {
+	query := `
+		SELECT id, user_id, server_id, public_key, assigned_ip, is_active, device_name,
+		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
+		FROM peers
+		WHERE user_id = $1 AND public_key = $2 AND is_active = TRUE
+		LIMIT 1
+	`
+	var p models.Peer
+	err := r.pool.QueryRow(ctx, query, userID, publicKey).Scan(
+		&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.AssignedIP, &p.IsActive, &p.DeviceName,
+		&p.LastHandshake, &p.BytesSent, &p.BytesReceived, &p.CreatedAt, &p.ExpiresAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
 func (r *PeerRepo) CountAll(ctx context.Context) (int, int, error) {
 	var total, active int
 	err := r.pool.QueryRow(ctx, `SELECT COUNT(*), COUNT(*) FILTER (WHERE is_active = TRUE) FROM peers`).Scan(&total, &active)

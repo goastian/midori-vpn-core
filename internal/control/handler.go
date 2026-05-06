@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	qrcode "github.com/skip2/go-qrcode"
 
@@ -336,6 +338,40 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.DeviceName = sanitizeDeviceName(req.DeviceName)
+
+	// 1b. Idempotency: if the same public key is already active for this user,
+	// return the existing allocation instead of treating it as a new device.
+	// This prevents "device limit reached" errors caused by duplicate connect
+	// attempts (e.g. rapid retries, race conditions in the desktop client).
+	if existingPeer, err := h.peerRepo.GetActiveByUserAndPublicKey(r.Context(), user.ID, req.PublicKey); err == nil {
+		existingServer, sErr := h.serverRepo.GetByID(r.Context(), existingPeer.ServerID)
+		if sErr == nil {
+			serverPubKey := existingServer.PublicKey
+			if coreStats, statsErr := CallCoreServerStats(existingServer); statsErr == nil && coreStats.PublicKey != "" {
+				serverPubKey = coreStats.PublicKey
+			}
+			peerIPAddr := existingPeer.AssignedIP
+			if idx := strings.Index(peerIPAddr, "/"); idx != -1 {
+				peerIPAddr = peerIPAddr[:idx]
+			}
+			epHost := existingServer.Endpoint
+			if epHost == "" {
+				epHost = existingServer.Host
+			}
+			respond.JsonOK(w, models.ConnectionConfig{
+				PeerID:          existingPeer.ID,
+				PeerIP:          peerIPAddr,
+				ServerPublicKey: serverPubKey,
+				ServerEndpoint:  wireGuardEndpointForServerHost(epHost, existingServer.WGPort),
+				DNS:             h.vpnDNS,
+				AllowedIPs:      "0.0.0.0/0, ::/0",
+			}, http.StatusOK)
+			return
+		}
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		slog.Error("idempotency check error", "error", err)
+		// Non-fatal: continue to normal flow.
+	}
 
 	// 2. Enforce device limit
 	if h.maxDevicesPerUser > 0 {
