@@ -69,7 +69,9 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 		trustedExtRepo := repo.NewTrustedExtensionRepo(pool)
 		oauthH := control.NewOAuthHandler(cfg, trustedExtRepo)
 		r.Post("/api/v1/auth/callback", oauthH.Callback)
-		r.Post("/api/v1/auth/refresh", oauthH.Refresh)
+		// Per-refresh_token throttling: protects against credential brute-force
+		// and replay even when the global IP limiter is bypassed by IP rotation.
+		r.With(RefreshRateLimitMiddleware()).Post("/api/v1/auth/refresh", oauthH.Refresh)
 		r.Post("/api/v1/auth/logout", oauthH.Logout)
 		r.Get("/api/v1/auth/config", oauthH.OIDCConfig)
 
