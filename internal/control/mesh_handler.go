@@ -44,6 +44,11 @@ type MeshHandler struct {
 	wgMgr     *wg.Manager
 	hub       *WSHub
 	pool      *pgxpool.Pool
+
+	// autoMeshLocks serializes ensureAutoMesh per user so concurrent
+	// activate calls (e.g. agent restart racing with OAuth callback)
+	// cannot create duplicate session meshes.
+	autoMeshLocks sync.Map // map[uuid.UUID]*sync.Mutex
 }
 
 func NewMeshHandler(pool *pgxpool.Pool, wgMgr *wg.Manager, hub *WSHub) *MeshHandler {
@@ -514,6 +519,13 @@ func realIP(r *http.Request) string {
 }
 
 func (h *MeshHandler) ensureAutoMesh(ctx context.Context, r *http.Request, u *models.User) (*models.MeshNetwork, *models.MeshMember, bool, error) {
+	// Serialize per user so concurrent activate calls cannot both miss the
+	// existing session mesh and race to create duplicates.
+	lockIface, _ := h.autoMeshLocks.LoadOrStore(u.ID, &sync.Mutex{})
+	lock := lockIface.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
+
 	originIP := realIP(r)
 	meshes, err := h.meshRepo.ListByUser(ctx, u.ID)
 	if err == nil {

@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/goastian/midori-vpn-core/internal/models"
@@ -200,9 +202,52 @@ func (r *MeshRepo) Create(ctx context.Context, mesh *models.MeshNetwork) error {
 }
 
 // CreateSession is like Create but marks the mesh as a session mesh (is_session=true).
+// If a session mesh already exists for the same owner (enforced by a partial
+// unique index), the existing row is loaded into mesh and a nil error is
+// returned, making the call idempotent under concurrent activation.
 func (r *MeshRepo) CreateSession(ctx context.Context, mesh *models.MeshNetwork) error {
 	mesh.IsSession = true
-	return r.Create(ctx, mesh)
+	err := r.Create(ctx, mesh)
+	if err == nil {
+		return nil
+	}
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+		return err
+	}
+	// Unique-violation on (owner_id) WHERE is_session: a concurrent caller
+	// won the race; load the existing session mesh.
+	existing, getErr := r.GetSessionByOwner(ctx, mesh.OwnerID)
+	if getErr != nil {
+		return fmt.Errorf("mesh: existing session lookup after unique violation: %w", getErr)
+	}
+	*mesh = *existing
+	return nil
+}
+
+// GetSessionByOwner returns the session mesh owned by the given user, if any.
+func (r *MeshRepo) GetSessionByOwner(ctx context.Context, ownerID uuid.UUID) (*models.MeshNetwork, error) {
+	query := `
+		SELECT n.id, n.name, n.description, n.owner_id, n.subnet, n.invite_code,
+		       n.invite_expires_at, n.max_members, n.is_active, n.created_at, n.updated_at,
+		       COUNT(m.id) AS member_count, n.country_code, n.public_ip, n.is_session
+		FROM mesh_networks n
+		LEFT JOIN mesh_members m ON m.mesh_id = n.id
+		WHERE n.owner_id = $1 AND n.is_session = TRUE
+		GROUP BY n.id
+		LIMIT 1
+	`
+	var mesh models.MeshNetwork
+	err := r.pool.QueryRow(ctx, query, ownerID).Scan(
+		&mesh.ID, &mesh.Name, &mesh.Description, &mesh.OwnerID, &mesh.Subnet, &mesh.InviteCode,
+		&mesh.InviteExpiresAt, &mesh.MaxMembers, &mesh.IsActive, &mesh.CreatedAt, &mesh.UpdatedAt,
+		&mesh.MemberCount, &mesh.CountryCode, &mesh.PublicIP, &mesh.IsSession,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("mesh: get session by owner: %w", err)
+	}
+	normalizePublicMeshName(&mesh)
+	return &mesh, nil
 }
 
 // GetByID returns a mesh network by its UUID, including member count.
