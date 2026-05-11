@@ -398,15 +398,73 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	respond.JsonOK(w, tokenResp, http.StatusOK)
 }
 
-// isAllowedRedirectURI checks whether the redirect_uri origin matches
-// one of the configured CORS allowed origins.
+// isAllowedRedirectURI checks whether the redirect_uri is explicitly the
+// configured extension callback URL, or its origin matches an allowed CORS
+// origin. The explicit check ensures self-hosted deployments with a custom
+// PUBLIC_BASE_URL that isn't in CORS_ALLOWED_ORIGINS still work.
 func (h *OAuthHandler) isAllowedRedirectURI(redirectURI string) bool {
+	if extCB := h.cfg.ExtensionCallbackURL(); extCB != "" && redirectURI == extCB {
+		return true
+	}
 	parsed, err := url.Parse(redirectURI)
 	if err != nil {
 		return false
 	}
 	origin := parsed.Scheme + "://" + parsed.Host
 	return h.isAllowedOrigin(origin)
+}
+
+// ExtensionCallback serves a minimal HTML page at the configured
+// EXTENSION_CALLBACK_PATH. Authentik redirects the browser here after the
+// user authenticates; the extension's background script detects the navigation
+// via webNavigation.onCommitted and exchanges the code for tokens.
+func (h *OAuthHandler) ExtensionCallback(w http.ResponseWriter, r *http.Request) {
+	slog.Info("[AUTH] ExtensionCallback hit",
+		"remote", r.RemoteAddr,
+		"has_code", r.URL.Query().Get("code") != "",
+	)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Content-Security-Policy",
+		"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MidoriVPN \u2014 Sign-in</title>
+  <style>
+    :root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    body {
+      margin: 0; min-height: 100vh;
+      display: grid; place-items: center;
+      background: #0f172a; color: #e2e8f0;
+    }
+    main {
+      width: min(26rem, calc(100vw - 2rem));
+      padding: 2rem; border-radius: 1rem;
+      background: rgba(30,41,59,0.9);
+      box-shadow: 0 24px 80px rgba(0,0,0,.45);
+      text-align: center;
+    }
+    .icon { font-size: 3rem; margin-bottom: 1rem; }
+    h1 { margin: 0 0 .5rem; font-size: 1.25rem; }
+    p  { margin: 0; color: #94a3b8; line-height: 1.5; font-size: .9rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="icon">&#x2713;</div>
+    <h1>Authentication complete</h1>
+    <p>You can return to the MidoriVPN extension.<br>This tab closes automatically.</p>
+  </main>
+  <script>
+    // Fallback: close this tab if the extension background script did not
+    // already close it within 3 seconds (e.g. extension not loaded).
+    setTimeout(function() { try { window.close(); } catch(_) {} }, 3000);
+  </script>
+</body>
+</html>`))
 }
 
 // LogoutRequest carries the token(s) to invalidate on logout.

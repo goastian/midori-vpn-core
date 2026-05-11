@@ -25,6 +25,8 @@ type Config struct {
 	// "chrome-extension://abcdef...,moz-extension://xxxxxxxx-...").
 	// If empty, any extension origin is permitted (development default).
 	AllowedExtensionOrigins string
+	PublicBaseURL           string // public base URL used to derive hosted callback URLs
+	ExtensionCallbackPath   string // HTTP path for browser-extension OAuth callback page
 
 	// WireGuard
 	WGInterface string
@@ -107,6 +109,8 @@ func Load() *Config {
 
 		CORSAllowedOrigins:             getEnv("CORS_ALLOWED_ORIGINS", ""),
 		AllowedExtensionOrigins:        getEnv("ALLOWED_EXTENSION_ORIGINS", ""),
+		PublicBaseURL:                  strings.TrimRight(getEnv("PUBLIC_BASE_URL", "https://vpn.astian.org"), "/"),
+		ExtensionCallbackPath:          getEnv("EXTENSION_CALLBACK_PATH", "/extension/callback"),
 
 		DatabaseURL:                       getEnv("DATABASE_URL", ""),
 		RedisURL:                          getEnv("REDIS_URL", ""),
@@ -165,6 +169,11 @@ func Load() *Config {
 			log.Fatalf("FATAL: AUTHENTIK_JWKS_URL %q is not a valid URL", cfg.AuthentikJWKSURL)
 		}
 	}
+	if cfg.PublicBaseURL != "" {
+		if u, err := url.ParseRequestURI(cfg.PublicBaseURL); err != nil || u.Scheme == "" || u.Host == "" {
+			log.Fatalf("FATAL: PUBLIC_BASE_URL %q is not a valid URL", cfg.PublicBaseURL)
+		}
+	}
 
 	// Reject insecure production settings.
 	if cfg.AppEnv == "production" {
@@ -186,6 +195,14 @@ func Load() *Config {
 		} else {
 			cfg.CORSAllowedOrigins = "https://*.astian.org"
 		}
+	}
+
+	cfg.ExtensionCallbackPath = strings.TrimSpace(cfg.ExtensionCallbackPath)
+	if cfg.ExtensionCallbackPath == "" {
+		cfg.ExtensionCallbackPath = "/extension/callback"
+	}
+	if !strings.HasPrefix(cfg.ExtensionCallbackPath, "/") {
+		log.Fatalf("FATAL: EXTENSION_CALLBACK_PATH %q must start with /", cfg.ExtensionCallbackPath)
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -295,6 +312,13 @@ func (c *Config) AuthentikEndSessionURL() string {
 		return ""
 	}
 	return appURL + "/end-session/"
+}
+
+func (c *Config) ExtensionCallbackURL() string {
+	if c.PublicBaseURL == "" {
+		return ""
+	}
+	return strings.TrimRight(c.PublicBaseURL, "/") + c.ExtensionCallbackPath
 }
 
 // WSMaxForGroups returns the highest WS connection limit for the given groups.
