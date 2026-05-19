@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -15,6 +16,10 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/repo"
 	"github.com/goastian/midori-vpn-core/internal/respond"
 )
+
+var authentikTokenExchangeTimeout = 15 * time.Second
+
+const authentikTransientRetryAfterSeconds = 30
 
 type OAuthHandler struct {
 	cfg                     *config.Config
@@ -174,6 +179,111 @@ type RefreshRequest struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
+type tokenExchangeError struct {
+	publicMessage string
+	statusCode    int
+	retryAfter    time.Duration
+	err           error
+}
+
+func (e *tokenExchangeError) Error() string {
+	return e.err.Error()
+}
+
+func (e *tokenExchangeError) Unwrap() error {
+	return e.err
+}
+
+func newTokenExchangeError(publicMessage string, statusCode int, retryAfter time.Duration, err error) error {
+	return &tokenExchangeError{
+		publicMessage: publicMessage,
+		statusCode:    statusCode,
+		retryAfter:    retryAfter,
+		err:           err,
+	}
+}
+
+func (h *OAuthHandler) exchangeAuthentikToken(operation string, form url.Values) (TokenResponse, int, []byte, error) {
+	tokenURL := h.cfg.AuthentikTokenURL()
+	slog.Info("[AUTH] "+operation+" exchanging with Authentik",
+		"token_url", tokenURL,
+		"client_id", h.cfg.AuthentikClientID,
+		"has_client_secret", h.cfg.AuthentikClientSecret != "",
+	)
+
+	start := time.Now()
+	tokenCtx, tokenCancel := context.WithTimeout(context.Background(), authentikTokenExchangeTimeout)
+	defer tokenCancel()
+
+	tokenReq, err := http.NewRequestWithContext(tokenCtx, http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return TokenResponse{}, 0, nil, newTokenExchangeError("token exchange failed", http.StatusInternalServerError, 0, err)
+	}
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := http.DefaultClient.Do(tokenReq)
+	if err != nil {
+		slog.Error("[AUTH] "+operation+" Authentik request failed",
+			"error", err,
+			"token_url", tokenURL,
+			"duration_ms", time.Since(start).Milliseconds(),
+		)
+		return TokenResponse{}, 0, nil, newTokenExchangeError(
+			"auth provider temporarily unavailable; retry later",
+			http.StatusBadGateway,
+			authentikTransientRetryAfterSeconds*time.Second,
+			err,
+		)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		slog.Error("[AUTH] "+operation+" failed to read Authentik response",
+			"error", err,
+			"status", resp.StatusCode,
+			"authentik_request_id", resp.Header.Get("X-Authentik-Id"),
+			"duration_ms", time.Since(start).Milliseconds(),
+		)
+		return TokenResponse{}, resp.StatusCode, nil, newTokenExchangeError(
+			"auth provider temporarily unavailable; retry later",
+			http.StatusBadGateway,
+			authentikTransientRetryAfterSeconds*time.Second,
+			err,
+		)
+	}
+
+	slog.Info("[AUTH] "+operation+" Authentik response",
+		"status", resp.StatusCode,
+		"body_length", len(body),
+		"authentik_request_id", resp.Header.Get("X-Authentik-Id"),
+		"duration_ms", time.Since(start).Milliseconds(),
+	)
+
+	if resp.StatusCode != http.StatusOK {
+		return TokenResponse{}, resp.StatusCode, body, nil
+	}
+
+	var tokenResp TokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return TokenResponse{}, resp.StatusCode, body, newTokenExchangeError("invalid token response", http.StatusBadGateway, 0, err)
+	}
+
+	return tokenResp, resp.StatusCode, body, nil
+}
+
+func writeTokenExchangeError(w http.ResponseWriter, publicFallback string, err error) {
+	var exchangeErr *tokenExchangeError
+	if errors.As(err, &exchangeErr) {
+		if exchangeErr.retryAfter > 0 {
+			w.Header().Set("Retry-After", strings.TrimSuffix(exchangeErr.retryAfter.String(), "s"))
+		}
+		respond.JsonError(w, exchangeErr.publicMessage, exchangeErr.statusCode)
+		return
+	}
+	respond.JsonError(w, publicFallback, http.StatusBadGateway)
+}
+
 func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	slog.Info("[AUTH] Refresh hit", "remote", r.RemoteAddr)
 
@@ -194,9 +304,6 @@ func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokenURL := h.cfg.AuthentikTokenURL()
-	slog.Info("[AUTH] Refresh exchanging with Authentik", "token_url", tokenURL)
-
 	form := url.Values{}
 	form.Set("grant_type", "refresh_token")
 	form.Set("refresh_token", req.RefreshToken)
@@ -205,46 +312,18 @@ func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		form.Set("client_secret", h.cfg.AuthentikClientSecret)
 	}
 
-	// Use context.Background so that a client disconnect does not abort the
-	// token exchange mid-flight. The 15-second timeout still applies.
-	tokenCtx, tokenCancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer tokenCancel()
-	tokenReq, err := http.NewRequestWithContext(tokenCtx, http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+	tokenResp, authStatus, body, err := h.exchangeAuthentikToken("Refresh", form)
 	if err != nil {
-		slog.Error("[AUTH] Refresh failed to create request", "error", err)
-		respond.JsonError(w, "token refresh failed", http.StatusInternalServerError)
-		return
-	}
-	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := http.DefaultClient.Do(tokenReq)
-	if err != nil {
-		slog.Error("[AUTH] Refresh HTTP error", "error", err)
-		respond.JsonError(w, "token refresh failed", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		slog.Error("[AUTH] Refresh failed to read response", "error", err)
-		respond.JsonError(w, "failed to read token response", http.StatusBadGateway)
+		slog.Error("[AUTH] Refresh token exchange failed", "error", err)
+		writeTokenExchangeError(w, "token refresh failed", err)
 		return
 	}
 
-	slog.Info("[AUTH] Refresh Authentik response", "status", resp.StatusCode)
-
-	if resp.StatusCode != http.StatusOK {
-		slog.Warn("[AUTH] Refresh Authentik returned error", "status", resp.StatusCode, "body", string(body))
+	if authStatus != http.StatusOK {
+		slog.Warn("[AUTH] Refresh Authentik returned error", "status", authStatus, "body", string(body))
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(resp.StatusCode)
+		w.WriteHeader(authStatus)
 		w.Write(body)
-		return
-	}
-
-	var tokenResp TokenResponse
-	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		slog.Error("[AUTH] Refresh failed to parse token", "error", err)
-		respond.JsonError(w, "invalid token response", http.StatusBadGateway)
 		return
 	}
 
@@ -303,13 +382,6 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokenURL := h.cfg.AuthentikTokenURL()
-	slog.Info("[AUTH] Callback exchanging code with Authentik",
-		"token_url", tokenURL,
-		"client_id", h.cfg.AuthentikClientID,
-		"has_client_secret", h.cfg.AuthentikClientSecret != "",
-	)
-
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
 	form.Set("code", req.Code)
@@ -322,52 +394,21 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		form.Set("code_verifier", req.CodeVerifier)
 	}
 
-	// Use context.Background so that a client disconnect does not abort the
-	// token exchange mid-flight. The 15-second timeout still applies.
-	tokenCtx, tokenCancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer tokenCancel()
-	tokenReq, err := http.NewRequestWithContext(tokenCtx, http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+	tokenResp, authStatus, body, err := h.exchangeAuthentikToken("Callback", form)
 	if err != nil {
-		slog.Error("[AUTH] Callback failed to create request", "error", err)
-		respond.JsonError(w, "token exchange failed", http.StatusInternalServerError)
-		return
-	}
-	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := http.DefaultClient.Do(tokenReq)
-	if err != nil {
-		slog.Error("[AUTH] Callback token exchange HTTP error", "error", err, "token_url", tokenURL)
-		respond.JsonError(w, "token exchange failed", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		slog.Error("[AUTH] Callback failed to read Authentik response", "error", err)
-		respond.JsonError(w, "failed to read token response", http.StatusBadGateway)
+		slog.Error("[AUTH] Callback token exchange failed", "error", err)
+		writeTokenExchangeError(w, "token exchange failed", err)
 		return
 	}
 
-	slog.Info("[AUTH] Callback Authentik response",
-		"status", resp.StatusCode,
-		"body_length", len(body),
-	)
-
-	if resp.StatusCode != http.StatusOK {
+	if authStatus != http.StatusOK {
 		slog.Warn("[AUTH] Callback Authentik returned error",
-			"status", resp.StatusCode,
+			"status", authStatus,
 			"body", string(body),
 		)
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(resp.StatusCode)
+		w.WriteHeader(authStatus)
 		w.Write(body)
-		return
-	}
-
-	var tokenResp TokenResponse
-	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		slog.Error("[AUTH] Callback failed to parse token response", "error", err)
-		respond.JsonError(w, "invalid token response", http.StatusBadGateway)
 		return
 	}
 
