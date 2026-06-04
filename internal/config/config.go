@@ -107,13 +107,13 @@ func Load() *Config {
 		ConfigDir:   getEnv("WG_CONFIG_DIR", "/etc/wireguard"),
 		Endpoint:    getEnv("WG_ENDPOINT", ""),
 
-		CORSAllowedOrigins:             getEnv("CORS_ALLOWED_ORIGINS", ""),
-		AllowedExtensionOrigins:        getEnv("ALLOWED_EXTENSION_ORIGINS", ""),
-		PublicBaseURL:                  strings.TrimRight(getEnv("PUBLIC_BASE_URL", "https://vpn.astian.org"), "/"),
-		ExtensionCallbackPath:          getEnv("EXTENSION_CALLBACK_PATH", "/extension/callback"),
+		CORSAllowedOrigins:      getEnv("CORS_ALLOWED_ORIGINS", ""),
+		AllowedExtensionOrigins: getEnv("ALLOWED_EXTENSION_ORIGINS", ""),
+		PublicBaseURL:           strings.TrimRight(getEnv("PUBLIC_BASE_URL", "https://vpn.astian.org"), "/"),
+		ExtensionCallbackPath:   getEnv("EXTENSION_CALLBACK_PATH", "/extension/callback"),
 
-		DatabaseURL:                       getEnv("DATABASE_URL", ""),
-		RedisURL:                          getEnv("REDIS_URL", ""),
+		DatabaseURL:                       databaseURLFromEnv(),
+		RedisURL:                          redisURLFromEnv(),
 		AuthentikIssuer:                   issuer,
 		AuthentikClientID:                 getEnv("AUTHENTIK_CLIENT_ID", ""),
 		AuthentikClientSecret:             getEnv("AUTHENTIK_CLIENT_SECRET", ""),
@@ -205,8 +205,8 @@ func Load() *Config {
 		log.Fatalf("FATAL: EXTENSION_CALLBACK_PATH %q must start with /", cfg.ExtensionCallbackPath)
 	}
 
-	if cfg.DatabaseURL == "" {
-		slog.Info("DATABASE_URL not set — Control API will be disabled")
+	if getEnv("DATABASE_URL", "") == "" && cfg.AuthentikClientID != "" {
+		slog.Info("DATABASE_URL not set — deriving PostgreSQL connection string from POSTGRES_* variables")
 	}
 
 	// Validate numeric ranges
@@ -341,6 +341,46 @@ func (c *Config) WSMaxForGroups(groups []string) int {
 		}
 	}
 	return max
+}
+
+func databaseURLFromEnv() string {
+	if v := getEnv("DATABASE_URL", ""); v != "" {
+		return v
+	}
+
+	u := &url.URL{
+		Scheme: "postgres",
+		User:   databaseUserInfo(getEnv("POSTGRES_USER", "midori"), getEnv("POSTGRES_PASSWORD", "")),
+		Host:   net.JoinHostPort(getEnv("POSTGRES_HOST", "postgres"), strconv.Itoa(getEnvInt("POSTGRES_PORT", 5432))),
+		Path:   getEnv("POSTGRES_DB", "midori_vpn"),
+	}
+	q := u.Query()
+	q.Set("sslmode", getEnv("POSTGRES_SSLMODE", "disable"))
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func databaseUserInfo(user, password string) *url.Userinfo {
+	if password == "" {
+		return url.User(user)
+	}
+	return url.UserPassword(user, password)
+}
+
+func redisURLFromEnv() string {
+	if v := getEnv("REDIS_URL", ""); v != "" {
+		return v
+	}
+
+	u := &url.URL{
+		Scheme: "redis",
+		Host:   net.JoinHostPort(getEnv("REDIS_HOST", "redis"), strconv.Itoa(getEnvInt("REDIS_PORT", 6379))),
+		Path:   getEnv("REDIS_DB", "0"),
+	}
+	if password := getEnv("REDIS_PASSWORD", ""); password != "" {
+		u.User = url.UserPassword("", password)
+	}
+	return u.String()
 }
 
 func getEnv(key, fallback string) string {

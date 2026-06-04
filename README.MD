@@ -29,7 +29,7 @@ midori-vpn-control/          → Vue 3 + TypeScript frontend (panel de control)
 Low-level WireGuard peer management. Protected by shared secret (`X-Core-Token`).
 
 ### Control API
-User-facing API for managing VPN connections, servers and audit logs. Protected by JWT tokens from Authentik. Enabled automatically when `DATABASE_URL` and `AUTHENTIK_CLIENT_ID` are set.
+User-facing API for managing VPN connections, servers and audit logs. Protected by JWT tokens from Authentik. Enabled automatically when Authentik is configured and the database is reachable through `DATABASE_URL` or the `POSTGRES_*` settings.
 
 ### Control Frontend (`midori-vpn-control/`)
 Vue 3 + TypeScript SPA with OAuth2/OIDC login flow (PKCE) against `accounts.astian.org`. Features automatic token refresh and state validation.
@@ -44,7 +44,7 @@ Vue 3 + TypeScript SPA with OAuth2/OIDC login flow (PKCE) against `accounts.asti
 ```bash
 cp .env.default .env
 # Edit .env — set DOMAIN, VPN_CORE_TOKEN, CORE_ALLOWED_HOSTS,
-# DATABASE_URL/REDIS_URL passwords, WG_ENDPOINT and AUTHENTIK_CLIENT_ID
+# POSTGRES_PASSWORD, REDIS_PASSWORD, WG_ENDPOINT and AUTHENTIK_CLIENT_ID
 
 # Development (builds from source, includes PostgreSQL + Redis)
 docker compose -f docker-compose-dev.yml up --build
@@ -106,8 +106,6 @@ WG_ENDPOINT=vpn.example.com
 
 POSTGRES_PASSWORD=<postgres-password>
 REDIS_PASSWORD=<redis-password>
-DATABASE_URL=postgres://midori:<postgres-password>@postgres:5432/midori_vpn?sslmode=disable
-REDIS_URL=redis://:<redis-password>@redis:6379/0
 
 AUTHENTIK_ISSUER=https://accounts.astian.org/application/o/midorivpn
 AUTHENTIK_CLIENT_ID=<client-id>
@@ -135,7 +133,6 @@ VPN_CORE_TOKEN=<strong-unique-core1-token>
 WG_PORT=51820
 WG_ENDPOINT=core1.example.com
 
-DATABASE_URL=
 AUTHENTIK_CLIENT_ID=
 
 CORE_TLS_SKIP_VERIFY=false
@@ -212,8 +209,18 @@ against each server. The returned WireGuard endpoint should be
 
 | Variable | Default | Description |
 |---|---|---|
-| `DATABASE_URL` | *(empty)* | PostgreSQL connection string |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis connection string |
+| `POSTGRES_USER` | `midori` | PostgreSQL user used when `DATABASE_URL` is not set |
+| `POSTGRES_PASSWORD` | *(empty)* | PostgreSQL password used by both Docker and `vpn-core` |
+| `POSTGRES_HOST` | `postgres` | PostgreSQL host used when `DATABASE_URL` is not set |
+| `POSTGRES_PORT` | `5432` | PostgreSQL port used when `DATABASE_URL` is not set |
+| `POSTGRES_DB` | `midori_vpn` | PostgreSQL database name |
+| `POSTGRES_SSLMODE` | `disable` | PostgreSQL SSL mode used when `DATABASE_URL` is not set |
+| `DATABASE_URL` | *(derived)* | Optional PostgreSQL connection string override |
+| `REDIS_PASSWORD` | *(empty)* | Redis password used by both Docker and `vpn-core` |
+| `REDIS_HOST` | `redis` | Redis host used when `REDIS_URL` is not set |
+| `REDIS_PORT` | `6379` | Redis port used when `REDIS_URL` is not set |
+| `REDIS_DB` | `0` | Redis DB used when `REDIS_URL` is not set |
+| `REDIS_URL` | *(derived)* | Optional Redis connection string override |
 | `AUTHENTIK_ISSUER` | *(empty)* | OIDC issuer URL |
 | `AUTHENTIK_CLIENT_ID` | *(empty)* | Authentik OAuth2 client ID |
 | `AUTHENTIK_CLIENT_SECRET` | *(empty)* | Authentik OAuth2 client secret |
@@ -236,7 +243,7 @@ against each server. The returned WireGuard endpoint should be
 
 Availability notes:
 - `Core API` and `GET /health` are always available.
-- `Auth`, `Control API`, `Admin API`, and `WebSocket` are available only when both `DATABASE_URL` and `AUTHENTIK_CLIENT_ID` are configured.
+- `Auth`, `Control API`, `Admin API`, and `WebSocket` are available only when `AUTHENTIK_CLIENT_ID` is configured and the database is reachable.
 
 ### Core API (`X-Core-Token` protected)
 

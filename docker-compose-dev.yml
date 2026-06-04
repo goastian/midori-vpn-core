@@ -33,15 +33,15 @@ services:
     image: docker.io/postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: midori
+      POSTGRES_USER: ${POSTGRES_USER:-midori}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-midori}
-      POSTGRES_DB: midori_vpn
+      POSTGRES_DB: ${POSTGRES_DB:-midori_vpn}
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
       - pg-data:/var/lib/postgresql/data:Z
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U midori -d midori_vpn" ]
+      test: [ "CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\"" ]
       interval: 5s
       timeout: 5s
       retries: 5
