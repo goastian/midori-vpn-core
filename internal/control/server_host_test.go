@@ -68,6 +68,15 @@ func TestNormalizeAdminServerHost(t *testing.T) {
 	}
 }
 
+func TestDefaultAdminServerPort(t *testing.T) {
+	if got := defaultAdminServerPort(false); got != 443 {
+		t.Fatalf("secure default port mismatch: got %d want 443", got)
+	}
+	if got := defaultAdminServerPort(true); got != 8080 {
+		t.Fatalf("insecure default port mismatch: got %d want 8080", got)
+	}
+}
+
 func TestWireGuardEndpointForServerHost(t *testing.T) {
 	tests := []struct {
 		name string

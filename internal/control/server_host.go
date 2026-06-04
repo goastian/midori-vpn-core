@@ -58,6 +58,13 @@ func normalizeAdminServerHost(rawHost string, port int) (string, int, error) {
 	return host, port, nil
 }
 
+func defaultAdminServerPort(allowInsecureHTTP bool) int {
+	if allowInsecureHTTP {
+		return 8080
+	}
+	return 443
+}
+
 func endpointHostFromServerHost(rawHost string) string {
 	host := strings.TrimSpace(rawHost)
 	if host == "" {

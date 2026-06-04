@@ -999,7 +999,7 @@ func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Port == 0 {
-		req.Port = 8080
+		req.Port = defaultAdminServerPort(h.coreAllowLoopback)
 	}
 	if req.WGPort == 0 {
 		req.WGPort = 51820
