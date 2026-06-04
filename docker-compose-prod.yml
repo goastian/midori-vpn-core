@@ -1,15 +1,8 @@
-# Production deployment with nginx TLS reverse proxy.
+# Production Core-only deployment behind host nginx.
 #
-# Prerequisites:
-#   1. Set DOMAIN in .env (e.g. DOMAIN=vpn.astian.org)
-#   2. Place TLS certificates in ./certs/:
-#        certs/fullchain.pem
-#        certs/privkey.pem
-#   3. Ensure the wireguard kernel module is loaded on the host:
-#        modprobe wireguard
-#   4. Set strong passwords in .env:
-#        POSTGRES_PASSWORD=<random>
-#        REDIS_PASSWORD=<random>
+# TLS terminates on nginx installed on the host. Generate .env and the host
+# vhost with:
+#   sudo scripts/setup-core-host.sh
 #
 # Usage:
 #   docker compose -f docker-compose-prod.yml up -d
@@ -17,23 +10,6 @@
 name: vpn-core-prod
 
 services:
-  nginx:
-    image: docker.io/nginx:1.27-alpine
-    restart: always
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/templates/default.conf.template:ro,Z
-      - ./certs:/etc/nginx/certs:ro,Z
-    environment:
-      DOMAIN: ${DOMAIN:?Set DOMAIN in .env}
-      NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx/conf.d
-    depends_on:
-      - vpn-core
-    networks:
-      - vpn-net
-
   vpn-core:
     build:
       context: .
@@ -48,17 +24,17 @@ services:
     env_file:
       - .env
     environment:
-      # Trust only the internal Docker bridge network where nginx runs.
-      # Use 'docker network inspect vpn-core-prod_vpn-net' to find the exact
-      # subnet and narrow this further if needed.
-      TRUSTED_PROXIES: "172.16.0.0/12"
-      CORS_ALLOWED_ORIGINS: "https://${DOMAIN:?Set DOMAIN in .env}"
-    # No HTTP port exposed to host — only nginx can reach :8080.
+      # Host nginx proxies to 127.0.0.1:${VPN_CORE_HOST_PORT:-8085}.
+      # Docker normally presents host-originated traffic from a bridge address,
+      # so trust the private Docker bridge ranges for forwarded client IPs.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-172.16.0.0/12}
     ports:
-      - "51820:51820/udp"
-      # HTTP CONNECT proxy — used by the browser extension to tunnel traffic.
-      # Authenticated via Proxy-Authorization Bearer token.
-      - "8888:8888/tcp"
+      # WireGuard UDP must be reachable by VPN clients directly.
+      - "${WG_PORT:-51820}:${WG_PORT:-51820}/udp"
+      # Optional HTTP CONNECT proxy. If PROXY_ENABLED=false, nothing listens.
+      - "${PROXY_PORT:-8888}:${PROXY_PORT:-8888}/tcp"
+      # Core HTTP API is loopback-only; host nginx is the public TLS frontend.
+      - "127.0.0.1:${VPN_CORE_HOST_PORT:-8085}:8080/tcp"
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 30s
@@ -85,7 +61,7 @@ services:
     volumes:
       - pg-data:/var/lib/postgresql/data:Z
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\"" ]
+      test: ["CMD-SHELL", "pg_isready -q -d \"$${POSTGRES_DB}\" -U \"$${POSTGRES_USER}\""]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -95,22 +71,9 @@ services:
   redis:
     image: docker.io/redis:7-alpine
     restart: always
-    command:
-      [
-        "redis-server",
-        "--requirepass",
-        "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}",
-      ]
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}"]
     healthcheck:
-      test:
-        [
-          "CMD",
-          "redis-cli",
-          "--no-auth-warning",
-          "-a",
-          "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}",
-          "ping",
-        ]
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5

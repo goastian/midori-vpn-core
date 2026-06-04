@@ -22,7 +22,7 @@ services:
       # HTTP CONNECT proxy — used by the browser extension to tunnel traffic.
       # Authenticated via Proxy-Authorization Bearer token.
       - "8888:8888/tcp"
-      # Host nginx proxies vpn.astian.org to 127.0.0.1:8085.
+      # Host nginx proxies the public domain to 127.0.0.1:8085.
       # Keep the API bound to loopback only so it is not directly exposed.
       - "127.0.0.1:8085:8080/tcp"
     deploy:
