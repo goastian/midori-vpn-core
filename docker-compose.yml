@@ -19,9 +19,9 @@ services:
     ports:
       # WireGuard UDP — must be reachable by VPN clients directly.
       - "51820:51820/udp"
-      # HTTP CONNECT proxy — used by the browser extension to tunnel traffic.
-      # Authenticated via Proxy-Authorization Bearer token.
-      - "8888:8888/tcp"
+      # HTTP CONNECT proxy upstream for host nginx stream{}.
+      # Bound to loopback to avoid clashes when nginx listens on public 8888.
+      - "127.0.0.1:${PROXY_HOST_PORT:-18888}:8888/tcp"
       # Host nginx proxies the public domain to 127.0.0.1:8085.
       # Keep the API bound to loopback only so it is not directly exposed.
       - "127.0.0.1:8085:8080/tcp"

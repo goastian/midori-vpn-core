@@ -1,0 +1,18 @@
+# Nginx stream{} reverse proxy for browser-extension CONNECT traffic.
+# Place this file under your stream include path, e.g. /etc/nginx/stream.d/
+# and ensure nginx.conf has:
+#
+# stream {
+#   include /etc/nginx/stream.d/*.conf;
+# }
+
+upstream vpn_core_connect_proxy {
+    server 127.0.0.1:__PROXY_HOST_PORT__;
+}
+
+server {
+    listen __PROXY_PUBLIC_PORT__;
+    proxy_pass vpn_core_connect_proxy;
+    proxy_connect_timeout 10s;
+    proxy_timeout 3600s;
+}

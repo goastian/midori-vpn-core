@@ -5,8 +5,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ENV_FILE="$REPO_ROOT/.env"
 TEMPLATE="$REPO_ROOT/deploy/nginx/core-vhost.conf.template"
+STREAM_TEMPLATE="$REPO_ROOT/deploy/nginx/core-stream.conf.template"
 ACME_WEBROOT="/var/www/certbot"
 VHOST_NAME="midori-vpn-core.conf"
+STREAM_VHOST_NAME="midori-vpn-core-stream.conf"
 
 DOMAIN=""
 VPN_CORE_HOST_PORT="8085"
@@ -21,6 +23,7 @@ CORE_ALLOWED_HOSTS=""
 TRUSTED_PROXIES="172.16.0.0/12"
 PROXY_ENABLED="false"
 PROXY_PORT="8888"
+PROXY_HOST_PORT="18888"
 LETSENCRYPT_STAGING="true"
 
 NGINX_MODE=""
@@ -215,6 +218,17 @@ render_final_vhost() {
     "$TEMPLATE" > "$NGINX_VHOST_PATH"
 }
 
+render_stream_vhost() {
+  local host_port public_port
+  host_port="$(sed_escape "$PROXY_HOST_PORT")"
+  public_port="$(sed_escape "$PROXY_PORT")"
+
+  sed \
+    -e "s|__PROXY_HOST_PORT__|$host_port|g" \
+    -e "s|__PROXY_PUBLIC_PORT__|$public_port|g" \
+    "$STREAM_TEMPLATE"
+}
+
 write_bootstrap_vhost() {
   cat > "$NGINX_VHOST_PATH" <<EOF
 server {
@@ -318,6 +332,7 @@ TRUSTED_PROXIES=$TRUSTED_PROXIES
 
 PROXY_ENABLED=$PROXY_ENABLED
 PROXY_PORT=$PROXY_PORT
+PROXY_HOST_PORT=$PROXY_HOST_PORT
 
 LETSENCRYPT_STAGING=$LETSENCRYPT_STAGING
 EOF
@@ -358,7 +373,8 @@ collect_inputs() {
   TRUSTED_PROXIES="$(prompt_required "TRUSTED_PROXIES" "$TRUSTED_PROXIES")"
   PROXY_ENABLED="$(prompt_bool "Enable HTTP CONNECT proxy" "$PROXY_ENABLED")"
   if [ "$PROXY_ENABLED" = "true" ]; then
-    PROXY_PORT="$(prompt_required "Proxy TCP port" "$PROXY_PORT")"
+    PROXY_PORT="$(prompt_required "Proxy public TCP port (extension clients)" "$PROXY_PORT")"
+    PROXY_HOST_PORT="$(prompt_required "Proxy host loopback upstream port (nginx stream -> docker)" "$PROXY_HOST_PORT")"
   fi
   LETSENCRYPT_STAGING="$(prompt_bool "Use Let's Encrypt staging" "$LETSENCRYPT_STAGING")"
 }
@@ -367,6 +383,7 @@ main() {
   require_root
 
   [ -f "$TEMPLATE" ] || die "missing nginx template: $TEMPLATE"
+  [ -f "$STREAM_TEMPLATE" ] || die "missing nginx stream template: $STREAM_TEMPLATE"
   command -v nginx >/dev/null 2>&1 || die "nginx is not installed on the host"
   if ! command -v certbot >/dev/null 2>&1; then
     certbot_install_hint
@@ -399,6 +416,17 @@ main() {
   info "Installing final TLS vhost."
   render_final_vhost
   activate_vhost
+
+  if [ "$PROXY_ENABLED" = "true" ]; then
+    local stream_dir="/etc/nginx/stream.d"
+    local stream_path="$stream_dir/$STREAM_VHOST_NAME"
+    install -d -m 0755 "$stream_dir"
+    render_stream_vhost > "$stream_path"
+    info "Installed stream vhost at $stream_path"
+    info "Ensure nginx.conf has a top-level stream include, e.g.:"
+    info "  stream { include /etc/nginx/stream.d/*.conf; }"
+  fi
+
   nginx_test
   nginx_reload
 

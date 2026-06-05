@@ -31,8 +31,10 @@ services:
     ports:
       # WireGuard UDP must be reachable by VPN clients directly.
       - "${WG_PORT:-51820}:${WG_PORT:-51820}/udp"
-      # Optional HTTP CONNECT proxy. If PROXY_ENABLED=false, nothing listens.
-      - "${PROXY_PORT:-8888}:${PROXY_PORT:-8888}/tcp"
+      # HTTP CONNECT proxy upstream for host nginx stream{}.
+      # Keep this loopback-only to avoid port conflicts when nginx listens on
+      # the public PROXY_PORT.
+      - "127.0.0.1:${PROXY_HOST_PORT:-18888}:${PROXY_PORT:-8888}/tcp"
       # Core HTTP API is loopback-only; host nginx is the public TLS frontend.
       - "127.0.0.1:${VPN_CORE_HOST_PORT:-8085}:8080/tcp"
     healthcheck:
