@@ -72,10 +72,17 @@ func (h *OAuthHandler) csrfCheck(w http.ResponseWriter, r *http.Request) bool {
 		}
 	}
 	if origin == "" {
+		slog.Warn("[AUTH] CSRF check failed: missing Origin/Referer header", "path", r.URL.Path)
 		respond.JsonError(w, "missing Origin header", http.StatusForbidden)
 		return false
 	}
 	if !h.isAllowedOrigin(origin) {
+		slog.Warn("[AUTH] CSRF check failed: origin not allowed",
+			"path", r.URL.Path,
+			"origin", origin,
+			"allowed_origins", h.allowedOrigins,
+			"allowed_extension_origins", h.allowedExtensionOrigins,
+		)
 		respond.JsonError(w, "origin not allowed", http.StatusForbidden)
 		return false
 	}

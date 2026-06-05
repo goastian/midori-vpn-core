@@ -104,3 +104,40 @@ func TestRedisURLFromRedisEnv(t *testing.T) {
 		t.Fatalf("redisURLFromEnv() = %q, want %q", got, want)
 	}
 }
+
+func TestOriginFromURL(t *testing.T) {
+	got, ok := OriginFromURL("https://vpn.astian.org/extension/callback")
+	if !ok {
+		t.Fatal("OriginFromURL() ok = false, want true")
+	}
+	if got != "https://vpn.astian.org" {
+		t.Fatalf("OriginFromURL() = %q, want %q", got, "https://vpn.astian.org")
+	}
+
+	if _, ok := OriginFromURL("vpn.astian.org"); ok {
+		t.Fatal("OriginFromURL() ok = true for URL without scheme")
+	}
+}
+
+func TestOriginAllowed(t *testing.T) {
+	tests := []struct {
+		name    string
+		origin  string
+		allowed string
+		want    bool
+	}{
+		{name: "exact", origin: "https://vpn.astian.org", allowed: "https://vpn.astian.org", want: true},
+		{name: "legacy desktop", origin: "https://app.astian.org", allowed: "https://vpn.astian.org,https://app.astian.org", want: true},
+		{name: "wildcard", origin: "https://vpn.astian.org", allowed: "https://*.astian.org", want: true},
+		{name: "wrong scheme", origin: "http://vpn.astian.org", allowed: "https://*.astian.org", want: false},
+		{name: "rejected", origin: "https://evil.example", allowed: "https://vpn.astian.org,https://app.astian.org", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := OriginAllowed(tt.origin, tt.allowed); got != tt.want {
+				t.Fatalf("OriginAllowed() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

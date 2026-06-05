@@ -155,6 +155,34 @@ func TestOAuthRefreshAuthentikErrorPassThrough(t *testing.T) {
 	}
 }
 
+func TestOAuthAllowedOriginsIncludeLegacyDesktopWhenConfigured(t *testing.T) {
+	handler := NewOAuthHandler(&config.Config{
+		CORSAllowedOrigins: "https://vpn.astian.org,https://app.astian.org",
+		PublicBaseURL:      "https://vpn.astian.org",
+	}, nil)
+
+	if !handler.isAllowedOrigin("https://app.astian.org") {
+		t.Fatal("legacy desktop origin should be allowed when configured")
+	}
+	if handler.isAllowedOrigin("https://evil.example") {
+		t.Fatal("unexpected external origin allowed")
+	}
+}
+
+func TestOAuthAllowedOriginsSupportWildcardAstianSubdomains(t *testing.T) {
+	handler := NewOAuthHandler(&config.Config{
+		CORSAllowedOrigins: "https://*.astian.org",
+		PublicBaseURL:      "https://vpn.astian.org",
+	}, nil)
+
+	if !handler.isAllowedOrigin("https://vpn.astian.org") {
+		t.Fatal("wildcard Astian origin should be allowed")
+	}
+	if handler.isAllowedOrigin("http://vpn.astian.org") {
+		t.Fatal("wildcard should not allow a different scheme")
+	}
+}
+
 func TestOAuthCallbackUpstreamTimeoutReturnsRetryAfter(t *testing.T) {
 	oldTimeout := authentikTokenExchangeTimeout
 	authentikTokenExchangeTimeout = 25 * time.Millisecond

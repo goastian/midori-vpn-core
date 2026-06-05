@@ -185,7 +185,7 @@ against each server. The returned WireGuard endpoint should be
 
 | Variable | Default | Description |
 |---|---|---|
-| `CORS_ALLOWED_ORIGINS` | *(env)* | Comma-separated allowed origins |
+| `CORS_ALLOWED_ORIGINS` | *(env)* | Comma-separated allowed origins; include the desktop `API_URL` origin and, during legacy rollout, `https://app.astian.org` |
 | `TRUSTED_PROXIES` | *(empty)* | Comma-separated trusted reverse proxy IPs/CIDRs; required in production |
 | `RATE_LIMIT_RPS` | `20` | Requests per second per IP (0 = disabled) |
 | `RATE_LIMIT_BURST` | `40` | Burst size for rate limiter |

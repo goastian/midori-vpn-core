@@ -196,6 +196,12 @@ func Load() *Config {
 			cfg.CORSAllowedOrigins = "https://*.astian.org"
 		}
 	}
+	if origin, ok := OriginFromURL(cfg.PublicBaseURL); ok && !OriginAllowed(origin, cfg.CORSAllowedOrigins) {
+		slog.Warn("PUBLIC_BASE_URL origin is not present in CORS_ALLOWED_ORIGINS; OAuth refresh/logout CSRF checks may reject first-party clients",
+			"public_base_origin", origin,
+			"cors_allowed_origins", cfg.CORSAllowedOrigins,
+		)
+	}
 
 	cfg.ExtensionCallbackPath = strings.TrimSpace(cfg.ExtensionCallbackPath)
 	if cfg.ExtensionCallbackPath == "" {
@@ -319,6 +325,38 @@ func (c *Config) ExtensionCallbackURL() string {
 		return ""
 	}
 	return strings.TrimRight(c.PublicBaseURL, "/") + c.ExtensionCallbackPath
+}
+
+func OriginFromURL(raw string) (string, bool) {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", false
+	}
+	return parsed.Scheme + "://" + parsed.Host, true
+}
+
+func OriginAllowed(origin, allowedCSV string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return false
+	}
+	for _, allowed := range strings.Split(allowedCSV, ",") {
+		allowed = strings.TrimSpace(allowed)
+		if allowed == "" {
+			continue
+		}
+		if allowed == origin {
+			return true
+		}
+		if strings.HasPrefix(allowed, "https://*.") || strings.HasPrefix(allowed, "http://*.") {
+			scheme := allowed[:strings.Index(allowed, "://")]
+			suffix := allowed[strings.Index(allowed, "*.")+1:]
+			if parsed.Scheme == scheme && strings.HasSuffix(parsed.Host, suffix) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // WSMaxForGroups returns the highest WS connection limit for the given groups.
