@@ -58,11 +58,27 @@ func InitCoreClient(skipVerify bool, allowInsecureHTTP bool, allowedHosts string
 	// Parse allowed hosts whitelist
 	coreAllowedHosts = make(map[string]bool)
 	for _, h := range strings.Split(allowedHosts, ",") {
-		h = strings.TrimSpace(h)
+		h = normalizeCoreAllowedHost(h)
 		if h != "" {
 			coreAllowedHosts[h] = true
 		}
 	}
+}
+
+func normalizeCoreAllowedHost(raw string) string {
+	h := strings.TrimSpace(raw)
+	if h == "" {
+		return ""
+	}
+	if strings.Contains(h, "://") {
+		if u, err := url.Parse(h); err == nil && u.Hostname() != "" {
+			return strings.ToLower(u.Hostname())
+		}
+	}
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		return strings.ToLower(strings.Trim(host, "[]"))
+	}
+	return strings.ToLower(h)
 }
 
 // coreURL builds the full core API URL from server host/port.
@@ -113,6 +129,7 @@ func coreURL(server *models.VPNServer, path string) (string, string, error) {
 	if port <= 0 {
 		return "", "", fmt.Errorf("invalid core port %d", port)
 	}
+	host = strings.ToLower(host)
 
 	// Validate host against whitelist
 	if len(coreAllowedHosts) > 0 && !coreAllowedHosts[host] {
@@ -205,6 +222,10 @@ func coreDoWithRetry(req *http.Request, bodyBytes []byte, host string) (*http.Re
 
 		if bodyBytes != nil {
 			req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			req.ContentLength = int64(len(bodyBytes))
+			req.GetBody = func() (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(bodyBytes)), nil
+			}
 		}
 
 		resp, err := coreHTTP.Do(req)
