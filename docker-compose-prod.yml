@@ -38,7 +38,7 @@ services:
       # Core HTTP API is loopback-only; host nginx is the public TLS frontend.
       - "127.0.0.1:${VPN_CORE_HOST_PORT:-8085}:8080/tcp"
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/livez"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -50,6 +50,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    networks:
+      - vpn-net
+
+  vpn-control:
+    image: localhost/midori-vpn-control:local
+    restart: always
+    ports:
+      - "127.0.0.1:${CONTROL_HOST_PORT:-5173}:80/tcp"
     networks:
       - vpn-net
 
