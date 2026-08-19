@@ -42,9 +42,14 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 	})
 
 	h := core.NewHandler(cfg, mgr)
+	healthChecker := NewHealthChecker(cfg, mgr, pool)
+	metricsExporter := NewMetricsExporter(mgr)
 
-	// Public
+	// Public Health Probes & Telemetry
 	r.Get("/health", h.Health)
+	r.Get("/livez", healthChecker.Livez)
+	r.Get("/readyz", healthChecker.Readyz)
+	r.Get("/metrics", metricsExporter.Handler)
 
 	// WireGuard core API (X-Core-Token protected)
 	r.Route("/api/v1", func(r chi.Router) {
@@ -57,7 +62,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 		r.Get("/peers/{pubkey}/stats", h.PeerStats)
 		r.Get("/peers", h.ListPeers)
 
-		// Keypair
+		// Keypair (Core internal)
 		r.Post("/keypair", h.GenerateKeypair)
 
 		// Stats
@@ -90,6 +95,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 
 			r.Get("/me", ch.Me)
 			r.Post("/keypair", ch.GenerateKeypair)
+			r.Post("/proxy-credentials", ch.ProxyCredentials)
 			r.Get("/servers", ch.ListServers)
 			r.Get("/servers/ping", ch.PingServers)
 
