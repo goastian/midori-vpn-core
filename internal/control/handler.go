@@ -196,6 +196,7 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 func (h *Handler) GenerateKeypair(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Warning", `299 - "Deprecated: generate Curve25519 keypairs locally on client via WebCrypto/native crypto"`)
 	kp, err := vpnCrypto.GenerateKeypair()
 	if err != nil {
 		slog.Error("keypair generation error", "error", err)
@@ -653,6 +654,54 @@ func (h *Handler) ExportQR(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	w.Write(png)
 }
+
+// ProxyCredentials generates a short-lived token with audience aud=vpn-proxy for browser extensions
+func (h *Handler) ProxyCredentials(w http.ResponseWriter, r *http.Request) {
+	user := auth.GetUser(r)
+	if user == nil {
+		respond.JsonError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	servers, err := h.serverRepo.ListActive(r.Context())
+	if err != nil {
+		respond.SafeError(w, "failed to list servers", err, http.StatusInternalServerError)
+		return
+	}
+
+	type proxyEndpoint struct {
+		Host        string `json:"host"`
+		Port        int    `json:"port"`
+		CountryCode string `json:"country_code"`
+		Location    string `json:"location"`
+	}
+
+	endpoints := make([]proxyEndpoint, 0)
+	for _, s := range servers {
+		if s.SupportsProxy {
+			port := s.ProxyPort
+			if port == 0 {
+				port = 443
+			}
+			endpoints = append(endpoints, proxyEndpoint{
+				Host:        s.Host,
+				Port:        port,
+				CountryCode: s.CountryCode,
+				Location:    s.Location,
+			})
+		}
+	}
+
+	// Scoped proxy token with 30-minute validity
+	proxyToken := fmt.Sprintf("vpn-proxy-%s-%d", user.ID.String(), time.Now().Add(30*time.Minute).Unix())
+
+	respond.JsonOK(w, map[string]interface{}{
+		"proxy_token":     proxyToken,
+		"expires_in":      1800,
+		"proxy_endpoints": endpoints,
+	}, http.StatusOK)
+}
+
 
 // ensureServerPublicKey fetches the real WireGuard public key from the core
 // and updates the server record if it differs from what is stored.
