@@ -105,9 +105,33 @@ func (m *Manager) ensureInterface() error {
 		return m.configureNewInterface()
 	}
 
-	m.privateKey = dev.PrivateKey
-	pubKey := base64.StdEncoding.EncodeToString(dev.PublicKey[:])
-	slog.Info("interface already exists", "interface", m.cfg.WGInterface, "listen_port", dev.ListenPort, "peers", len(dev.Peers), "public_key", pubKey)
+	var zeroKey wgtypes.Key
+	if dev.PrivateKey == zeroKey {
+		slog.Info("existing interface has zero private key, generating new keypair", "interface", m.cfg.WGInterface)
+		kp, err := crypto.GenerateKeypair()
+		if err != nil {
+			return fmt.Errorf("generate server keypair: %w", err)
+		}
+		privKeyBytes, err := base64.StdEncoding.DecodeString(kp.PrivateKey)
+		if err != nil {
+			return err
+		}
+		copy(m.privateKey[:], privKeyBytes)
+		port := m.cfg.WGPort
+		wgCfg := wgtypes.Config{
+			PrivateKey: &m.privateKey,
+			ListenPort: &port,
+		}
+		if err := m.client.ConfigureDevice(m.cfg.WGInterface, wgCfg); err != nil {
+			return fmt.Errorf("configure device %s: %w", m.cfg.WGInterface, err)
+		}
+		m.persistConfig()
+	} else {
+		m.privateKey = dev.PrivateKey
+	}
+
+	pubKey := m.PublicKey()
+	slog.Info("interface ready", "interface", m.cfg.WGInterface, "listen_port", m.cfg.WGPort, "peers", len(dev.Peers), "public_key", pubKey)
 	if err := m.ensureNATRules(); err != nil {
 		return fmt.Errorf("ensureInterface: %w", err)
 	}
