@@ -1,0 +1,105 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "Peers WireGuard Activos",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "midori_vpn_active_peers",
+          "legendFormat": "Peers"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "title": "Solicitudes HTTP Totales",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "rate(midori_vpn_http_requests_total[5m])",
+          "legendFormat": "Req/s"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "title": "Memoria Asignada (MB)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "midori_vpn_memory_alloc_bytes / 1024 / 1024",
+          "legendFormat": "MB"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "title": "Goroutines Activas",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "midori_vpn_goroutines",
+          "legendFormat": "Goroutines"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "id": 5,
+      "title": "Tasa de Errores HTTP (4xx / 5xx)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(midori_vpn_http_4xx_total[5m])",
+          "legendFormat": "4xx Client Errors"
+        },
+        {
+          "expr": "rate(midori_vpn_http_5xx_total[5m])",
+          "legendFormat": "5xx Server Errors"
+        }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "id": 6,
+      "title": "Tiempo de Actividad (Uptime)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "midori_vpn_uptime_seconds",
+          "legendFormat": "Segundos"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["midori-vpn", "wireguard", "telemetry"],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "title": "Midori VPN — Telemetría del Clúster",
+  "version": 1
+}

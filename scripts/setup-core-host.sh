@@ -206,15 +206,19 @@ sed_escape() {
 }
 
 render_final_vhost() {
-  local domain host_port webroot
+  local domain host_port webroot obfs_port control_port
   domain="$(sed_escape "$DOMAIN")"
   host_port="$(sed_escape "$VPN_CORE_HOST_PORT")"
   webroot="$(sed_escape "$ACME_WEBROOT")"
+  obfs_port="$(sed_escape "${OBFS_HOST_PORT:-8086}")"
+  control_port="$(sed_escape "${CONTROL_WEB_PORT:-5173}")"
 
   sed \
     -e "s|__DOMAIN__|$domain|g" \
     -e "s|__VPN_CORE_HOST_PORT__|$host_port|g" \
     -e "s|__ACME_WEBROOT__|$webroot|g" \
+    -e "s|__OBFS_HOST_PORT__|$obfs_port|g" \
+    -e "s|__CONTROL_WEB_PORT__|$control_port|g" \
     "$TEMPLATE" > "$NGINX_VHOST_PATH"
 }
 
@@ -259,29 +263,20 @@ EOF
 }
 
 run_certbot_if_needed() {
-  local cert_path="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
   local staging_args=()
-
-  if [ -f "$cert_path" ]; then
-    info "Existing certificate found for $DOMAIN; skipping initial issuance."
-    return
-  fi
 
   if [ "$LETSENCRYPT_STAGING" = "true" ]; then
     staging_args=(--staging)
   fi
 
-  certbot certonly \
-    --webroot \
-    --webroot-path "$ACME_WEBROOT" \
-    --domain "$DOMAIN" \
+  info "Ejecutando certbot --nginx para configurar SSL y redirección HTTPS automáticamente en $DOMAIN..."
+  certbot --nginx \
+    -d "$DOMAIN" \
     --non-interactive \
     --agree-tos \
     --register-unsafely-without-email \
-    --no-eff-email \
+    --redirect \
     --keep-until-expiring \
-    --preferred-challenges http \
-    --deploy-hook "$NGINX_RELOAD_CMD" \
     "${staging_args[@]}"
 }
 
@@ -404,18 +399,13 @@ main() {
   write_env_file
   write_renew_hook
 
-  if [ ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
-    info "Installing temporary HTTP-only vhost for ACME challenge."
-    write_bootstrap_vhost
-    activate_vhost
-    nginx_test
-    nginx_reload
-    run_certbot_if_needed
-  fi
-
-  info "Installing final TLS vhost."
+  info "Instalando vhost Nginx para $DOMAIN..."
   render_final_vhost
   activate_vhost
+  nginx_test
+  nginx_reload
+
+  run_certbot_if_needed
 
   if [ "$PROXY_ENABLED" = "true" ]; then
     local stream_dir="/etc/nginx/stream.d"
@@ -431,7 +421,8 @@ main() {
   nginx_reload
 
   info "Done."
-  info "Start the core with: docker compose -f docker-compose-prod.yml up -d"
+  info "Start the core with Quadlets: .container/setup.sh install && systemctl --user start vpn-core.service"
+  info "Or using Podman: ./scripts/pod.sh up -d"
 }
 
 main "$@"

@@ -1,0 +1,21 @@
+[Unit]
+Description=Midori VPN Core Daemon (Podman Rootless Quadlet)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=localhost/midori-vpn-core:latest
+ContainerName=midori-vpn-core
+PublishPort=127.0.0.1:8085:8080
+PublishPort=51820:51820/udp
+PublishPort=8888:8888
+AddCapability=CAP_NET_ADMIN
+AddCapability=CAP_NET_RAW
+AddDevice=/dev/net/tun
+Volume=midori_wg_config:/etc/wireguard:Z
+EnvironmentFile=%h/.config/midorivpn/core.env
+Network=host
+Restart=always
+
+[Install]
+WantedBy=default.target

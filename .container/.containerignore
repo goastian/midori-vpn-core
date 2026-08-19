@@ -1,0 +1,17 @@
+.git
+.gitignore
+.projects
+.gemini
+.agents
+.stfolder
+.stversions
+midori-vpn-control
+midori-vpn-desktop
+midorivpn-desktop
+midorivpn-extension
+tmp
+*.log
+*.swp
+*.swo
+.vscode
+.idea

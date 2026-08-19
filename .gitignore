@@ -28,9 +28,34 @@ docker/
 
 # Independent local checkouts
 midori-vpn-control/
+midori-vpn-desktop/
 midorivpn-desktop/
 midorivpn-extension/
 
 # Legacy
 __pycache__
 venv/
+
+# Projects documentation & task tracking
+.projects/
+.projects*/
+.project
+.project/
+
+# Syncthing
+.stfolder/
+.stversions/
+*.syncthing*
+.syncthing.*
+.syncthing*.tmp
+
+# AI Assistants & LLM tools
+.gemini/
+.agents/
+.opencode/
+.claude/
+.cursor/
+.windsurf/
+*.prompt
+*.ai
+
