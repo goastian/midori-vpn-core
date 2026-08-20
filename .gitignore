@@ -1,56 +1,87 @@
-# Go
+# Binarios compilados y ejecutables Go
 /vpn-core
 /vpn-core.exe
 *.exe
+*.exe~
 *.dll
 *.so
 *.dylib
 *.test
 *.out
+cover.out
+coverage.html
 vendor/
 
-# Config & secrets
+# Archivos de configuración y entorno
 .env
+.env.*
+!.env.default
+!.env.example
 tmp/
 
-# IDE
+# Base de datos y volcados locales
+*.sql.gz
+*.dump
+*.backup
+
+# Certificados y claves locales
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+
+# Directorios de dependencias y módulos
+node_modules/
+
+# Entornos de desarrollo y editores (IDE)
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
+.fleet/
 
-# OS
+# Sistema Operativo
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 
-# Docker
+# Docker y Contenedores
 docker/
+.docker/
 
-# Independent local checkouts
+# Subproyectos vinculados localmente
 midori-vpn-control/
 midori-vpn-desktop/
 midorivpn-desktop/
 midorivpn-extension/
 
-# Legacy
-__pycache__
+# Python y herramientas auxiliares
+__pycache__/
+*.py[cod]
 venv/
+.venv/
 
-# Projects documentation & task tracking
+# Sincronización y tareas
 .projects/
 .projects*/
 .project
 .project/
-
-# Syncthing
 .stfolder/
 .stversions/
 *.syncthing*
 .syncthing.*
 .syncthing*.tmp
 
-# AI Assistants & LLM tools
+# Asistentes locales y caches
 .gemini/
+!.gemini/rules/
+!.gemini/rules/**
 .agents/
 .opencode/
 .claude/
@@ -58,4 +89,5 @@ venv/
 .windsurf/
 *.prompt
 *.ai
+
 
