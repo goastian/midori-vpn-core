@@ -141,15 +141,27 @@ func (m *Manager) ensureInterface() error {
 func (m *Manager) createNetworkInterface() error {
 	iface := m.cfg.WGInterface
 
-	// Create the WireGuard network interface
-	if out, err := exec.Command("ip", "link", "add", "dev", iface, "type", "wireguard").CombinedOutput(); err != nil {
-		return fmt.Errorf("ip link add %s: %s: %w", iface, strings.TrimSpace(string(out)), err)
+	// Check if interface already exists on the system
+	if err := exec.Command("ip", "link", "show", "dev", iface).Run(); err != nil {
+		// Interface does not exist, attempt to load module if needed and create interface
+		_ = exec.Command("modprobe", "wireguard").Run()
+		if out, err := exec.Command("ip", "link", "add", "dev", iface, "type", "wireguard").CombinedOutput(); err != nil {
+			msg := strings.TrimSpace(string(out))
+			if strings.Contains(msg, "Operation not permitted") {
+				return fmt.Errorf("ip link add %s: %s: CAP_NET_ADMIN required (ensure container runs with '--cap-add=NET_ADMIN' or root privileges)", iface, msg)
+			}
+			return fmt.Errorf("ip link add %s: %s: %w", iface, msg, err)
+		}
 	}
 
 	// Assign the gateway IP from the subnet to the interface
 	gatewayIP := m.pool.GatewayIP()
 	if out, err := exec.Command("ip", "address", "add", "dev", iface, gatewayIP).CombinedOutput(); err != nil {
-		return fmt.Errorf("ip address add %s: %s: %w", gatewayIP, strings.TrimSpace(string(out)), err)
+		msg := strings.TrimSpace(string(out))
+		// If address is already assigned, it's not a fatal error
+		if !strings.Contains(msg, "File exists") {
+			return fmt.Errorf("ip address add %s: %s: %w", gatewayIP, msg, err)
+		}
 	}
 
 	// Bring the interface up
