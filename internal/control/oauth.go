@@ -294,11 +294,6 @@ func writeTokenExchangeError(w http.ResponseWriter, publicFallback string, err e
 func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	slog.Info("[AUTH] Refresh hit", "remote", r.RemoteAddr)
 
-	if !h.csrfCheck(w, r) {
-		slog.Warn("[AUTH] Refresh CSRF check failed")
-		return
-	}
-
 	var req RefreshRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		slog.Warn("[AUTH] Refresh invalid request body", "error", err)
@@ -308,6 +303,13 @@ func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	if req.RefreshToken == "" {
 		slog.Warn("[AUTH] Refresh missing refresh_token")
 		respond.JsonError(w, "refresh_token is required", http.StatusBadRequest)
+		return
+	}
+
+	origin := r.Header.Get("Origin")
+	if origin != "" && !h.isAllowedOrigin(origin) {
+		slog.Warn("[AUTH] Refresh CSRF check failed: origin not allowed", "origin", origin)
+		respond.JsonError(w, "origin not allowed", http.StatusForbidden)
 		return
 	}
 
