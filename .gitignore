@@ -80,8 +80,6 @@ venv/
 
 # Asistentes locales y caches
 .gemini/
-!.gemini/rules/
-!.gemini/rules/**
 .agents/
 .opencode/
 .claude/
