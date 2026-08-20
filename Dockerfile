@@ -1,18 +1,16 @@
 # ── Stage 1: Build ──
-FROM golang:1.22-alpine AS builder
+FROM golang:alpine AS builder
 
-RUN apk add --no-cache git
+RUN apk add --no-cache git bash gcc musl-dev
 
 WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-
+COPY go.mod ./
 COPY cmd ./cmd
 COPY internal ./internal
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /vpn-core ./cmd/vpn-core
+RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /vpn-core ./cmd/vpn-core
 
 # ── Stage 2: Runtime ──
-FROM alpine:3.20
+FROM alpine:3.21
 
 RUN apk add --no-cache \
     wireguard-tools \
@@ -26,11 +24,9 @@ RUN apk add --no-cache \
 
 COPY --from=builder /vpn-core /usr/local/bin/vpn-core
 
-# The container runs as root so that child processes (ip, wg, iptables)
-# inherit NET_ADMIN granted via cap_add in docker-compose.yml.
-# Network namespace isolation already limits the blast radius.
-
 EXPOSE 8080/tcp
 EXPOSE 51820/udp
+EXPOSE 8888/tcp
 
 ENTRYPOINT ["/usr/local/bin/vpn-core"]
+
