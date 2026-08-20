@@ -1,1 +1,0 @@
-ALTER TABLE peers ADD COLUMN IF NOT EXISTS preshared_key VARCHAR(64);

@@ -1,11 +1,12 @@
 -- 000001_init_schema.down.sql
--- Drop all tables in reverse dependency order
-
 BEGIN;
-
-DROP TABLE IF EXISTS audit_logs;
-DROP TABLE IF EXISTS peers;
-DROP TABLE IF EXISTS vpn_servers;
-DROP TABLE IF EXISTS users;
-
+DROP TABLE IF EXISTS audit_logs CASCADE;
+DROP TABLE IF EXISTS trusted_extension_origins CASCADE;
+DROP TABLE IF EXISTS ip_country_cache CASCADE;
+DROP TABLE IF EXISTS user_exit_node CASCADE;
+DROP TABLE IF EXISTS mesh_members CASCADE;
+DROP TABLE IF EXISTS mesh_networks CASCADE;
+DROP TABLE IF EXISTS peers CASCADE;
+DROP TABLE IF EXISTS vpn_servers CASCADE;
+DROP TABLE IF EXISTS users CASCADE;
 COMMIT;
