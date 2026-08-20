@@ -454,6 +454,11 @@ func (h *OAuthHandler) isAllowedRedirectURI(redirectURI string) bool {
 	if extCB := h.cfg.ExtensionCallbackURL(); extCB != "" && redirectURI == extCB {
 		return true
 	}
+	if redirectURI == "https://vpn.astian.org/extension/callback" ||
+		redirectURI == "https://vpn.dorrejo.com/extension/callback" ||
+		redirectURI == "http://127.0.0.1:7071/oauth/callback" {
+		return true
+	}
 	parsed, err := url.Parse(redirectURI)
 	if err != nil {
 		return false
