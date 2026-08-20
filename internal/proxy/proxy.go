@@ -72,6 +72,14 @@ func (s *Server) Start(ctx context.Context) error {
 		srv.Shutdown(shutCtx)
 	}()
 
+	if s.cfg.ProxyTLSEnabled || (s.cfg.ProxyTLSCert != "" && s.cfg.ProxyTLSKey != "") {
+		slog.Info("HTTPS CONNECT proxy (TLS) listening", "addr", s.addr, "cert", s.cfg.ProxyTLSCert)
+		if err := srv.ListenAndServeTLS(s.cfg.ProxyTLSCert, s.cfg.ProxyTLSKey); err != nil && err != http.ErrServerClosed {
+			return fmt.Errorf("secure proxy server: %w", err)
+		}
+		return nil
+	}
+
 	slog.Info("HTTP CONNECT proxy listening", "addr", s.addr)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("proxy server: %w", err)

@@ -70,10 +70,13 @@ type Config struct {
 	// VPN client configuration
 	VpnDNS string // comma-separated DNS servers pushed to VPN clients
 
-	// HTTP CONNECT proxy
+	// HTTP / HTTPS CONNECT proxy
 	ProxyEnabled         bool // enable the HTTP CONNECT forward proxy
 	ProxyPort            int  // TCP port for the forward proxy (default 8888)
 	ProxyMaxConnsPerUser int  // max concurrent CONNECT tunnels per user (default 20)
+	ProxyTLSEnabled      bool // enable direct TLS termination on the proxy port
+	ProxyTLSCert         string // path to TLS certificate (fullchain.pem)
+	ProxyTLSKey          string // path to TLS private key (privkey.pem)
 
 	// WebSocket limits per plan
 	WSMaxGlobal int // max global WS connections (0 = unlimited)
@@ -139,6 +142,9 @@ func Load() *Config {
 		ProxyEnabled:         getEnvBool("PROXY_ENABLED", false),
 		ProxyPort:            getEnvInt("PROXY_PORT", 8888),
 		ProxyMaxConnsPerUser: getEnvInt("PROXY_MAX_CONNS_PER_USER", 20),
+		ProxyTLSEnabled:      getEnvBool("PROXY_TLS_ENABLED", false),
+		ProxyTLSCert:         getEnv("PROXY_TLS_CERT", ""),
+		ProxyTLSKey:          getEnv("PROXY_TLS_KEY", ""),
 
 		WSMaxGlobal: getEnvInt("WS_MAX_GLOBAL", 1000),
 		WSMaxFree:   getEnvInt("WS_MAX_FREE", 1),
