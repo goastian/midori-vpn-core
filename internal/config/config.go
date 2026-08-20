@@ -140,7 +140,7 @@ func Load() *Config {
 		VpnDNS: getEnv("VPN_DNS", "1.1.1.2, 1.0.0.2"),
 
 		ProxyEnabled:         getEnvBool("PROXY_ENABLED", false),
-		ProxyPort:            getEnvInt("PROXY_PORT", 8888),
+		ProxyPort:            getEnvInt("PROXY_PORT", 443),
 		ProxyMaxConnsPerUser: getEnvInt("PROXY_MAX_CONNS_PER_USER", 20),
 		ProxyTLSEnabled:      getEnvBool("PROXY_TLS_ENABLED", false),
 		ProxyTLSCert:         getEnv("PROXY_TLS_CERT", ""),

@@ -34,6 +34,7 @@ type VPNServer struct {
 	CurrentPeers      int       `json:"current_peers"`
 	IsActive          bool      `json:"is_active"`
 	ProxyPort         int       `json:"proxy_port"`
+	ProxyScheme       string    `json:"proxy_scheme"`
 	SupportsWireGuard bool      `json:"supports_wireguard"`
 	SupportsProxy     bool      `json:"supports_proxy"`
 	SupportsMeshExit  bool      `json:"supports_mesh_exit"`
@@ -42,6 +43,12 @@ type VPNServer struct {
 }
 
 func (s *VPNServer) ApplyCapabilities() {
+	if s.ProxyScheme == "" {
+		s.ProxyScheme = "https"
+	}
+	if s.ProxyPort <= 0 {
+		s.ProxyPort = 443
+	}
 	s.SupportsWireGuard = s.IsActive && s.WGPort > 0 && s.PublicKey != ""
 	s.SupportsProxy = s.IsActive && s.ProxyPort > 0
 	s.SupportsMeshExit = s.SupportsProxy

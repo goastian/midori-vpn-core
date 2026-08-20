@@ -26,7 +26,6 @@ COPY --from=builder /vpn-core /usr/local/bin/vpn-core
 
 EXPOSE 8080/tcp
 EXPOSE 51820/udp
-EXPOSE 8888/tcp
 
 ENTRYPOINT ["/usr/local/bin/vpn-core"]
 

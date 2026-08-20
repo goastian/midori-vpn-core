@@ -1,175 +1,173 @@
--- =============================================================================
--- MidoriVPN Consolidated Database Schema (PostgreSQL 16+)
--- =============================================================================
+-- Midori VPN v2.0.0 Canonical Consolidated PostgreSQL Schema
+-- Generated automatically from migrations 000001 - 000021
 
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+BEGIN;
+
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- 1. Users Table (OIDC / Authentik identity)
+-- ============================================================
+-- Table: users
+-- ============================================================
 CREATE TABLE IF NOT EXISTS users (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    authentik_uid VARCHAR(255) UNIQUE NOT NULL,
-    email VARCHAR(255) NOT NULL,
-    display_name VARCHAR(255) DEFAULT '',
-    groups TEXT[] DEFAULT '{}',
-    is_banned BOOLEAN NOT NULL DEFAULT FALSE,
-    banned_at TIMESTAMPTZ,
-    ban_reason TEXT DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    authentik_uid  TEXT        NOT NULL UNIQUE,
+    email          TEXT        NOT NULL DEFAULT '',
+    display_name   TEXT        NOT NULL DEFAULT '',
+    groups         TEXT[]      NOT NULL DEFAULT '{}',
+    is_banned      BOOLEAN     NOT NULL DEFAULT FALSE,
+    banned_at      TIMESTAMPTZ,
+    ban_reason     TEXT        NOT NULL DEFAULT '',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_users_authentik_uid ON users(authentik_uid);
-CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-CREATE INDEX IF NOT EXISTS idx_users_is_banned ON users(is_banned) WHERE is_banned = TRUE;
-
--- 2. VPN Servers Table
+-- ============================================================
+-- Table: vpn_servers
+-- ============================================================
 CREATE TABLE IF NOT EXISTS vpn_servers (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    name VARCHAR(100) NOT NULL,
-    host VARCHAR(255) NOT NULL,
-    endpoint VARCHAR(255) NOT NULL DEFAULT '',
-    port INT NOT NULL DEFAULT 8085,
-    wg_port INT NOT NULL DEFAULT 51820,
-    public_key VARCHAR(64) NOT NULL,
-    core_token VARCHAR(255) NOT NULL,
-    location VARCHAR(100) NOT NULL,
-    country_code VARCHAR(10) NOT NULL,
-    max_peers INT NOT NULL DEFAULT 100,
-    current_peers INT NOT NULL DEFAULT 0,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    proxy_port INT NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    name           TEXT        NOT NULL,
+    host           TEXT        NOT NULL,
+    port           INTEGER     NOT NULL DEFAULT 443,
+    wg_port        INTEGER     NOT NULL DEFAULT 51820,
+    public_key     TEXT        NOT NULL DEFAULT '',
+    core_token     TEXT        NOT NULL DEFAULT '',
+    location       TEXT        NOT NULL DEFAULT '',
+    country_code   TEXT        NOT NULL DEFAULT '',
+    max_peers      INTEGER     NOT NULL DEFAULT 100,
+    current_peers  INTEGER     NOT NULL DEFAULT 0,
+    is_active      BOOLEAN     NOT NULL DEFAULT TRUE,
+    proxy_port     INTEGER     NOT NULL DEFAULT 443,
+    proxy_scheme   VARCHAR(10) NOT NULL DEFAULT 'https',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_vpn_servers_active_peers ON vpn_servers(is_active, current_peers, max_peers);
-CREATE INDEX IF NOT EXISTS idx_vpn_servers_host ON vpn_servers(host);
+CREATE INDEX IF NOT EXISTS idx_vpn_servers_active ON vpn_servers (is_active) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_vpn_servers_country_active ON vpn_servers (country_code, is_active) WHERE is_active = TRUE;
 
--- 3. Peers Table (WireGuard Client Allocations)
+-- ============================================================
+-- Table: peers
+-- ============================================================
 CREATE TABLE IF NOT EXISTS peers (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    server_id UUID NOT NULL REFERENCES vpn_servers(id) ON DELETE CASCADE,
-    public_key VARCHAR(64) NOT NULL,
-    preshared_key VARCHAR(64),
-    assigned_ip VARCHAR(50) NOT NULL,
-    device_name VARCHAR(64) NOT NULL DEFAULT 'device',
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id        UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    server_id      UUID        NOT NULL REFERENCES vpn_servers(id) ON DELETE CASCADE,
+    public_key     TEXT        NOT NULL,
+    preshared_key  TEXT        NOT NULL DEFAULT '',
+    assigned_ip    TEXT        NOT NULL,
+    is_active      BOOLEAN     NOT NULL DEFAULT TRUE,
+    device_name    TEXT        NOT NULL DEFAULT '',
     last_handshake TIMESTAMPTZ,
-    bytes_sent BIGINT NOT NULL DEFAULT 0,
-    bytes_received BIGINT NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    expires_at TIMESTAMPTZ
+    bytes_sent     BIGINT      NOT NULL DEFAULT 0,
+    bytes_received BIGINT      NOT NULL DEFAULT 0,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at     TIMESTAMPTZ,
+    CONSTRAINT uq_peers_server_assigned_ip UNIQUE (server_id, assigned_ip)
 );
 
-CREATE INDEX IF NOT EXISTS idx_peers_user_id ON peers(user_id);
-CREATE INDEX IF NOT EXISTS idx_peers_server_id ON peers(server_id);
-CREATE INDEX IF NOT EXISTS idx_peers_user_active ON peers(user_id, is_active);
-CREATE INDEX IF NOT EXISTS idx_peers_server_active ON peers(server_id, is_active);
-CREATE INDEX IF NOT EXISTS idx_peers_user_pubkey_active ON peers(user_id, public_key) WHERE is_active = TRUE;
-CREATE INDEX IF NOT EXISTS idx_peers_active_stale ON peers(is_active, last_handshake, created_at) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_peers_public_key ON peers (public_key);
+CREATE INDEX IF NOT EXISTS idx_peers_is_active ON peers (is_active) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_peers_assigned_ip ON peers (assigned_ip);
+CREATE INDEX IF NOT EXISTS idx_peers_created_at ON peers (created_at DESC);
 
--- 4. Audit Logs Table
-CREATE TABLE IF NOT EXISTS audit_logs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-    action VARCHAR(100) NOT NULL,
-    metadata JSONB NOT NULL DEFAULT '{}',
-    ip_address VARCHAR(45) NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_action_created ON audit_logs(action, created_at DESC);
-
--- 5. Mesh Networks Table
+-- ============================================================
+-- Table: mesh_networks
+-- ============================================================
 CREATE TABLE IF NOT EXISTS mesh_networks (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    name VARCHAR(100) NOT NULL,
-    subnet VARCHAR(50) NOT NULL,
-    is_public BOOLEAN NOT NULL DEFAULT FALSE,
-    community_name VARCHAR(100) DEFAULT '',
-    country_code VARCHAR(10) DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    name           TEXT        NOT NULL,
+    description    TEXT        NOT NULL DEFAULT '',
+    subnet         TEXT        NOT NULL,
+    owner_id       UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    max_members    INTEGER     NOT NULL DEFAULT 10,
+    member_count   INTEGER     NOT NULL DEFAULT 0,
+    is_active      BOOLEAN     NOT NULL DEFAULT TRUE,
+    is_session     BOOLEAN     NOT NULL DEFAULT FALSE,
+    country_code   TEXT        NOT NULL DEFAULT '',
+    public_ip      TEXT        NOT NULL DEFAULT '',
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_mesh_networks_owner ON mesh_networks(owner_id);
-CREATE INDEX IF NOT EXISTS idx_mesh_networks_public ON mesh_networks(is_public) WHERE is_public = TRUE;
+CREATE INDEX IF NOT EXISTS idx_mesh_networks_owner ON mesh_networks (owner_id);
+CREATE INDEX IF NOT EXISTS idx_mesh_networks_session ON mesh_networks (is_session) WHERE is_session = TRUE;
 
--- 6. Mesh Members Table
+-- ============================================================
+-- Table: mesh_members
+-- ============================================================
 CREATE TABLE IF NOT EXISTS mesh_members (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    mesh_id UUID NOT NULL REFERENCES mesh_networks(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    mesh_ip VARCHAR(50) NOT NULL,
-    role VARCHAR(20) NOT NULL DEFAULT 'member',
-    joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(mesh_id, user_id),
-    UNIQUE(mesh_id, mesh_ip)
+    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    mesh_id        UUID        NOT NULL REFERENCES mesh_networks(id) ON DELETE CASCADE,
+    user_id        UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    public_key     TEXT        NOT NULL,
+    preshared_key  TEXT        NOT NULL DEFAULT '',
+    assigned_ip    TEXT        NOT NULL,
+    endpoint       TEXT        NOT NULL DEFAULT '',
+    is_active      BOOLEAN     NOT NULL DEFAULT TRUE,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_mesh_members_mesh_ip UNIQUE (mesh_id, assigned_ip),
+    CONSTRAINT uq_mesh_members_mesh_user UNIQUE (mesh_id, user_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_mesh_members_mesh_user ON mesh_members(mesh_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_mesh_members_user_active ON mesh_members (user_id, is_active) WHERE is_active = TRUE;
 
--- 7. Mesh Invites Table
-CREATE TABLE IF NOT EXISTS mesh_invites (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    mesh_id UUID NOT NULL REFERENCES mesh_networks(id) ON DELETE CASCADE,
-    code VARCHAR(64) UNIQUE NOT NULL,
-    created_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    max_uses INT NOT NULL DEFAULT 1,
-    uses INT NOT NULL DEFAULT 0,
-    expires_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_mesh_invites_code ON mesh_invites(code);
-
--- 8. Mesh Sessions Table
-CREATE TABLE IF NOT EXISTS mesh_sessions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    mesh_id UUID NOT NULL REFERENCES mesh_networks(id) ON DELETE CASCADE,
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    peer_id UUID REFERENCES peers(id) ON DELETE SET NULL,
-    public_key VARCHAR(64) NOT NULL,
-    public_ip VARCHAR(100) DEFAULT '',
-    last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE(mesh_id, user_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_mesh_sessions_mesh_user ON mesh_sessions(mesh_id, user_id);
-
--- 9. Exit Nodes Table
+-- ============================================================
+-- Table: exit_nodes
+-- ============================================================
 CREATE TABLE IF NOT EXISTS exit_nodes (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    server_id UUID NOT NULL REFERENCES vpn_servers(id) ON DELETE CASCADE,
-    name VARCHAR(100) NOT NULL,
-    city VARCHAR(100) NOT NULL DEFAULT '',
-    country VARCHAR(100) NOT NULL DEFAULT '',
-    country_code VARCHAR(10) NOT NULL,
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    supports_wireguard BOOLEAN NOT NULL DEFAULT TRUE,
-    supports_proxy BOOLEAN NOT NULL DEFAULT TRUE,
-    supports_mesh_exit BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    mesh_id        UUID        NOT NULL REFERENCES mesh_networks(id) ON DELETE CASCADE,
+    member_id      UUID        NOT NULL REFERENCES mesh_members(id) ON DELETE CASCADE,
+    user_id        UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    is_active      BOOLEAN     NOT NULL DEFAULT TRUE,
+    country_code   TEXT        NOT NULL DEFAULT '',
+    public_ip      TEXT        NOT NULL DEFAULT '',
+    allow_traffic  BOOLEAN     NOT NULL DEFAULT TRUE,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_exit_nodes_mesh UNIQUE (mesh_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_exit_nodes_active ON exit_nodes(is_active) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_exit_nodes_mesh_active ON exit_nodes (mesh_id, is_active) WHERE is_active = TRUE;
 
--- 10. Trusted Extension Origins Table
-CREATE TABLE IF NOT EXISTS trusted_extension_origins (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    origin VARCHAR(255) UNIQUE NOT NULL,
-    description VARCHAR(255) NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- 11. IP Country Cache Table
+-- ============================================================
+-- Table: ip_country_cache
+-- ============================================================
 CREATE TABLE IF NOT EXISTS ip_country_cache (
-    ip VARCHAR(45) PRIMARY KEY,
-    country_code VARCHAR(10) NOT NULL,
-    city VARCHAR(100) NOT NULL DEFAULT '',
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    ip             TEXT        PRIMARY KEY,
+    country_code   TEXT        NOT NULL,
+    expires_at     TIMESTAMPTZ NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- ============================================================
+-- Table: trusted_extension_origins
+-- ============================================================
+CREATE TABLE IF NOT EXISTS trusted_extension_origins (
+    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    origin         TEXT        NOT NULL UNIQUE,
+    revoked        BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================
+-- Table: audit_logs
+-- ============================================================
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id        UUID        REFERENCES users(id) ON DELETE SET NULL,
+    action         TEXT        NOT NULL,
+    resource_type  TEXT        NOT NULL DEFAULT '',
+    resource_id    TEXT        NOT NULL DEFAULT '',
+    ip_address     TEXT        NOT NULL DEFAULT '',
+    user_agent     TEXT        NOT NULL DEFAULT '',
+    metadata       JSONB       NOT NULL DEFAULT '{}'::JSONB,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC);
+
+COMMIT;

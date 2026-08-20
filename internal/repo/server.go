@@ -24,9 +24,9 @@ type ServerRepo struct {
 
 const (
 	serverColumnsPublic = `id, name, host, endpoint, port, wg_port, public_key, location, country_code,
-		max_peers, current_peers, is_active, proxy_port, created_at, updated_at`
+		max_peers, current_peers, is_active, proxy_port, proxy_scheme, created_at, updated_at`
 	serverColumnsWithToken = `id, name, host, endpoint, port, wg_port, public_key, core_token, location, country_code,
-		max_peers, current_peers, is_active, proxy_port, created_at, updated_at`
+		max_peers, current_peers, is_active, proxy_port, proxy_scheme, created_at, updated_at`
 )
 
 type rowScanner interface {
@@ -49,14 +49,20 @@ func (r *ServerRepo) InvalidateCache() {
 
 func (r *ServerRepo) Create(ctx context.Context, s *models.VPNServer) error {
 	defer r.InvalidateCache()
+	if s.ProxyScheme == "" {
+		s.ProxyScheme = "https"
+	}
+	if s.ProxyPort <= 0 {
+		s.ProxyPort = 443
+	}
 	query := `
-		INSERT INTO vpn_servers (name, host, endpoint, port, wg_port, public_key, core_token, location, country_code, max_peers, proxy_port)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO vpn_servers (name, host, endpoint, port, wg_port, public_key, core_token, location, country_code, max_peers, proxy_port, proxy_scheme)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING id, created_at, updated_at
 	`
 	return r.pool.QueryRow(ctx, query,
 		s.Name, s.Host, s.Endpoint, s.Port, s.WGPort, s.PublicKey, s.CoreToken,
-		s.Location, s.CountryCode, s.MaxPeers, s.ProxyPort,
+		s.Location, s.CountryCode, s.MaxPeers, s.ProxyPort, s.ProxyScheme,
 	).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt)
 }
 
@@ -207,7 +213,7 @@ func scanServerPublic(row rowScanner) (*models.VPNServer, error) {
 	var s models.VPNServer
 	if err := row.Scan(
 		&s.ID, &s.Name, &s.Host, &s.Endpoint, &s.Port, &s.WGPort, &s.PublicKey,
-		&s.Location, &s.CountryCode, &s.MaxPeers, &s.CurrentPeers, &s.IsActive, &s.ProxyPort,
+		&s.Location, &s.CountryCode, &s.MaxPeers, &s.CurrentPeers, &s.IsActive, &s.ProxyPort, &s.ProxyScheme,
 		&s.CreatedAt, &s.UpdatedAt,
 	); err != nil {
 		return nil, err
@@ -220,7 +226,7 @@ func scanServerWithToken(row rowScanner) (*models.VPNServer, error) {
 	var s models.VPNServer
 	if err := row.Scan(
 		&s.ID, &s.Name, &s.Host, &s.Endpoint, &s.Port, &s.WGPort, &s.PublicKey, &s.CoreToken,
-		&s.Location, &s.CountryCode, &s.MaxPeers, &s.CurrentPeers, &s.IsActive, &s.ProxyPort,
+		&s.Location, &s.CountryCode, &s.MaxPeers, &s.CurrentPeers, &s.IsActive, &s.ProxyPort, &s.ProxyScheme,
 		&s.CreatedAt, &s.UpdatedAt,
 	); err != nil {
 		return nil, err

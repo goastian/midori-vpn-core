@@ -7,7 +7,7 @@ func TestVPNServerApplyCapabilities(t *testing.T) {
 		IsActive:  true,
 		WGPort:    51820,
 		PublicKey: "server-key",
-		ProxyPort: 8888,
+		ProxyPort: 443,
 	}
 
 	server.ApplyCapabilities()
@@ -28,7 +28,7 @@ func TestVPNServerApplyCapabilitiesInactive(t *testing.T) {
 		IsActive:  false,
 		WGPort:    51820,
 		PublicKey: "server-key",
-		ProxyPort: 8888,
+		ProxyPort: 443,
 	}
 
 	server.ApplyCapabilities()
