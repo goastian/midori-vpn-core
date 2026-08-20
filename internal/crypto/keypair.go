@@ -38,3 +38,13 @@ func GenerateKeypair() (*Keypair, error) {
 		PublicKey:  base64.StdEncoding.EncodeToString(pubKey),
 	}, nil
 }
+
+// GeneratePresharedKey generates a cryptographically secure 256-bit symmetric key for WireGuard post-quantum protection.
+func GeneratePresharedKey() (string, error) {
+	var key [32]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(key[:]), nil
+}
+

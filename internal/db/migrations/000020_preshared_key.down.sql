@@ -1,0 +1,1 @@
+ALTER TABLE peers DROP COLUMN IF EXISTS preshared_key;

@@ -53,6 +53,7 @@ type Peer struct {
 	UserEmail     string     `json:"user_email,omitempty"`
 	ServerID      uuid.UUID  `json:"server_id"`
 	PublicKey     string     `json:"public_key"`
+	PresharedKey  string     `json:"preshared_key,omitempty"`
 	AssignedIP    string     `json:"assigned_ip"`
 	IsActive      bool       `json:"is_active"`
 	DeviceName    string     `json:"device_name"`
@@ -78,6 +79,7 @@ type ConnectionConfig struct {
 	PeerIP          string    `json:"peer_ip"`
 	ServerPublicKey string    `json:"server_public_key"`
 	ServerEndpoint  string    `json:"server_endpoint"`
+	PresharedKey    string    `json:"preshared_key,omitempty"`
 	DNS             string    `json:"dns"`
 	AllowedIPs      string    `json:"allowed_ips"`
 }

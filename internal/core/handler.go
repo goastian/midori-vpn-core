@@ -32,8 +32,9 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 // --- Peers ---
 
 type AddPeerRequest struct {
-	PublicKey string `json:"public_key"`
-	Keepalive int    `json:"keepalive"`
+	PublicKey    string `json:"public_key"`
+	PresharedKey string `json:"preshared_key,omitempty"`
+	Keepalive    int    `json:"keepalive"`
 }
 
 type AddPeerResponse struct {
@@ -58,7 +59,7 @@ func (h *Handler) AddPeer(w http.ResponseWriter, r *http.Request) {
 		req.Keepalive = 25
 	}
 
-	ip, err := h.mgr.AddPeer(req.PublicKey, req.Keepalive)
+	ip, err := h.mgr.AddPeerWithPSK(req.PublicKey, req.Keepalive, req.PresharedKey)
 	if err != nil {
 		respond.SafeError(w, "failed to add peer", err, http.StatusInternalServerError)
 		return

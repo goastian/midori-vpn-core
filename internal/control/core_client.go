@@ -278,11 +278,15 @@ type coreAPIResponse struct {
 
 // --- Core API calls ---
 
-func CallCoreAddPeer(server *models.VPNServer, pubkey string) (*CoreAddPeerResponse, error) {
-	payload, _ := json.Marshal(map[string]interface{}{
+func CallCoreAddPeer(server *models.VPNServer, pubkey string, presharedKey ...string) (*CoreAddPeerResponse, error) {
+	reqMap := map[string]interface{}{
 		"public_key": pubkey,
 		"keepalive":  25,
-	})
+	}
+	if len(presharedKey) > 0 && presharedKey[0] != "" {
+		reqMap["preshared_key"] = presharedKey[0]
+	}
+	payload, _ := json.Marshal(reqMap)
 
 	fullURL, cbKey, err := coreURL(server, "/api/v1/peers")
 	if err != nil {

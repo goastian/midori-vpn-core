@@ -134,7 +134,7 @@ func Load() *Config {
 		ConnectRateLimitRPS:   getEnvFloat("CONNECT_RATE_LIMIT_RPS", 0.5),
 		ConnectRateLimitBurst: getEnvInt("CONNECT_RATE_LIMIT_BURST", 3),
 
-		VpnDNS: getEnv("VPN_DNS", "1.1.1.1, 8.8.8.8"),
+		VpnDNS: getEnv("VPN_DNS", "1.1.1.2, 1.0.0.2"),
 
 		ProxyEnabled:         getEnvBool("PROXY_ENABLED", false),
 		ProxyPort:            getEnvInt("PROXY_PORT", 8888),

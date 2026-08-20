@@ -421,6 +421,10 @@ func (m *Manager) loadExistingPeers() error {
 // --- Public API ---
 
 func (m *Manager) AddPeer(pubkeyStr string, keepalive int) (string, error) {
+	return m.AddPeerWithPSK(pubkeyStr, keepalive, "")
+}
+
+func (m *Manager) AddPeerWithPSK(pubkeyStr string, keepalive int, pskStr string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -451,6 +455,15 @@ func (m *Manager) AddPeer(pubkeyStr string, keepalive int) (string, error) {
 		PublicKey:                   pubKey,
 		AllowedIPs:                  []net.IPNet{*ipNet},
 		PersistentKeepaliveInterval: &ka,
+	}
+
+	if pskStr != "" {
+		pskBytes, err := base64.StdEncoding.DecodeString(pskStr)
+		if err == nil && len(pskBytes) == 32 {
+			var psk wgtypes.Key
+			copy(psk[:], pskBytes)
+			peerCfg.PresharedKey = &psk
+		}
 	}
 
 	if err := m.client.ConfigureDevice(m.cfg.WGInterface, wgtypes.Config{
