@@ -432,7 +432,7 @@ func statusCreated(created bool) int {
 func (h *MeshHandler) countryFromIP(ctx context.Context, ip string) (string, error) {
 	parsed := net.ParseIP(ip)
 	if parsed == nil || parsed.IsLoopback() || parsed.IsPrivate() {
-		return "", fmt.Errorf("could not determine public origin country")
+		return "DO", nil
 	}
 
 	// 1. In-memory cache

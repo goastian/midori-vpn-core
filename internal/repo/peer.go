@@ -40,6 +40,12 @@ func (r *PeerRepo) ExistsActiveDeviceName(ctx context.Context, userID uuid.UUID,
 	return exists, nil
 }
 
+func (r *PeerRepo) DeactivateByName(ctx context.Context, userID uuid.UUID, deviceName string) error {
+	query := `UPDATE peers SET is_active = FALSE WHERE user_id = $1 AND LOWER(device_name) = LOWER($2) AND is_active = TRUE`
+	_, err := r.pool.Exec(ctx, query, userID, deviceName)
+	return err
+}
+
 func (r *PeerRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.Peer, error) {
 	query := `
 		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name,

@@ -24,6 +24,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/config"
 	vpnCrypto "github.com/goastian/midori-vpn-core/internal/crypto"
 	"github.com/goastian/midori-vpn-core/internal/models"
+	"github.com/goastian/midori-vpn-core/internal/proxytoken"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 	"github.com/goastian/midori-vpn-core/internal/respond"
 	"github.com/goastian/midori-vpn-core/internal/wg"
@@ -96,6 +97,7 @@ type Handler struct {
 	appEnv            string
 	coreAllowLoopback bool
 	vpnDNS            string
+	authToken         string
 	connectLimiter    *userRateLimiter // per-user rate limit for the /connect endpoint
 }
 
@@ -116,6 +118,7 @@ func NewHandlerWithMesh(pool *pgxpool.Pool, cfg *config.Config, wgMgr *wg.Manage
 		appEnv:            cfg.AppEnv,
 		coreAllowLoopback: cfg.CoreAllowHTTP,
 		vpnDNS:            cfg.VpnDNS,
+		authToken:         cfg.AuthToken,
 	}
 	if cfg.ConnectRateLimitRPS > 0 {
 		h.connectLimiter = newUserRateLimiter(cfg.ConnectRateLimitRPS, cfg.ConnectRateLimitBurst)
@@ -389,15 +392,12 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 2b. Prevent duplicate device names for active devices
+	// 2b. If an active device with this name already exists for this user,
+	// deactivate the stale session so this device can reconnect seamlessly.
 	deviceName := strings.TrimSpace(req.DeviceName)
 	if deviceName != "" {
-		nameExists, err := h.peerRepo.ExistsActiveDeviceName(r.Context(), user.ID, deviceName)
-		if err != nil {
-			slog.Error("check device name error", "error", err)
-		} else if nameExists {
-			respond.JsonError(w, "ya tienes un dispositivo activo con este nombre", http.StatusConflict)
-			return
+		if err := h.peerRepo.DeactivateByName(r.Context(), user.ID, deviceName); err != nil {
+			slog.Warn("check device name deactivate error", "error", err)
 		}
 	}
 
@@ -714,12 +714,12 @@ func (h *Handler) ProxyCredentials(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Scoped proxy token with 30-minute validity
-	proxyToken := fmt.Sprintf("vpn-proxy-%s-%d", user.ID.String(), time.Now().Add(30*time.Minute).Unix())
+	// Scoped proxy token with 15-minute validity signed with HMAC-SHA256 (aud=vpn-proxy)
+	proxyTokenStr := proxytoken.Generate(user.ID, h.authToken, proxytoken.DefaultTTL)
 
 	respond.JsonOK(w, map[string]interface{}{
-		"proxy_token":     proxyToken,
-		"expires_in":      1800,
+		"proxy_token":     proxyTokenStr,
+		"expires_in":      int(proxytoken.DefaultTTL.Seconds()),
 		"proxy_endpoints": endpoints,
 	}, http.StatusOK)
 }

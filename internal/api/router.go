@@ -16,6 +16,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/control"
 	"github.com/goastian/midori-vpn-core/internal/core"
 	"github.com/goastian/midori-vpn-core/internal/repo"
+	"github.com/goastian/midori-vpn-core/internal/tunnel"
 	"github.com/goastian/midori-vpn-core/internal/wg"
 )
 
@@ -36,20 +37,26 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 	// Limit request body size to 1 MiB to prevent resource exhaustion attacks.
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-			next.ServeHTTP(w, r)
+			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+			defer func() {
+				RecordRequest(ww.Status())
+			}()
+			r.Body = http.MaxBytesReader(ww, r.Body, 1<<20)
+			next.ServeHTTP(ww, r)
 		})
 	})
 
 	h := core.NewHandler(cfg, mgr)
 	healthChecker := NewHealthChecker(cfg, mgr, pool)
 	metricsExporter := NewMetricsExporter(mgr)
+	wsGateway := tunnel.NewWSGateway(cfg.WGPort)
 
 	// Public Health Probes & Telemetry
 	r.Get("/health", h.Health)
 	r.Get("/livez", healthChecker.Livez)
 	r.Get("/readyz", healthChecker.Readyz)
 	r.Get("/metrics", metricsExporter.Handler)
+	r.Get("/api/v1/tunnel/ws", wsGateway.Handler)
 
 	// WireGuard core API (X-Core-Token protected)
 	r.Route("/api/v1", func(r chi.Router) {
@@ -98,6 +105,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 			r.Post("/proxy-credentials", ch.ProxyCredentials)
 			r.Get("/servers", ch.ListServers)
 			r.Get("/servers/ping", ch.PingServers)
+			r.Get("/servers/{id}/ikev2.mobileconfig", ch.ExportIKEv2MobileConfig)
 
 			// Connections
 			r.Post("/connections", ch.Connect)

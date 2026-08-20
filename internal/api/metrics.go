@@ -40,9 +40,12 @@ func (m *MetricsExporter) Handler(w http.ResponseWriter, r *http.Request) {
 	runtime.ReadMemStats(&mem)
 
 	activePeers := 0
+	var bytesSent, bytesRecv int64
 	if m.mgr != nil {
 		if stats, err := m.mgr.ServerStats(); err == nil {
 			activePeers = stats.PeerCount
+			bytesSent = stats.TotalTX
+			bytesRecv = stats.TotalRX
 		}
 	}
 
@@ -52,6 +55,14 @@ func (m *MetricsExporter) Handler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "# HELP midori_vpn_active_peers Current number of active WireGuard peers.\n")
 	fmt.Fprintf(w, "# TYPE midori_vpn_active_peers gauge\n")
 	fmt.Fprintf(w, "midori_vpn_active_peers %d\n\n", activePeers)
+
+	fmt.Fprintf(w, "# HELP midori_vpn_bytes_sent_total Total bytes transmitted via WireGuard.\n")
+	fmt.Fprintf(w, "# TYPE midori_vpn_bytes_sent_total counter\n")
+	fmt.Fprintf(w, "midori_vpn_bytes_sent_total %d\n\n", bytesSent)
+
+	fmt.Fprintf(w, "# HELP midori_vpn_bytes_received_total Total bytes received via WireGuard.\n")
+	fmt.Fprintf(w, "# TYPE midori_vpn_bytes_received_total counter\n")
+	fmt.Fprintf(w, "midori_vpn_bytes_received_total %d\n\n", bytesRecv)
 
 	fmt.Fprintf(w, "# HELP midori_vpn_http_requests_total Total number of HTTP API requests received.\n")
 	fmt.Fprintf(w, "# TYPE midori_vpn_http_requests_total counter\n")

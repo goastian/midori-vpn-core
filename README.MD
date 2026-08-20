@@ -2,6 +2,12 @@
 
 WireGuard VPN management daemon + control panel API written in **Go**, with a **Vue 3** frontend.
 
+> [!IMPORTANT]
+> ### 💻 Client Apps Download & Installation
+> - **Desktop Client (Linux RPM / DEB / macOS / Windows)**: See the [Desktop Installation & GPG Verification Guide](file:///home/IND/wdorrejo/Workspace/Astian/VPN/midori-vpn-desktop/README.md).
+> - **Browser Extension (Chromium / Firefox)**: See [`midorivpn-extension`](file:///home/IND/wdorrejo/Workspace/Astian/VPN/midorivpn-extension).
+> - **Public Release Signing Key (Ed25519)**: `https://vpn.dorrejo.com/RPM-GPG-KEY-midorivpn`
+
 ## Architecture
 
 ```
@@ -70,9 +76,8 @@ Public ports per node:
 
 | Port | Purpose |
 |---|---|
-| `443/tcp` | Control/Core API through TLS |
-| `51820/udp` | WireGuard |
-| `8888/tcp` | Optional authenticated HTTP CONNECT proxy |
+| `443/tcp` | Control/Core API + Obfuscated WSS & HTTPS CONNECT Proxy |
+| `51820/udp` | WireGuard UDP Direct Transport |
 
 Do not expose `8080/tcp` publicly. It should only be reachable by the local
 host nginx through `127.0.0.1:$VPN_CORE_HOST_PORT`.

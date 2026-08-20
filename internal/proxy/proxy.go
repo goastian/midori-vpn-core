@@ -20,6 +20,7 @@ import (
 
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/config"
+	"github.com/goastian/midori-vpn-core/internal/proxytoken"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 )
 
@@ -290,6 +291,11 @@ func (s *Server) authenticate(r *http.Request) (string, error) {
 		}
 	default:
 		return "", fmt.Errorf("unsupported auth scheme: %s", parts[0])
+	}
+
+	// 0. Fast-path: Validate scoped HMAC proxy token (aud=vpn-proxy)
+	if sub, ok := proxytoken.Validate(tokenStr, s.cfg.AuthToken); ok {
+		return sub, nil
 	}
 
 	// JWE tokens (5 dot-separated segments) are encrypted and cannot be

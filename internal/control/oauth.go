@@ -184,6 +184,7 @@ type TokenResponse struct {
 
 type RefreshRequest struct {
 	RefreshToken string `json:"refresh_token"`
+	ClientID     string `json:"client_id,omitempty"`
 }
 
 type tokenExchangeError struct {
@@ -316,7 +317,11 @@ func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	form := url.Values{}
 	form.Set("grant_type", "refresh_token")
 	form.Set("refresh_token", req.RefreshToken)
-	form.Set("client_id", h.cfg.AuthentikClientID)
+	clientID := h.cfg.AuthentikClientID
+	if req.ClientID != "" {
+		clientID = req.ClientID
+	}
+	form.Set("client_id", clientID)
 	if h.cfg.AuthentikClientSecret != "" {
 		form.Set("client_secret", h.cfg.AuthentikClientSecret)
 	}

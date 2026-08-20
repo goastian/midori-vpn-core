@@ -1,0 +1,71 @@
+name: Build & Sign Desktop RPM
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-and-sign-rpm:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust & Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install System Dependencies for RPM Signing
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm gnupg
+
+      - name: Import GPG Signing Key
+        env:
+          GPG_KEY: ${{ secrets.RPM_GPG_SIGNING_KEY }}
+          GPG_KEY_ID: ${{ secrets.RPM_GPG_KEY_ID }}
+        run: |
+          if [ -z "$GPG_KEY" ]; then
+            echo "::error::RPM_GPG_SIGNING_KEY secret is missing!"
+            exit 1
+          fi
+
+          # Import private key into runner's GPG keyring
+          echo "$GPG_KEY" | gpg --batch --import
+
+          # Configure rpmmacros for rpmsign
+          KEY_ID="${GPG_KEY_ID:-BE000EFBCD8F4CDA53FC1A9F13FC1FEEE3315359}"
+          cat <<EOF > ~/.rpmmacros
+          %_signature gpg
+          %_gpg_path $HOME/.gnupg
+          %_gpg_name $KEY_ID
+          %_gpg_digest_algo sha256
+          %__gpg /usr/bin/gpg
+          EOF
+
+          echo "GPG Key imported and ~/.rpmmacros configured successfully."
+
+      - name: Build and Sign RPM Package
+        run: |
+          cd midori-vpn-desktop
+          bash scripts/build-rpm.sh
+
+      - name: Verify Signed RPM Signature
+        run: |
+          cd midori-vpn-desktop
+          rpm --import dist-packages/RPM-GPG-KEY-midorivpn
+          rpm -Kv dist-packages/*.rpm
+
+      - name: Upload RPM Release Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: MidoriVPN-Signed-RPM
+          path: |
+            midori-vpn-desktop/dist-packages/*.rpm
+            midori-vpn-desktop/dist-packages/RPM-GPG-KEY-midorivpn
