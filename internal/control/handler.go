@@ -364,6 +364,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 				PeerIP:          peerIPAddr,
 				ServerPublicKey: serverPubKey,
 				ServerEndpoint:  wireGuardEndpointForServerHost(epHost, existingServer.WGPort),
+				PresharedKey:    existingPeer.PresharedKey,
 				DNS:             h.vpnDNS,
 				AllowedIPs:      "0.0.0.0/0, ::/0",
 			}, http.StatusOK)
@@ -384,6 +385,18 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		}
 		if activeCount >= h.maxDevicesPerUser {
 			respond.JsonError(w, fmt.Sprintf("device limit reached (max %d)", h.maxDevicesPerUser), http.StatusConflict)
+			return
+		}
+	}
+
+	// 2b. Prevent duplicate device names for active devices
+	deviceName := strings.TrimSpace(req.DeviceName)
+	if deviceName != "" {
+		nameExists, err := h.peerRepo.ExistsActiveDeviceName(r.Context(), user.ID, deviceName)
+		if err != nil {
+			slog.Error("check device name error", "error", err)
+		} else if nameExists {
+			respond.JsonError(w, "ya tienes un dispositivo activo con este nombre", http.StatusConflict)
 			return
 		}
 	}
@@ -430,8 +443,14 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	// 4. Generate post-quantum resistant symmetric Pre-Shared Key (PSK)
+	psk, pskErr := vpnCrypto.GeneratePresharedKey()
+	if pskErr != nil {
+		slog.Warn("failed to generate PSK", "error", pskErr)
+	}
+
 	// 4+5. Call vpn-core to add peer (core assigns IP from pool)
-	coreResp, err := CallCoreAddPeer(server, req.PublicKey)
+	coreResp, err := CallCoreAddPeer(server, req.PublicKey, psk)
 	if err != nil {
 		slog.Error("core add peer error", "error", err)
 		respond.JsonError(w, "failed to connect to VPN server", http.StatusBadGateway)
@@ -440,11 +459,12 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 
 	// 7. Save peer in DB
 	peer := &models.Peer{
-		UserID:     user.ID,
-		ServerID:   server.ID,
-		PublicKey:  req.PublicKey,
-		AssignedIP: coreResp.AllowedIP,
-		DeviceName: req.DeviceName,
+		UserID:       user.ID,
+		ServerID:     server.ID,
+		PublicKey:    req.PublicKey,
+		PresharedKey: psk,
+		AssignedIP:   coreResp.AllowedIP,
+		DeviceName:   req.DeviceName,
 	}
 	if err := h.peerRepo.Create(r.Context(), peer); err != nil {
 		_ = CallCoreRemovePeer(server, req.PublicKey)
@@ -462,6 +482,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 			"server_id":   server.ID,
 			"ip":          peer.AssignedIP,
 			"device_name": req.DeviceName,
+			"psk_enabled": psk != "",
 		}, r.RemoteAddr)
 
 	// 8. Fetch the real WireGuard public key from the core
@@ -495,6 +516,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		PeerIP:          peerIPAddr,
 		ServerPublicKey: serverPubKey,
 		ServerEndpoint:  wireGuardEndpointForServerHost(epHostConnect, server.WGPort),
+		PresharedKey:    peer.PresharedKey,
 		DNS:             h.vpnDNS,
 		AllowedIPs:      "0.0.0.0/0, ::/0",
 	}
