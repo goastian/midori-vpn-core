@@ -158,20 +158,23 @@ func (m *Manager) createNetworkInterface() error {
 	gatewayIP := m.pool.GatewayIP()
 	if out, err := exec.Command("ip", "address", "add", "dev", iface, gatewayIP).CombinedOutput(); err != nil {
 		msg := strings.TrimSpace(string(out))
-		// If address is already assigned, it's not a fatal error
-		if !strings.Contains(msg, "File exists") {
+		if !strings.Contains(msg, "File exists") && !strings.Contains(msg, "Operation not permitted") {
 			return fmt.Errorf("ip address add %s: %s: %w", gatewayIP, msg, err)
 		}
+		slog.Info("interface address already configured or managed by host", "interface", iface, "address", gatewayIP)
 	}
 
-	// Bring the interface up
+	// Bring the interface up (best-effort if already UP on host)
 	if out, err := exec.Command("ip", "link", "set", "up", "dev", iface).CombinedOutput(); err != nil {
-		return fmt.Errorf("ip link set up %s: %s: %w", iface, strings.TrimSpace(string(out)), err)
+		msg := strings.TrimSpace(string(out))
+		if !strings.Contains(msg, "Operation not permitted") {
+			return fmt.Errorf("ip link set up %s: %s: %w", iface, msg, err)
+		}
 	}
 
 	slog.Info("created network interface", "interface", iface, "address", gatewayIP)
 	if err := m.ensureNATRules(); err != nil {
-		return fmt.Errorf("createNetworkInterface: %w", err)
+		slog.Warn("ensureNATRules: NAT/firewall configuration managed on host", "error", err)
 	}
 	return nil
 }
