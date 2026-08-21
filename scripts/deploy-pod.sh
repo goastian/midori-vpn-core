@@ -41,7 +41,7 @@ podman run -d \
   -e POSTGRES_PASSWORD="${POSTGRES_PASSWORD:?POSTGRES_PASSWORD requerida}" \
   -e POSTGRES_DB="${POSTGRES_DB:-midori_vpn}" \
   -v midori-pgdata:/var/lib/postgresql/data:Z \
-  docker.io/library/postgres:16-alpine
+  docker.io/library/postgres:18-alpine
 
 echo "⚡ Iniciando midori-redis..."
 podman run -d \

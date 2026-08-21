@@ -1,0 +1,161 @@
+// ======================================================
+// Archivos temporales, locks y respaldos de editores
+// ======================================================
+
+// Vim: swap, undo y backups
+(?d)*.swp
+(?d)*.swo
+(?d)*.swn
+(?d)*.un~
+(?d)*~
+
+// Emacs
+(?d).#*
+(?d)#*#
+
+// LibreOffice / OpenOffice
+(?d).~lock.*#
+
+// Locks temporales estilo Microsoft Office
+(?d)~$*
+
+// Archivos que contienen literalmente ".$"
+(?d)*.$*
+
+// Archivos temporales generales
+(?d)*.tmp
+(?d)*.temp
+(?d)*.bak
+(?d)*.backup
+
+// Respaldos de draw.io / diagrams.net
+(?d)*.drawio.bkp
+(?d)*.bkp
+
+
+// ======================================================
+// Node.js y desarrollo web
+// ======================================================
+
+(?d)node_modules
+(?d).pnpm-store
+(?d).npm
+(?d).cache
+(?d).parcel-cache
+(?d).turbo
+(?d).vite
+(?d).next
+(?d).nuxt
+(?d).svelte-kit
+(?d).angular
+(?d)coverage
+(?d)dist
+(?d)build
+
+// Yarn moderno: ignorar caché, pero conservar configuración
+(?d)**/.yarn/cache
+(?d)**/.yarn/unplugged
+(?d)**/.yarn/install-state.gz
+
+// Logs y cachés de herramientas
+(?d)npm-debug.log*
+(?d)yarn-debug.log*
+(?d)yarn-error.log*
+(?d)pnpm-debug.log*
+(?d)*.tsbuildinfo
+(?d).eslintcache
+
+
+// ======================================================
+// Android Studio / Gradle
+// ======================================================
+
+(?d).gradle
+(?d).kotlin
+(?d).idea
+(?d).externalNativeBuild
+(?d).cxx
+(?d)captures
+(?d)lint-cache
+(?d)navigation.json
+
+*.iml
+local.properties
+
+// Artefactos compilados de Android
+(?d)*.apk
+(?d)*.aab
+(?d)*.ap_
+(?d)*.dex
+(?d)*.class
+
+
+// ======================================================
+// Python
+// ======================================================
+
+(?d)__pycache__
+(?d)*.pyc
+(?d)*.pyo
+(?d).pytest_cache
+(?d).mypy_cache
+(?d).ruff_cache
+(?d).tox
+(?d).venv
+(?d)venv
+
+
+// ======================================================
+// Java, Maven, Gradle y otros compiladores
+// ======================================================
+
+(?d)target
+(?d)out
+(?d)bin
+(?d)obj
+
+
+// ======================================================
+// Archivos generados por sistemas operativos
+// ======================================================
+
+// macOS
+(?d).DS_Store
+(?d).AppleDouble
+(?d).LSOverride
+(?d)._*
+
+// Windows
+(?d)Thumbs.db
+(?d)ehthumbs.db
+(?d)Desktop.ini
+(?d)$RECYCLE.BIN
+
+// Linux
+(?d).directory
+(?d).Trash-*
+
+
+// ======================================================
+// Opcionales: datos locales o secretos
+// Quita los "//" únicamente si no deseas sincronizarlos
+// ======================================================
+
+// .env
+// .env.local
+// .env.*.local
+// *.jks
+// *.keystore
+
+// ======================================================
+// Git
+// Se sincroniza el repositorio completo, incluido .git.
+// Solo se excluyen locks temporales generados durante operaciones Git.
+// ======================================================
+
+(?d)**/.git/index.lock
+(?d)**/.git/HEAD.lock
+(?d)**/.git/config.lock
+(?d)**/.git/packed-refs.lock
+(?d)**/.git/shallow.lock
+(?d)**/.git/refs/**/*.lock
