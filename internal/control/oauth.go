@@ -165,6 +165,7 @@ func (h *OAuthHandler) OIDCConfig(w http.ResponseWriter, r *http.Request) {
 		"end_session_endpoint":   h.cfg.AuthentikEndSessionURL(),
 		"jwks_uri":               h.cfg.AuthentikJWKSURL,
 		"client_id":              h.cfg.AuthentikClientID,
+		"redirect_uri":           h.cfg.ControlOAuthRedirectURI,
 	}, http.StatusOK)
 }
 
@@ -184,7 +185,6 @@ type TokenResponse struct {
 
 type RefreshRequest struct {
 	RefreshToken string `json:"refresh_token"`
-	ClientID     string `json:"client_id,omitempty"`
 }
 
 type tokenExchangeError struct {
@@ -317,11 +317,7 @@ func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	form := url.Values{}
 	form.Set("grant_type", "refresh_token")
 	form.Set("refresh_token", req.RefreshToken)
-	clientID := h.cfg.AuthentikClientID
-	if req.ClientID != "" {
-		clientID = req.ClientID
-	}
-	form.Set("client_id", clientID)
+	form.Set("client_id", h.cfg.AuthentikClientID)
 	if h.cfg.AuthentikClientSecret != "" {
 		form.Set("client_secret", h.cfg.AuthentikClientSecret)
 	}
@@ -453,25 +449,22 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	respond.JsonOK(w, tokenResp, http.StatusOK)
 }
 
-// isAllowedRedirectURI checks whether the redirect_uri is explicitly the
-// configured extension callback URL, or its origin matches an allowed CORS
-// origin. The explicit check ensures self-hosted deployments with a custom
-// PUBLIC_BASE_URL that isn't in CORS_ALLOWED_ORIGINS still work.
+// isAllowedRedirectURI accepts only exact callback URIs. OAuth redirect URI
+// validation must not inherit the broader CORS origin policy because doing so
+// would authorize every path hosted on an otherwise trusted origin.
 func (h *OAuthHandler) isAllowedRedirectURI(redirectURI string) bool {
+	if redirectURI == h.cfg.ControlOAuthRedirectURI {
+		return true
+	}
 	if extCB := h.cfg.ExtensionCallbackURL(); extCB != "" && redirectURI == extCB {
 		return true
 	}
-	if redirectURI == "https://vpn.astian.org/extension/callback" ||
-		redirectURI == "https://vpn.dorrejo.com/extension/callback" ||
-		redirectURI == "http://127.0.0.1:7071/oauth/callback" {
-		return true
+	for _, allowed := range strings.Split(h.cfg.OAuthAllowedRedirectURIs, ",") {
+		if redirectURI == strings.TrimSpace(allowed) {
+			return true
+		}
 	}
-	parsed, err := url.Parse(redirectURI)
-	if err != nil {
-		return false
-	}
-	origin := parsed.Scheme + "://" + parsed.Host
-	return h.isAllowedOrigin(origin)
+	return false
 }
 
 // ExtensionCallback serves a minimal HTML page at the configured

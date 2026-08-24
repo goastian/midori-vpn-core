@@ -33,3 +33,13 @@ func TestProxyToken_GenerateAndValidate(t *testing.T) {
 	_, ok = Validate(expiredToken, secret)
 	assert.False(t, ok)
 }
+
+func TestTunnelTokenBindsDeviceAndServer(t *testing.T) {
+	claims := TunnelClaims{UserID: uuid.New(), DeviceID: uuid.New(), ServerID: uuid.New()}
+	token := GenerateTunnel(claims, "secret", time.Minute)
+	got, ok := ValidateTunnel(token, "secret")
+	assert.True(t, ok)
+	assert.Equal(t, claims, got)
+	_, ok = ValidateTunnel(token, "other")
+	assert.False(t, ok)
+}

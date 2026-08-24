@@ -84,9 +84,20 @@ func jsonBody(t *testing.T, v interface{}) *bytes.Buffer {
 	return bytes.NewBuffer(b)
 }
 
+func decodeResponseData[T any](t *testing.T, recorder *httptest.ResponseRecorder) T {
+	t.Helper()
+	var response struct {
+		Data T `json:"data"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	return response.Data
+}
+
 // ─── CreateMesh ──────────────────────────────────────────────────────────────
 
-func TestCreateMesh_Disabled(t *testing.T) {
+func TestCreateMesh_Succeeds(t *testing.T) {
 	pool := handlerTestPool(t)
 	u := insertUser(t, pool)
 
@@ -98,12 +109,12 @@ func TestCreateMesh_Disabled(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.CreateMesh(w, req)
 
-	if w.Code != http.StatusGone {
-		t.Fatalf("expected 410, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestCreateMesh_MissingNameStillDisabled(t *testing.T) {
+func TestCreateMesh_MissingName(t *testing.T) {
 	pool := handlerTestPool(t)
 	u := insertUser(t, pool)
 
@@ -114,14 +125,14 @@ func TestCreateMesh_MissingNameStillDisabled(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.CreateMesh(w, req)
 
-	if w.Code != http.StatusGone {
-		t.Fatalf("expected 410, got %d", w.Code)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
 
 // ─── JoinMesh ────────────────────────────────────────────────────────────────
 
-func TestJoinMesh_Disabled(t *testing.T) {
+func TestJoinMesh_Succeeds(t *testing.T) {
 	pool := handlerTestPool(t)
 	owner := insertUser(t, pool)
 	joiner := insertUser(t, pool)
@@ -146,12 +157,12 @@ func TestJoinMesh_Disabled(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.JoinMesh(w, req)
 
-	if w.Code != http.StatusGone {
-		t.Fatalf("expected 410, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestJoinMesh_InvalidCodeStillDisabled(t *testing.T) {
+func TestJoinMesh_InvalidCode(t *testing.T) {
 	pool := handlerTestPool(t)
 	u := insertUser(t, pool)
 
@@ -162,12 +173,12 @@ func TestJoinMesh_InvalidCodeStillDisabled(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.JoinMesh(w, req)
 
-	if w.Code != http.StatusGone {
-		t.Fatalf("expected 410, got %d", w.Code)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
 
-func TestJoinMesh_AlreadyMemberStillDisabled(t *testing.T) {
+func TestJoinMesh_AlreadyMember(t *testing.T) {
 	pool := handlerTestPool(t)
 	owner := insertUser(t, pool)
 
@@ -185,12 +196,12 @@ func TestJoinMesh_AlreadyMemberStillDisabled(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.JoinMesh(w, req)
 
-	if w.Code != http.StatusGone {
-		t.Fatalf("expected 410, got %d", w.Code)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", w.Code)
 	}
 }
 
-func TestJoinMesh_MeshFullStillDisabled(t *testing.T) {
+func TestJoinMesh_MeshFull(t *testing.T) {
 	pool := handlerTestPool(t)
 	owner := insertUser(t, pool)
 	extra := insertUser(t, pool)
@@ -209,14 +220,14 @@ func TestJoinMesh_MeshFullStillDisabled(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.JoinMesh(w, req)
 
-	if w.Code != http.StatusGone {
-		t.Fatalf("expected 410, got %d", w.Code)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d", w.Code)
 	}
 }
 
 // ─── RegenerateInvite ─────────────────────────────────────────────────────────
 
-func TestRegenerateInvite_Disabled(t *testing.T) {
+func TestRegenerateInvite_Succeeds(t *testing.T) {
 	pool := handlerTestPool(t)
 	owner := insertUser(t, pool)
 
@@ -235,12 +246,12 @@ func TestRegenerateInvite_Disabled(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.RegenerateInvite(w, req)
 
-	if w.Code != http.StatusGone {
-		t.Fatalf("expected 410, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestRegenerateInvite_WithExpiryStillDisabled(t *testing.T) {
+func TestRegenerateInvite_WithExpiry(t *testing.T) {
 	pool := handlerTestPool(t)
 	owner := insertUser(t, pool)
 
@@ -259,12 +270,12 @@ func TestRegenerateInvite_WithExpiryStillDisabled(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.RegenerateInvite(w, req)
 
-	if w.Code != http.StatusGone {
-		t.Fatalf("expected 410, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestRegenerateInvite_NonOwnerStillDisabled(t *testing.T) {
+func TestRegenerateInvite_NonOwner(t *testing.T) {
 	pool := handlerTestPool(t)
 	owner := insertUser(t, pool)
 	nonOwner := insertUser(t, pool)
@@ -286,12 +297,12 @@ func TestRegenerateInvite_NonOwnerStillDisabled(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.RegenerateInvite(w, req)
 
-	if w.Code != http.StatusGone {
-		t.Fatalf("expected 410, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestRegenerateInvite_InvalidMeshIDStillDisabled(t *testing.T) {
+func TestRegenerateInvite_InvalidMeshID(t *testing.T) {
 	pool := handlerTestPool(t)
 	u := insertUser(t, pool)
 
@@ -304,8 +315,8 @@ func TestRegenerateInvite_InvalidMeshIDStillDisabled(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.RegenerateInvite(w, req)
 
-	if w.Code != http.StatusGone {
-		t.Fatalf("expected 410, got %d", w.Code)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
 
@@ -387,10 +398,9 @@ func TestNodeStatus_Inactive(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	var status struct {
+	status := decodeResponseData[struct {
 		Active bool `json:"active"`
-	}
-	json.NewDecoder(w.Body).Decode(&status)
+	}](t, w)
 	if status.Active {
 		t.Error("expected active=false for user with no meshes")
 	}
@@ -416,11 +426,10 @@ func TestNodeStatus_Active(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	var status struct {
+	status := decodeResponseData[struct {
 		Active bool   `json:"active"`
 		MeshIP string `json:"mesh_ip"`
-	}
-	json.NewDecoder(w.Body).Decode(&status)
+	}](t, w)
 	if !status.Active {
 		t.Error("expected active=true for user with a mesh")
 	}

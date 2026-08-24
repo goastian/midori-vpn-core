@@ -1,0 +1,6 @@
+BEGIN;
+
+ALTER TABLE vpn_servers
+    ADD COLUMN core_token TEXT NOT NULL DEFAULT '';
+
+COMMIT;

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lestrrat-go/jwx/v2/jwk"
+	"github.com/lestrrat-go/jwx/v3/jwk"
 
 	"github.com/goastian/midori-vpn-core/internal/config"
 )
@@ -103,7 +103,7 @@ func (p *JWKSProvider) refresh() error {
 		return fmt.Errorf("read JWKS body: %w", err)
 	}
 
-	set, err := jwk.ParseString(string(body))
+	set, err := jwk.Parse(body)
 	if err != nil {
 		return fmt.Errorf("parse JWKS: %w", err)
 	}
@@ -149,7 +149,7 @@ func (p *JWKSProvider) loadFromDisk() error {
 		return fmt.Errorf("read JWKS cache %s: %w", path, err)
 	}
 
-	set, err := jwk.ParseString(string(data))
+	set, err := jwk.Parse(data)
 	if err != nil {
 		return fmt.Errorf("parse cached JWKS: %w", err)
 	}

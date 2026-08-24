@@ -12,19 +12,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.26.x'
+          go-version: '1.27.x'
           cache: true
 
       - name: Verify dependencies
         run: go mod verify
 
       - name: Run Go Vet
-        run: go vet ./...
+        run: go vet ./cmd/... ./internal/...
+
+      - name: Run Staticcheck
+        uses: dominikh/staticcheck-action@v1.4.1
+        with:
+          version: "2026.1"
+          install-go: false
+
+      - name: Run Govulncheck
+        uses: golang/govulncheck-action@v1.1.0
+        with:
+          go-version-input: '1.27.x'
+          go-package: ./cmd/... ./internal/...
 
       - name: Run unit tests with Race Detector
         run: go test -v -race ./internal/...

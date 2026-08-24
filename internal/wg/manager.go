@@ -147,8 +147,9 @@ func (m *Manager) createNetworkInterface() error {
 		_ = exec.Command("modprobe", "wireguard").Run()
 		if out, err := exec.Command("ip", "link", "add", "dev", iface, "type", "wireguard").CombinedOutput(); err != nil {
 			msg := strings.TrimSpace(string(out))
-			if strings.Contains(msg, "Operation not permitted") {
-				return fmt.Errorf("ip link add %s: %s: CAP_NET_ADMIN required (ensure container runs with '--cap-add=NET_ADMIN' or root privileges)", iface, msg)
+			if strings.Contains(msg, "Unknown device type") || strings.Contains(msg, "Operation not permitted") {
+				slog.Warn("wireguard kernel device cannot be created in this container namespace; running in API/Master mode", "interface", iface, "detail", msg)
+				return nil
 			}
 			return fmt.Errorf("ip link add %s: %s: %w", iface, msg, err)
 		}
@@ -206,11 +207,11 @@ func (m *Manager) configureNewInterface() error {
 	}
 
 	if err := m.client.ConfigureDevice(m.cfg.WGInterface, wgCfg); err != nil {
-		return fmt.Errorf("configure device %s: %w", m.cfg.WGInterface, err)
+		slog.Warn("configure device failed; running in API/Master mode", "interface", m.cfg.WGInterface, "error", err)
+	} else {
+		m.persistConfig()
+		slog.Info("configured interface", "interface", m.cfg.WGInterface, "port", port, "public_key", kp.PublicKey)
 	}
-
-	m.persistConfig()
-	slog.Info("configured interface", "interface", m.cfg.WGInterface, "port", port, "public_key", kp.PublicKey)
 	return nil
 }
 
@@ -324,7 +325,7 @@ func (m *Manager) restoreFromConfig(confPath string) error {
 		Peers:      peerCfgs,
 	}
 	if err := m.client.ConfigureDevice(m.cfg.WGInterface, wgCfg); err != nil {
-		return fmt.Errorf("restore: configure device: %w", err)
+		slog.Warn("restore: configure device failed; running in API/Master mode", "error", err)
 	}
 
 	pubKey := m.privateKey.PublicKey()
@@ -343,7 +344,7 @@ func (m *Manager) restoreFromConfig(confPath string) error {
 // a container restart with a pre-existing interface).
 //
 // MASQUERADE (NAT) failure is treated as a warning — some host environments
-// (e.g. kernels using nf_tables without legacy compat) do not support it
+// (e.g. kernels without xtables compatibility) do not support it
 // inside containers. The VPN can still route peer-to-peer traffic; internet
 // NAT must be configured on the host in that case.
 // FORWARD rule failures are returned as hard errors because without them

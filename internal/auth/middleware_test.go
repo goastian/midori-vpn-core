@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lestrrat-go/jwx/v2/jwa"
-	"github.com/lestrrat-go/jwx/v2/jwk"
-	"github.com/lestrrat-go/jwx/v2/jwt"
+	"github.com/lestrrat-go/jwx/v3/jwa"
+	"github.com/lestrrat-go/jwx/v3/jwk"
+	"github.com/lestrrat-go/jwx/v3/jwt"
 
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/config"
@@ -21,11 +21,11 @@ import (
 func testJWKS(t *testing.T, privKey *rsa.PrivateKey) *auth.JWKSProvider {
 	t.Helper()
 
-	pubKeyJWK, err := jwk.FromRaw(privKey.Public())
+	pubKeyJWK, err := jwk.Import(privKey.Public())
 	if err != nil {
-		t.Fatalf("jwk.FromRaw: %v", err)
+		t.Fatalf("jwk.Import: %v", err)
 	}
-	_ = pubKeyJWK.Set(jwk.AlgorithmKey, jwa.RS256)
+	_ = pubKeyJWK.Set(jwk.AlgorithmKey, jwa.RS256())
 	_ = pubKeyJWK.Set(jwk.KeyIDKey, "test-key-1")
 
 	set := jwk.NewSet()
@@ -59,14 +59,14 @@ func signToken(t *testing.T, privKey *rsa.PrivateKey, claims map[string]interfac
 		_ = builder.Set(k, v)
 	}
 
-	privJWK, err := jwk.FromRaw(privKey)
+	privJWK, err := jwk.Import(privKey)
 	if err != nil {
-		t.Fatalf("jwk.FromRaw priv: %v", err)
+		t.Fatalf("jwk.Import priv: %v", err)
 	}
-	_ = privJWK.Set(jwk.AlgorithmKey, jwa.RS256)
+	_ = privJWK.Set(jwk.AlgorithmKey, jwa.RS256())
 	_ = privJWK.Set(jwk.KeyIDKey, "test-key-1")
 
-	signed, err := jwt.Sign(builder, jwt.WithKey(jwa.RS256, privJWK))
+	signed, err := jwt.Sign(builder, jwt.WithKey(jwa.RS256(), privJWK))
 	if err != nil {
 		t.Fatalf("jwt.Sign: %v", err)
 	}

@@ -157,12 +157,12 @@ func TestOAuthRefreshAuthentikErrorPassThrough(t *testing.T) {
 
 func TestOAuthAllowedOriginsIncludeLegacyDesktopWhenConfigured(t *testing.T) {
 	handler := NewOAuthHandler(&config.Config{
-		CORSAllowedOrigins: "https://vpn.astian.org,https://app.astian.org",
+		CORSAllowedOrigins: "https://vpn.astian.org,https://desktop.astian.org",
 		PublicBaseURL:      "https://vpn.astian.org",
 	}, nil)
 
-	if !handler.isAllowedOrigin("https://app.astian.org") {
-		t.Fatal("legacy desktop origin should be allowed when configured")
+	if !handler.isAllowedOrigin("https://desktop.astian.org") {
+		t.Fatal("explicit desktop origin should be allowed when configured")
 	}
 	if handler.isAllowedOrigin("https://evil.example") {
 		t.Fatal("unexpected external origin allowed")
@@ -180,6 +180,35 @@ func TestOAuthAllowedOriginsSupportWildcardAstianSubdomains(t *testing.T) {
 	}
 	if handler.isAllowedOrigin("http://vpn.astian.org") {
 		t.Fatal("wildcard should not allow a different scheme")
+	}
+}
+
+func TestOAuthRedirectRequiresExactConfiguredURI(t *testing.T) {
+	handler := NewOAuthHandler(&config.Config{
+		PublicBaseURL:            "https://vpn.example.test",
+		ExtensionCallbackPath:    "/extension/callback",
+		ControlOAuthRedirectURI:  "https://vpn.example.test/auth/callback",
+		OAuthAllowedRedirectURIs: "http://127.0.0.1:7071/oauth/callback,midori-vpn://oauth/callback",
+	}, nil)
+
+	for _, allowed := range []string{
+		"https://vpn.example.test/auth/callback",
+		"https://vpn.example.test/extension/callback",
+		"http://127.0.0.1:7071/oauth/callback",
+		"midori-vpn://oauth/callback",
+	} {
+		if !handler.isAllowedRedirectURI(allowed) {
+			t.Fatalf("configured redirect rejected: %s", allowed)
+		}
+	}
+	for _, rejected := range []string{
+		"https://vpn.example.test/other-path",
+		"http://127.0.0.1:7071/other-path",
+		"https://external.example.test/extension/callback",
+	} {
+		if handler.isAllowedRedirectURI(rejected) {
+			t.Fatalf("unconfigured redirect accepted: %s", rejected)
+		}
 	}
 }
 

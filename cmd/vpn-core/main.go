@@ -15,17 +15,30 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/control"
 	"github.com/goastian/midori-vpn-core/internal/db"
+	"github.com/goastian/midori-vpn-core/internal/masque"
+	"github.com/goastian/midori-vpn-core/internal/nodeauth"
 	"github.com/goastian/midori-vpn-core/internal/proxy"
 	"github.com/goastian/midori-vpn-core/internal/respond"
 	"github.com/goastian/midori-vpn-core/internal/wg"
+	"github.com/google/uuid"
 )
 
 func main() {
 	cfg := config.Load()
 	respond.SetAppEnv(cfg.AppEnv)
+	verifier, err := nodeauth.NewVerifier(cfg.NodeAuthorizedKeys, cfg.NodeRevokedIDs, cfg.NodeAuthRedisURL)
+	if err != nil {
+		log.Fatalf("failed to initialize node signature verifier: %v", err)
+	}
+	defer verifier.Close()
 
 	// Initialize core HTTP client with TLS settings
 	control.InitCoreClient(cfg.CoreTLSSkipVerify, cfg.CoreAllowHTTP, cfg.CoreAllowedHosts)
+	if cfg.ControlNodeID != "" {
+		if err := control.InitCoreSigningIdentity(cfg.ControlNodeID, cfg.ControlNodePrivateKey); err != nil {
+			log.Fatalf("failed to initialize Control signing identity: %v", err)
+		}
+	}
 
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -39,7 +52,7 @@ func main() {
 	// Optional: connect to PostgreSQL + JWKS if DATABASE_URL is set
 	var router http.Handler
 	if cfg.DatabaseURL != "" && cfg.AuthentikClientID != "" {
-		pool, err := db.Connect(cfg)
+		pool, err := db.Connect(shutdownCtx, cfg)
 		if err != nil {
 			log.Fatalf("failed to connect to database: %v", err)
 		}
@@ -55,7 +68,7 @@ func main() {
 		}
 
 		slog.Info("Control API enabled", "auth", "PostgreSQL + Authentik")
-		router = api.NewRouterWithDB(cfg, manager, pool, jwks)
+		router = api.NewRouterWithDB(cfg, manager, pool, jwks, verifier)
 
 		// Start HTTP CONNECT proxy if enabled
 		if cfg.ProxyEnabled {
@@ -68,7 +81,7 @@ func main() {
 		}
 	} else {
 		slog.Info("Control API disabled", "reason", "no DATABASE_URL or AUTHENTIK_CLIENT_ID")
-		router = api.NewRouter(cfg, manager)
+		router = api.NewRouter(cfg, manager, verifier)
 	}
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
@@ -80,6 +93,21 @@ func main() {
 	}
 
 	serverErrCh := make(chan error, 1)
+	var masqueGateway *masque.Gateway
+	var masqueErrCh chan error
+	if cfg.MasqueEnabled {
+		serverID, _ := uuid.Parse(cfg.MasqueServerID)
+		masqueGateway, err = masque.NewGateway(
+			fmt.Sprintf(":%d", cfg.MasquePort), cfg.MasqueTLSCert, cfg.MasqueTLSKey,
+			cfg.MasqueURITemplate, cfg.WGPort, cfg.CredentialSigningSecret, serverID, cfg.MasqueMaxClients,
+		)
+		if err != nil {
+			log.Fatalf("failed to initialize MASQUE gateway: %v", err)
+		}
+		masqueErrCh = make(chan error, 1)
+		go func() { masqueErrCh <- masqueGateway.Serve() }()
+		slog.Info("MASQUE gateway listening", "port", cfg.MasquePort)
+	}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			serverErrCh <- err
@@ -90,9 +118,22 @@ func main() {
 
 	select {
 	case err := <-serverErrCh:
+		if masqueGateway != nil {
+			shutdown, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			_ = masqueGateway.Shutdown(shutdown)
+			cancel()
+		}
 		if err != nil {
 			api.CancelJobs()
 			log.Fatalf("server error: %v", err)
+		}
+	case err := <-masqueErrCh:
+		api.CancelJobs()
+		shutdown, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		_ = srv.Shutdown(shutdown)
+		cancel()
+		if err != nil {
+			log.Fatalf("MASQUE server error: %v", err)
 		}
 	case <-shutdownCtx.Done():
 		slog.Info("shutting down...")
@@ -105,6 +146,11 @@ func main() {
 		defer cancel()
 		if err := srv.Shutdown(ctx); err != nil {
 			slog.Error("graceful shutdown error", "error", err)
+		}
+		if masqueGateway != nil {
+			if err := masqueGateway.Shutdown(ctx); err != nil {
+				slog.Error("MASQUE graceful shutdown error", "error", err)
+			}
 		}
 
 		if err := <-serverErrCh; err != nil {

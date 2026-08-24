@@ -7,33 +7,50 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
+	"sync/atomic"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
+	"github.com/goastian/midori-vpn-core/internal/proxytoken"
+	"github.com/google/uuid"
 )
 
 // WSGateway proxies WireGuard binary datagrams between a WebSocket (WSS on TLS 443)
 // and the local WireGuard UDP listening port. This provides censorship-resistant
 // WireGuard transport through strict firewalls and captive portals without TCP-over-TCP penalty.
 type WSGateway struct {
-	wgAddr string
+	wgAddr     string
+	secret     string
+	serverID   uuid.UUID
+	active     atomic.Int64
+	maxClients int64
 }
 
 // NewWSGateway creates a new WebSocket tunnel gateway targeting the local WireGuard port.
-func NewWSGateway(wgPort int) *WSGateway {
-	if wgPort <= 0 {
-		wgPort = 51820
-	}
-	return &WSGateway{
-		wgAddr: fmt.Sprintf("127.0.0.1:%d", wgPort),
-	}
+func NewWSGateway(wgPort int, secret string, serverID uuid.UUID, maxClients int) *WSGateway {
+	return &WSGateway{wgAddr: fmt.Sprintf("127.0.0.1:%d", wgPort), secret: secret, serverID: serverID, maxClients: int64(maxClients)}
 }
 
 // Handler handles WebSocket upgrade and bidirectional binary datagram relay.
 func (g *WSGateway) Handler(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true, // Origin is checked at reverse proxy layer
-	})
+	if g.maxClients > 0 && g.active.Add(1) > g.maxClients {
+		g.active.Add(-1)
+		http.Error(w, "tunnel capacity reached", http.StatusTooManyRequests)
+		return
+	}
+	defer g.active.Add(-1)
+	header := r.Header.Get("Authorization")
+	if !strings.HasPrefix(header, "Bearer ") {
+		http.Error(w, "tunnel authentication required", http.StatusUnauthorized)
+		return
+	}
+	claims, ok := proxytoken.ValidateTunnel(strings.TrimSpace(strings.TrimPrefix(header, "Bearer ")), g.secret)
+	if !ok || claims.ServerID != g.serverID {
+		http.Error(w, "invalid tunnel credential", http.StatusUnauthorized)
+		return
+	}
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{})
 	if err != nil {
 		slog.Warn("ws-tunnel: upgrade failed", "error", err, "remote", r.RemoteAddr)
 		return

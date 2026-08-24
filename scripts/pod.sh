@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -Eeuo pipefail
 
 # ==============================================================================
 # Midori VPN — Podman Rootless Unified Runner
@@ -18,11 +18,16 @@ else
 fi
 
 WORKDIR_IN_CONTAINER="/workspace/${REL_PATH}"
+NODE_MODULES_VOLUME="midori_npm_modules_${REL_PATH//\//_}"
+if [[ -z "${REL_PATH}" ]]; then
+    NODE_MODULES_VOLUME="midori_npm_modules_root"
+fi
 
 # Image Names
 IMAGE_GO="localhost/midori-dev-go:latest"
 IMAGE_NODE="localhost/midori-dev-node:latest"
 IMAGE_TAURI="localhost/midori-dev-tauri:latest"
+PODMAN_USERNS=(--userns=keep-id:uid=0,gid=0)
 
 build_image_if_missing() {
     local img="$1"
@@ -44,8 +49,7 @@ cmd_build_images() {
 
 cmd_go() {
     build_image_if_missing "${IMAGE_GO}" "${ROOT_DIR}/.container/Containerfile" "${ROOT_DIR}"
-    podman run --rm -it \
-        --userns=keep-id \
+    podman run --rm "${PODMAN_USERNS[@]}" \
         -v "${ROOT_DIR}:/workspace:z" \
         -v midori_go_pkg:/go/pkg:z \
         -v midori_go_cache:/tmp/go-cache:z \
@@ -54,12 +58,25 @@ cmd_go() {
         "${IMAGE_GO}" go "$@"
 }
 
+cmd_go_tool() {
+    local tool="$1"
+    shift
+    build_image_if_missing "${IMAGE_GO}" "${ROOT_DIR}/.container/Containerfile" "${ROOT_DIR}"
+    podman run --rm "${PODMAN_USERNS[@]}" \
+        -v "${ROOT_DIR}:/workspace:z" \
+        -v midori_go_pkg:/go/pkg:z \
+        -v midori_go_cache:/tmp/go-cache:z \
+        -e GOCACHE=/tmp/go-cache \
+        -w "${WORKDIR_IN_CONTAINER}" \
+        "${IMAGE_GO}" "${tool}" "$@"
+}
+
 cmd_node() {
     build_image_if_missing "${IMAGE_NODE}" "${ROOT_DIR}/midori-vpn-control/.container/Containerfile" "${ROOT_DIR}/midori-vpn-control"
-    podman run --rm -it \
-        --userns=keep-id \
+    podman run --rm "${PODMAN_USERNS[@]}" \
         -v "${ROOT_DIR}:/workspace:z" \
         -v midori_npm_cache:/tmp/npm-cache:z \
+        -v "${NODE_MODULES_VOLUME}:${WORKDIR_IN_CONTAINER}/node_modules:z" \
         -e npm_config_cache=/tmp/npm-cache \
         -w "${WORKDIR_IN_CONTAINER}" \
         "${IMAGE_NODE}" "$@"
@@ -75,12 +92,14 @@ cmd_npx() {
 
 cmd_tauri() {
     build_image_if_missing "${IMAGE_TAURI}" "${ROOT_DIR}/midori-vpn-desktop/.container/Containerfile" "${ROOT_DIR}/midori-vpn-desktop"
-    podman run --rm -it \
-        --userns=keep-id \
+    podman run --rm "${PODMAN_USERNS[@]}" \
         -v "${ROOT_DIR}:/workspace:z" \
         -v midori_cargo_registry:/usr/local/cargo/registry:z \
         -v midori_cargo_git:/usr/local/cargo/git:z \
+        -v midori_cargo_target:/tmp/cargo-target:z \
         -v midori_npm_cache:/tmp/npm-cache:z \
+        -v "${NODE_MODULES_VOLUME}:${WORKDIR_IN_CONTAINER}/node_modules:z" \
+        -e CARGO_TARGET_DIR=/tmp/cargo-target \
         -e npm_config_cache=/tmp/npm-cache \
         -w "${WORKDIR_IN_CONTAINER}" \
         "${IMAGE_TAURI}" "$@"
@@ -91,36 +110,97 @@ cmd_cargo() {
 }
 
 cmd_audit() {
-    echo "🛡️ [1/3] Ejecutando govulncheck en Core y Agente..."
+    echo "🛡️ [1/4] Ejecutando govulncheck en Core y Agente..."
     build_image_if_missing "${IMAGE_GO}" "${ROOT_DIR}/.container/Containerfile" "${ROOT_DIR}"
-    podman run --rm -it \
-        --userns=keep-id \
+    podman run --rm "${PODMAN_USERNS[@]}" \
         -v "${ROOT_DIR}:/workspace:z" \
         -w "/workspace" \
-        "${IMAGE_GO}" govulncheck ./... || true
+        "${IMAGE_GO}" govulncheck ./cmd/... ./internal/...
 
-    echo "🛡️ [2/3] Ejecutando npm audit en Frontends..."
+    podman run --rm "${PODMAN_USERNS[@]}" \
+        -v "${ROOT_DIR}:/workspace:z" \
+        -w "/workspace/midori-vpn-desktop/agent" \
+        "${IMAGE_GO}" govulncheck ./...
+
+    echo "🛡️ [2/4] Ejecutando npm audit en Frontends..."
     build_image_if_missing "${IMAGE_NODE}" "${ROOT_DIR}/midori-vpn-control/.container/Containerfile" "${ROOT_DIR}/midori-vpn-control"
     for d in midori-vpn-control midorivpn-extension midori-vpn-desktop; do
         if [ -d "${ROOT_DIR}/${d}" ]; then
             echo " → Auditando ${d}..."
-            podman run --rm -it \
-                --userns=keep-id \
+            podman run --rm "${PODMAN_USERNS[@]}" \
                 -v "${ROOT_DIR}:/workspace:z" \
                 -w "/workspace/${d}" \
-                "${IMAGE_NODE}" npm audit --audit-level=high || true
+                "${IMAGE_NODE}" npm audit --audit-level=high
         fi
     done
 
-    echo "🛡️ [3/3] Ejecutando cargo-audit en Tauri..."
+    echo "🛡️ [3/4] Ejecutando cargo-audit en Tauri..."
     build_image_if_missing "${IMAGE_TAURI}" "${ROOT_DIR}/midori-vpn-desktop/.container/Containerfile" "${ROOT_DIR}/midori-vpn-desktop"
-    podman run --rm -it \
-        --userns=keep-id \
+    podman run --rm "${PODMAN_USERNS[@]}" \
         -v "${ROOT_DIR}:/workspace:z" \
         -w "/workspace/midori-vpn-desktop/src-tauri" \
-        "${IMAGE_TAURI}" cargo audit || true
+        "${IMAGE_TAURI}" cargo audit --deny warnings
+
+    echo "🛡️ [4/4] Validando los lockfiles de Rust..."
+    podman run --rm "${PODMAN_USERNS[@]}" \
+        -v "${ROOT_DIR}:/workspace:z" \
+        -w "/workspace/midori-vpn-desktop/src-tauri" \
+        "${IMAGE_TAURI}" cargo check --locked
     
     echo "✅ Auditoría de seguridad completada."
+}
+
+cmd_debt() {
+    local markers='\b(TODO|FIXME|HACK|XXX|DEPRECATED|OBSOLETE|LEGACY)\b'
+    local failed=0
+
+    echo "🧹 [1/3] Buscando marcadores obsoletos en código vivo..."
+    if rg -n -e "${markers}" \
+        --glob '*.{go,rs,ts,tsx,vue,js,mjs,cjs,sh,sql}' \
+        --glob '!node_modules/**' --glob '!dist/**' --glob '!.git/**' \
+        --glob '!scripts/pod.sh' \
+        "${ROOT_DIR}/cmd" "${ROOT_DIR}/internal" \
+        "${ROOT_DIR}/scripts" "${ROOT_DIR}/midori-vpn-control/src" \
+        "${ROOT_DIR}/midori-vpn-desktop" "${ROOT_DIR}/midorivpn-extension/src"; then
+        echo "error: se encontraron marcadores prohibidos de deuda técnica" >&2
+        failed=1
+    fi
+
+    echo "🧹 [2/3] Verificando pares de migración..."
+    local up down base
+    for up in "${ROOT_DIR}"/internal/db/migrations/*.up.sql; do
+        [ -e "${up}" ] || continue
+        base="${up%.up.sql}"
+        down="${base}.down.sql"
+        if [ ! -f "${down}" ]; then
+            echo "error: falta migración reversa ${down}" >&2
+            failed=1
+        fi
+    done
+    for down in "${ROOT_DIR}"/internal/db/migrations/*.down.sql; do
+        [ -e "${down}" ] || continue
+        base="${down%.down.sql}"
+        up="${base}.up.sql"
+        if [ ! -f "${up}" ]; then
+            echo "error: falta migración de avance ${up}" >&2
+            failed=1
+        fi
+    done
+
+    echo "🧹 [3/3] Confirmando que openpgp no está en el grafo ejecutable..."
+    local dependency_graph
+    if ! dependency_graph="$(cmd_go list -deps ./cmd/... ./internal/...)"; then
+        echo "error: no se pudo construir el grafo de dependencias Go" >&2
+        failed=1
+    elif rg -x 'golang.org/x/crypto/openpgp' <<<"${dependency_graph}"; then
+        echo "error: openpgp está en el grafo ejecutable; debe retirarse" >&2
+        failed=1
+    fi
+
+    if [ "${failed}" -ne 0 ]; then
+        exit 1
+    fi
+    echo "✅ Control de deuda técnica completado."
 }
 
 # Subcommand dispatch
@@ -128,6 +208,18 @@ case "$1" in
     go)
         shift
         cmd_go "$@"
+        ;;
+    staticcheck)
+        shift
+        cmd_go_tool staticcheck "$@"
+        ;;
+    govulncheck)
+        shift
+        cmd_go_tool govulncheck "$@"
+        ;;
+    gofmt)
+        shift
+        cmd_go_tool gofmt "$@"
         ;;
     node)
         shift
@@ -152,18 +244,25 @@ case "$1" in
     audit)
         cmd_audit
         ;;
+    debt)
+        cmd_debt
+        ;;
     build-images)
         cmd_build_images
         ;;
     *)
-        echo "Uso: $0 {go|node|npm|npx|tauri|cargo|audit|build-images} [argumentos...]"
+        echo "Uso: $0 {go|gofmt|staticcheck|govulncheck|node|npm|npx|tauri|cargo|audit|debt|build-images} [argumentos...]"
         echo ""
         echo "Ejemplos:"
         echo "  $0 go test ./..."
         echo "  $0 go vet ./..."
+        echo "  $0 staticcheck ./..."
+        echo "  $0 govulncheck ./..."
         echo "  $0 npm run check"
         echo "  $0 tauri cargo test"
         echo "  $0 audit"
+
+        echo "  $0 debt"
         exit 1
         ;;
 esac

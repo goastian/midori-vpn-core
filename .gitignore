@@ -15,7 +15,6 @@ vendor/
 # Archivos de configuración y entorno
 .env
 .env.*
-!.env.default
 !.env.example
 tmp/
 
@@ -79,13 +78,4 @@ venv/
 .syncthing*.tmp
 
 # Asistentes locales y caches
-.gemini/
-.agents/
-.opencode/
-.claude/
-.cursor/
-.windsurf/
-*.prompt
-*.ai
-
-
+# Los metadatos de asistentes se excluyen manualmente al preparar cada commit.

@@ -56,9 +56,10 @@ server {
         proxy_send_timeout 3600s;
     }
 
-    # 5. Smart Protocol: WireGuard sobre Transporte Ofuscado TLS 443 / WSS
-    location /tunnel/wss {
-        proxy_pass         http://127.0.0.1:__OBFS_HOST_PORT__;
+    # 4b. WireGuard-over-WSS relay. The Core returns 404 unless
+    # WSS_TUNNEL_ENABLED=true and validates a device-scoped tunnel token.
+    location = /api/v1/tunnel/ws {
+        proxy_pass         http://127.0.0.1:__VPN_CORE_HOST_PORT__;
         proxy_http_version 1.1;
         proxy_set_header   Upgrade $http_upgrade;
         proxy_set_header   Connection $connection_upgrade;
@@ -66,11 +67,11 @@ server {
         proxy_set_header   X-Real-IP $remote_addr;
         proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Proto $scheme;
-        proxy_read_timeout 86400s;
-        proxy_send_timeout 86400s;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
     }
 
-    # 6. Web Control Panel SPA (Quadlet Podman Rootless en :5173 o fallback Core)
+    # 5. Web Control Panel SPA (Quadlet Podman Rootless en :5173 o fallback Core)
     location / {
         proxy_pass         http://127.0.0.1:__CONTROL_WEB_PORT__;
         proxy_http_version 1.1;

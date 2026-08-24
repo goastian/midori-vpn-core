@@ -1,6 +1,11 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+)
 
 func TestAuthentikURLsFromApplicationURL(t *testing.T) {
 	cfg := &Config{
@@ -105,6 +110,100 @@ func TestRedisURLFromRedisEnv(t *testing.T) {
 	}
 }
 
+func TestDatabaseURLFromEnvRemainsDisabledWithoutDatabaseSettings(t *testing.T) {
+	for _, key := range []string{"DATABASE_URL", "POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_DB", "POSTGRES_SSLMODE"} {
+		t.Setenv(key, "")
+	}
+	if got := databaseURLFromEnv(); got != "" {
+		t.Fatalf("databaseURLFromEnv() = %q, want disabled", got)
+	}
+}
+
+func TestRedisURLFromEnvRemainsDisabledWithoutRedisSettings(t *testing.T) {
+	for _, key := range []string{"REDIS_URL", "REDIS_PASSWORD", "REDIS_HOST", "REDIS_PORT", "REDIS_DB"} {
+		t.Setenv(key, "")
+	}
+	if got := redisURLFromEnv(); got != "" {
+		t.Fatalf("redisURLFromEnv() = %q, want disabled", got)
+	}
+}
+
+func TestRequireEnvFailsFastWhenMissing(t *testing.T) {
+	if os.Getenv("MIDORIVPN_REQUIRE_ENV_HELPER") == "1" {
+		_ = requireEnv("MIDORIVPN_REQUIRED_SETTING")
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=TestRequireEnvFailsFastWhenMissing")
+	cmd.Env = append(os.Environ(), "MIDORIVPN_REQUIRE_ENV_HELPER=1", "MIDORIVPN_REQUIRED_SETTING=")
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("missing required environment variable did not terminate startup")
+	}
+	if !strings.Contains(string(output), "MIDORIVPN_REQUIRED_SETTING is required") {
+		t.Fatalf("missing-variable error is not explicit: %s", output)
+	}
+}
+
+func TestLoadAcceptsPublicPKCEClientWithoutSecret(t *testing.T) {
+	if os.Getenv("MIDORIVPN_PUBLIC_PKCE_HELPER") == "1" {
+		_ = Load()
+		return
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=TestLoadAcceptsPublicPKCEClientWithoutSecret")
+	cmd.Env = append(os.Environ(),
+		"MIDORIVPN_PUBLIC_PKCE_HELPER=1",
+		"APP_ENV=development",
+		"VPN_CORE_PORT=8085",
+		"NODE_AUTHORIZED_KEYS=control=test-public-key",
+		"CONTROL_NODE_ID=control",
+		"CONTROL_NODE_PRIVATE_KEY=test-private-key",
+		"CREDENTIAL_SIGNING_SECRET=test-credential-signing-secret",
+		"WG_INTERFACE=wgtest0",
+		"WG_PORT=51820",
+		"WG_SUBNET=10.8.0.0/16",
+		"WG_CONFIG_DIR=/tmp/midorivpn-test",
+		"WG_ENDPOINT=vpn.example.test",
+		"CORS_ALLOWED_ORIGINS=https://vpn.example.test",
+		"PUBLIC_BASE_URL=https://vpn.example.test",
+		"EXTENSION_CALLBACK_PATH=/extension/callback",
+		"DATABASE_URL=postgres://user:password@db.example.test:5432/midori?sslmode=require",
+		"REDIS_URL=redis://:password@redis.example.test:6379/0",
+		"AUTHENTIK_ISSUER=https://accounts.example.test/application/o/midori-vpn",
+		"AUTHENTIK_CLIENT_ID=public-client",
+		"AUTHENTIK_CLIENT_SECRET=",
+		"OAUTH_ALLOWED_REDIRECT_URIS=http://127.0.0.1:7071/oauth/callback",
+		"CONTROL_OAUTH_REDIRECT_URI=https://vpn.example.test/auth/callback",
+		"CORE_TLS_SKIP_VERIFY=false",
+		"CORE_ALLOW_INSECURE_HTTP=false",
+		"RATE_LIMIT_RPS=20",
+		"RATE_LIMIT_BURST=40",
+		"MAX_DEVICES_PER_USER=5",
+		"CONNECT_RATE_LIMIT_RPS=0.5",
+		"CONNECT_RATE_LIMIT_BURST=3",
+		"VPN_DNS=10.8.0.53",
+		"PROXY_ENABLED=false",
+		"PROXY_PORT=8443",
+		"PROXY_MAX_CONNS_PER_USER=20",
+		"PROXY_TLS_ENABLED=false",
+		"PROXY_TLS_TERMINATED_BY_NGINX=false",
+		"WSS_TUNNEL_ENABLED=false",
+		"WSS_TUNNEL_MAX_CLIENTS=100",
+		"MASQUE_ENABLED=false",
+		"MASQUE_PORT=443",
+		"MASQUE_MAX_CLIENTS=100",
+		"WS_MAX_GLOBAL=1000",
+		"WS_MAX_FREE=1",
+		"WS_MAX_BASIC=2",
+		"WS_MAX_MEDIUM=3",
+		"WS_MAX_PRO=5",
+		"WS_MAX_ADMIN=10",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("public PKCE configuration was rejected: %v\n%s", err, output)
+	}
+}
+
 func TestOriginFromURL(t *testing.T) {
 	got, ok := OriginFromURL("https://vpn.astian.org/extension/callback")
 	if !ok {
@@ -127,10 +226,10 @@ func TestOriginAllowed(t *testing.T) {
 		want    bool
 	}{
 		{name: "exact", origin: "https://vpn.astian.org", allowed: "https://vpn.astian.org", want: true},
-		{name: "legacy desktop", origin: "https://app.astian.org", allowed: "https://vpn.astian.org,https://app.astian.org", want: true},
+		{name: "second explicit origin", origin: "https://desktop.astian.org", allowed: "https://vpn.astian.org,https://desktop.astian.org", want: true},
 		{name: "wildcard", origin: "https://vpn.astian.org", allowed: "https://*.astian.org", want: true},
 		{name: "wrong scheme", origin: "http://vpn.astian.org", allowed: "https://*.astian.org", want: false},
-		{name: "rejected", origin: "https://evil.example", allowed: "https://vpn.astian.org,https://app.astian.org", want: false},
+		{name: "rejected", origin: "https://evil.example", allowed: "https://vpn.astian.org,https://desktop.astian.org", want: false},
 	}
 
 	for _, tt := range tests {

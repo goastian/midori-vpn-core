@@ -1,5 +1,5 @@
 -- Midori VPN v2.0.0 Canonical Consolidated PostgreSQL Schema
--- Generated automatically from migrations 000001 - 000021
+-- Generated from migrations 000001 - 000009
 
 BEGIN;
 
@@ -28,23 +28,46 @@ CREATE TABLE IF NOT EXISTS vpn_servers (
     id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     name           TEXT        NOT NULL,
     host           TEXT        NOT NULL,
+    endpoint       TEXT        NOT NULL DEFAULT '',
     port           INTEGER     NOT NULL DEFAULT 443,
     wg_port        INTEGER     NOT NULL DEFAULT 51820,
     public_key     TEXT        NOT NULL DEFAULT '',
-    core_token     TEXT        NOT NULL DEFAULT '',
     location       TEXT        NOT NULL DEFAULT '',
     country_code   TEXT        NOT NULL DEFAULT '',
     max_peers      INTEGER     NOT NULL DEFAULT 100,
     current_peers  INTEGER     NOT NULL DEFAULT 0,
     is_active      BOOLEAN     NOT NULL DEFAULT TRUE,
-    proxy_port     INTEGER     NOT NULL DEFAULT 443,
-    proxy_scheme   VARCHAR(10) NOT NULL DEFAULT 'https',
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_vpn_servers_active ON vpn_servers (is_active) WHERE is_active = TRUE;
 CREATE INDEX IF NOT EXISTS idx_vpn_servers_country_active ON vpn_servers (country_code, is_active) WHERE is_active = TRUE;
+
+-- ============================================================
+-- Table: vpn_server_transports
+-- ============================================================
+CREATE TABLE IF NOT EXISTS vpn_server_transports (
+    server_id       UUID        NOT NULL REFERENCES vpn_servers(id) ON DELETE CASCADE,
+    protocol        TEXT        NOT NULL,
+    endpoint        TEXT        NOT NULL,
+    port            INTEGER     NOT NULL CHECK (port BETWEEN 1 AND 65535),
+    enabled         BOOLEAN     NOT NULL DEFAULT FALSE,
+    priority        INTEGER     NOT NULL DEFAULT 0,
+    health_status   TEXT        NOT NULL DEFAULT 'unknown'
+                                CHECK (health_status IN ('unknown', 'healthy', 'degraded', 'disabled')),
+    metadata        JSONB       NOT NULL DEFAULT '{}'::JSONB,
+    last_checked_at TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (server_id, protocol),
+    CONSTRAINT chk_vpn_server_transports_protocol
+        CHECK (protocol IN ('wireguard', 'wss', 'masque', 'openvpn', 'ikev2', 'proxy'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_vpn_server_transports_enabled
+    ON vpn_server_transports (protocol, priority DESC)
+    WHERE enabled = TRUE;
 
 -- ============================================================
 -- Table: peers
@@ -62,10 +85,10 @@ CREATE TABLE IF NOT EXISTS peers (
     bytes_sent     BIGINT      NOT NULL DEFAULT 0,
     bytes_received BIGINT      NOT NULL DEFAULT 0,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    expires_at     TIMESTAMPTZ,
-    CONSTRAINT uq_peers_server_assigned_ip UNIQUE (server_id, assigned_ip)
+    expires_at     TIMESTAMPTZ
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS uq_peers_active_server_assigned_ip ON peers (server_id, assigned_ip) WHERE is_active = TRUE;
 CREATE INDEX IF NOT EXISTS idx_peers_public_key ON peers (public_key);
 CREATE INDEX IF NOT EXISTS idx_peers_is_active ON peers (is_active) WHERE is_active = TRUE;
 CREATE INDEX IF NOT EXISTS idx_peers_assigned_ip ON peers (assigned_ip);
@@ -75,23 +98,28 @@ CREATE INDEX IF NOT EXISTS idx_peers_created_at ON peers (created_at DESC);
 -- Table: mesh_networks
 -- ============================================================
 CREATE TABLE IF NOT EXISTS mesh_networks (
-    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    name           TEXT        NOT NULL,
-    description    TEXT        NOT NULL DEFAULT '',
-    subnet         TEXT        NOT NULL,
-    owner_id       UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    max_members    INTEGER     NOT NULL DEFAULT 10,
-    member_count   INTEGER     NOT NULL DEFAULT 0,
-    is_active      BOOLEAN     NOT NULL DEFAULT TRUE,
-    is_session     BOOLEAN     NOT NULL DEFAULT FALSE,
-    country_code   TEXT        NOT NULL DEFAULT '',
-    public_ip      TEXT        NOT NULL DEFAULT '',
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    name              TEXT        NOT NULL,
+    description       TEXT        NOT NULL DEFAULT '',
+    subnet            TEXT        NOT NULL,
+    owner_id          UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    invite_code       TEXT        NOT NULL UNIQUE,
+    invite_expires_at TIMESTAMPTZ,
+    max_members       INTEGER     NOT NULL DEFAULT 10,
+    member_count      INTEGER     NOT NULL DEFAULT 0,
+    is_active         BOOLEAN     NOT NULL DEFAULT TRUE,
+    is_session        BOOLEAN     NOT NULL DEFAULT FALSE,
+    is_public         BOOLEAN     NOT NULL DEFAULT FALSE,
+    country_code      TEXT        NOT NULL DEFAULT '',
+    public_ip         TEXT        NOT NULL DEFAULT '',
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_mesh_networks_owner ON mesh_networks (owner_id);
+CREATE INDEX IF NOT EXISTS idx_mesh_networks_invite ON mesh_networks (invite_code);
 CREATE INDEX IF NOT EXISTS idx_mesh_networks_session ON mesh_networks (is_session) WHERE is_session = TRUE;
+CREATE INDEX IF NOT EXISTS idx_mesh_networks_public ON mesh_networks (is_public) WHERE is_public = TRUE;
 
 -- ============================================================
 -- Table: mesh_members

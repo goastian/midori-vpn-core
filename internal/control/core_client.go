@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/goastian/midori-vpn-core/internal/models"
+	"github.com/goastian/midori-vpn-core/internal/nodeauth"
 )
 
 // ---------------------------------------------------------------------------
@@ -32,14 +33,22 @@ const (
 
 var (
 	coreHTTP              = &http.Client{Timeout: coreRequestTimeout}
-	coreTLSSkipVerify     bool
 	coreAllowInsecureHTTP bool
 	coreAllowedHosts      map[string]bool
+	coreSigner            *nodeauth.Signer
 )
+
+func InitCoreSigningIdentity(nodeID, encodedPrivateKey string) error {
+	signer, err := nodeauth.NewSigner(nodeID, encodedPrivateKey)
+	if err != nil {
+		return err
+	}
+	coreSigner = signer
+	return nil
+}
 
 // InitCoreClient configures the core HTTP client with TLS settings.
 func InitCoreClient(skipVerify bool, allowInsecureHTTP bool, allowedHosts string) {
-	coreTLSSkipVerify = skipVerify
 	coreAllowInsecureHTTP = allowInsecureHTTP
 	coreHTTP = &http.Client{
 		Timeout: coreRequestTimeout,
@@ -227,6 +236,12 @@ func coreDoWithRetry(req *http.Request, bodyBytes []byte, host string) (*http.Re
 				return io.NopCloser(bytes.NewReader(bodyBytes)), nil
 			}
 		}
+		if coreSigner == nil {
+			return nil, fmt.Errorf("control node signing identity is not initialized")
+		}
+		if err := coreSigner.Sign(req, bodyBytes); err != nil {
+			return nil, fmt.Errorf("sign core request: %w", err)
+		}
 
 		resp, err := coreHTTP.Do(req)
 		if err != nil {
@@ -297,7 +312,6 @@ func CallCoreAddPeer(server *models.VPNServer, pubkey string, presharedKey ...st
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Core-Token", server.CoreToken)
 
 	resp, err := coreDoWithRetry(req, payload, cbKey)
 	if err != nil {
@@ -335,7 +349,6 @@ func CallCoreRemovePeer(server *models.VPNServer, pubkey string) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("X-Core-Token", server.CoreToken)
 
 	resp, err := coreDoWithRetry(req, nil, cbKey)
 	if err != nil {
@@ -362,7 +375,6 @@ func CallCoreGetPeerStats(server *models.VPNServer, pubkey string) (*CorePeerSta
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("X-Core-Token", server.CoreToken)
 
 	resp, err := coreDoWithRetry(req, nil, cbKey)
 	if err != nil {
@@ -409,7 +421,6 @@ func CallCoreServerStats(server *models.VPNServer) (*CoreServerStatsResponse, er
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("X-Core-Token", server.CoreToken)
 
 	resp, err := coreDoWithRetry(req, nil, cbKey)
 	if err != nil {
@@ -444,7 +455,6 @@ func CallCoreListPeers(server *models.VPNServer) ([]CorePeerStatsResponse, error
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("X-Core-Token", server.CoreToken)
 
 	resp, err := coreDoWithRetry(req, nil, cbKey)
 	if err != nil {

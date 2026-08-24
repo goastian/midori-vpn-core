@@ -16,7 +16,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/lestrrat-go/jwx/v2/jwt"
 
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/config"
@@ -24,7 +23,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/repo"
 )
 
-// Server implements an HTTP CONNECT forward proxy with JWT authentication.
+// Server implements an HTTP CONNECT forward proxy with short-lived proxy tokens.
 type Server struct {
 	cfg  *config.Config
 	jwks *auth.JWKSProvider
@@ -95,7 +94,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Authenticate via Proxy-Authorization: Bearer <jwt> or Basic (password=jwt)
+	// Authenticate via Proxy-Authorization: Bearer <proxy token> or Basic.
 	sub, err := s.authenticate(r)
 	if err != nil {
 		slog.Info("proxy auth failed", "remote", r.RemoteAddr, "target", r.Host, "error", err)
@@ -255,11 +254,9 @@ func dialViaProxy(proxyHost string, proxyPort int, target string) (net.Conn, err
 	return conn, nil
 }
 
-// authenticate extracts and validates the JWT from Proxy-Authorization header.
-// Accepts both "Bearer <jwt>" and "Basic <base64>" where the password is the JWT
+// authenticate extracts and validates the proxy-scoped token from Proxy-Authorization.
+// Accepts both "Bearer <token>" and "Basic <base64>" where the password is the token
 // (the latter is required for Chrome extension compatibility via onAuthRequired).
-// JWE tokens (encrypted, 5 dot-segments) are validated via introspection since
-// they cannot be verified with JWKS public keys.
 func (s *Server) authenticate(r *http.Request) (string, error) {
 	header := r.Header.Get("Proxy-Authorization")
 	if header == "" {
@@ -293,51 +290,11 @@ func (s *Server) authenticate(r *http.Request) (string, error) {
 		return "", fmt.Errorf("unsupported auth scheme: %s", parts[0])
 	}
 
-	// 0. Fast-path: Validate scoped HMAC proxy token (aud=vpn-proxy)
-	if sub, ok := proxytoken.Validate(tokenStr, s.cfg.AuthToken); ok {
+	// Proxy credentials are always short-lived HMAC tokens with aud=vpn-proxy.
+	if sub, ok := proxytoken.Validate(tokenStr, s.cfg.CredentialSigningSecret); ok {
 		return sub, nil
 	}
-
-	// JWE tokens (5 dot-separated segments) are encrypted and cannot be
-	// validated locally with JWKS — use introspection instead.
-	if strings.Count(tokenStr, ".") == 4 {
-		slog.Debug("proxy: JWE token detected, using introspection")
-		claims, err := auth.IntrospectTokenCached(s.cfg, tokenStr)
-		if err != nil {
-			return "", fmt.Errorf("JWE introspection failed: %w", err)
-		}
-		if claims.Sub == "" {
-			return "", fmt.Errorf("missing sub claim in introspection")
-		}
-		return claims.Sub, nil
-	}
-
-	keySet := s.jwks.KeySet()
-	token, err := jwt.Parse(
-		[]byte(tokenStr),
-		jwt.WithKeySet(keySet),
-		jwt.WithValidate(true),
-		jwt.WithAcceptableSkew(30*time.Second),
-	)
-	if err != nil {
-		return "", fmt.Errorf("invalid token: %w", err)
-	}
-
-	expectedIssuer := s.cfg.AuthentikTokenIssuer()
-	if expectedIssuer != "" {
-		actual := strings.TrimRight(token.Issuer(), "/")
-		expected := strings.TrimRight(expectedIssuer, "/")
-		if actual != expected {
-			return "", fmt.Errorf("issuer mismatch: got %s, want %s", actual, expected)
-		}
-	}
-
-	sub := token.Subject()
-	if sub == "" {
-		return "", fmt.Errorf("missing sub claim")
-	}
-
-	return sub, nil
+	return "", fmt.Errorf("invalid or expired proxy-scoped token")
 }
 
 func (s *Server) acquireSlot(sub string) bool {

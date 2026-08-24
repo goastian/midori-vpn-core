@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -9,7 +10,6 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/goastian/midori-vpn-core/internal/config"
-	"github.com/goastian/midori-vpn-core/internal/crypto"
 	"github.com/goastian/midori-vpn-core/internal/respond"
 	"github.com/goastian/midori-vpn-core/internal/wg"
 )
@@ -141,23 +141,12 @@ func (h *Handler) PeerStats(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {
 	peers, err := h.mgr.ListPeers()
 	if err != nil {
-		respond.SafeError(w, "failed to list peers", err, http.StatusInternalServerError)
+		slog.Warn("failed to list peers", "error", err)
+		respond.JsonOK(w, []any{}, http.StatusOK)
 		return
 	}
 
 	respond.JsonOK(w, peers, http.StatusOK)
-}
-
-// --- Keypair ---
-
-func (h *Handler) GenerateKeypair(w http.ResponseWriter, r *http.Request) {
-	kp, err := crypto.GenerateKeypair()
-	if err != nil {
-		respond.SafeError(w, "failed to generate keypair", err, http.StatusInternalServerError)
-		return
-	}
-
-	respond.JsonOK(w, kp, http.StatusCreated)
 }
 
 // --- Stats ---

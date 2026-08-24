@@ -1,0 +1,8 @@
+FROM docker.io/library/golang:1.27-alpine
+
+RUN apk add --no-cache bash build-base git ca-certificates && \
+    go install honnef.co/go/tools/cmd/staticcheck@latest && \
+    go install golang.org/x/vuln/cmd/govulncheck@latest
+
+ENV GOCACHE=/tmp/go-cache
+WORKDIR /workspace

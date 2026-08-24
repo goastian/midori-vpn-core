@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lestrrat-go/jwx/v2/jwt"
+	"github.com/lestrrat-go/jwx/v3/jwt"
 
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/models"
@@ -125,11 +125,12 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 					email = claims.Email
 					groups = introspectionGroups(claims.Groups)
 				} else {
-					if !sameIssuer(token.Issuer(), cfg.AuthentikTokenIssuer()) {
+					iss, _ := token.Issuer()
+					if !sameIssuer(iss, cfg.AuthentikTokenIssuer()) {
 						http.Error(w, `{"ok":false,"error":"invalid token issuer"}`, http.StatusUnauthorized)
 						return
 					}
-					sub = token.Subject()
+					sub, _ = token.Subject()
 					email = getStringClaim(token, "email")
 					groups = getStringSliceClaim(token, "groups")
 				}
@@ -166,37 +167,29 @@ func GetUser(r *http.Request) *models.User {
 }
 
 func getStringClaim(token jwt.Token, key string) string {
-	val, ok := token.Get(key)
-	if !ok {
-		return ""
+	var s string
+	if err := token.Get(key, &s); err == nil {
+		return s
 	}
-	s, ok := val.(string)
-	if !ok {
-		return ""
-	}
-	return s
+	return ""
 }
 
 func getStringSliceClaim(token jwt.Token, key string) []string {
-	val, ok := token.Get(key)
-	if !ok {
-		return nil
+	var slice []string
+	if err := token.Get(key, &slice); err == nil {
+		return slice
 	}
-
-	switch v := val.(type) {
-	case []interface{}:
-		result := make([]string, 0, len(v))
-		for _, item := range v {
+	var ifaceSlice []interface{}
+	if err := token.Get(key, &ifaceSlice); err == nil {
+		result := make([]string, 0, len(ifaceSlice))
+		for _, item := range ifaceSlice {
 			if s, ok := item.(string); ok {
 				result = append(result, s)
 			}
 		}
 		return result
-	case []string:
-		return v
-	default:
-		return nil
 	}
+	return nil
 }
 
 // ValidateTokenOnly checks if a JWT is valid without extracting user info.
@@ -232,10 +225,8 @@ func ValidateTokenOnly(cfg *config.Config, jwks *JWKSProvider, tokenStr string) 
 		}
 		return claims.Sub != ""
 	}
-	if !sameIssuer(token.Issuer(), cfg.AuthentikTokenIssuer()) {
-		return false
-	}
-	return true
+	iss, _ := token.Issuer()
+	return sameIssuer(iss, cfg.AuthentikTokenIssuer())
 }
 
 // WSClaims holds the subset of JWT claims needed for WebSocket authorization.
@@ -286,10 +277,11 @@ func ValidateTokenAndExtractClaims(cfg *config.Config, jwks *JWKSProvider, token
 			Groups:  introspectionGroups(claims.Groups),
 		}, nil
 	}
-	if !sameIssuer(token.Issuer(), cfg.AuthentikTokenIssuer()) {
-		return nil, fmt.Errorf("invalid issuer: %s", token.Issuer())
+	iss, _ := token.Issuer()
+	if !sameIssuer(iss, cfg.AuthentikTokenIssuer()) {
+		return nil, fmt.Errorf("invalid issuer: %s", iss)
 	}
-	sub := token.Subject()
+	sub, _ := token.Subject()
 	if sub == "" {
 		return nil, fmt.Errorf("missing sub claim")
 	}

@@ -46,6 +46,18 @@ func (r *PeerRepo) DeactivateByName(ctx context.Context, userID uuid.UUID, devic
 	return err
 }
 
+func (r *PeerRepo) DeactivateByPublicKey(ctx context.Context, userID uuid.UUID, publicKey string) error {
+	query := `UPDATE peers SET is_active = FALSE WHERE user_id = $1 AND public_key = $2 AND is_active = TRUE`
+	_, err := r.pool.Exec(ctx, query, userID, publicKey)
+	return err
+}
+
+func (r *PeerRepo) DeactivateByServerAndIP(ctx context.Context, serverID uuid.UUID, assignedIP string) error {
+	query := `UPDATE peers SET is_active = FALSE WHERE server_id = $1 AND assigned_ip = $2 AND is_active = TRUE`
+	_, err := r.pool.Exec(ctx, query, serverID, assignedIP)
+	return err
+}
+
 func (r *PeerRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.Peer, error) {
 	query := `
 		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name,

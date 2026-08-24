@@ -1,16 +1,17 @@
 # ── Stage 1: Build ──
-FROM golang:alpine AS builder
+FROM docker.io/library/golang:1.27-alpine AS builder
 
 RUN apk add --no-cache git bash gcc musl-dev
 
 WORKDIR /src
-COPY go.mod ./
+COPY go.mod go.sum ./
+RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
-RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /vpn-core ./cmd/vpn-core
+RUN CGO_ENABLED=0 GOOS=linux go build -mod=readonly -trimpath -ldflags="-s -w" -o /vpn-core ./cmd/vpn-core
 
 # ── Stage 2: Runtime ──
-FROM alpine:3.21
+FROM alpine:3.24
 
 RUN apk add --no-cache \
     wireguard-tools \
@@ -24,8 +25,4 @@ RUN apk add --no-cache \
 
 COPY --from=builder /vpn-core /usr/local/bin/vpn-core
 
-EXPOSE 8080/tcp
-EXPOSE 51820/udp
-
 ENTRYPOINT ["/usr/local/bin/vpn-core"]
-

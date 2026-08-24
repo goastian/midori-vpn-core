@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -23,6 +24,11 @@ import (
 )
 
 const publicMeshNameFormat = "Servidor Comunitario %s [%s]"
+
+const (
+	meshNameMaxLen   = 80
+	maxMeshesPerUser = 10
+)
 
 // ipCountryMemCache is a process-level in-memory cache for IP→country lookups.
 // Entries expire after 30 days; the cache is also persisted to/loaded from the
@@ -122,11 +128,67 @@ func (h *MeshHandler) memberUserIDs(ctx context.Context, meshID uuid.UUID) []str
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// POST /mesh — manual mesh creation is no longer supported
+// POST /mesh — create a named Mesh network.
 // ═══════════════════════════════════════════════════════════════════════════
 
+type createMeshRequest struct {
+	Name                 string `json:"name"`
+	Description          string `json:"description"`
+	MaxMembers           int    `json:"max_members"`
+	InviteExpiresInHours int    `json:"invite_expires_in_hours"`
+}
+
 func (h *MeshHandler) CreateMesh(w http.ResponseWriter, r *http.Request) {
-	respond.JsonError(w, "manual mesh creation is disabled", http.StatusGone)
+	user := auth.GetUser(r)
+	var req createMeshRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respond.JsonError(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		respond.JsonError(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	if len(req.Name) > meshNameMaxLen {
+		respond.JsonError(w, "name is too long", http.StatusBadRequest)
+		return
+	}
+	if req.MaxMembers <= 0 || req.MaxMembers > 250 {
+		req.MaxMembers = 10
+	}
+	owned, err := h.meshRepo.CountByOwner(r.Context(), user.ID)
+	if err != nil {
+		respond.JsonError(w, "failed to check mesh quota", http.StatusInternalServerError)
+		return
+	}
+	if owned >= maxMeshesPerUser {
+		respond.JsonError(w, "mesh network limit reached", http.StatusConflict)
+		return
+	}
+	subnet, err := h.meshRepo.NextAvailableSubnet(r.Context())
+	if err != nil {
+		respond.JsonError(w, "no mesh subnets available", http.StatusServiceUnavailable)
+		return
+	}
+	mesh := &models.MeshNetwork{Name: req.Name, Description: strings.TrimSpace(req.Description), OwnerID: user.ID, Subnet: subnet, MaxMembers: req.MaxMembers}
+	if req.InviteExpiresInHours > 0 {
+		exp := time.Now().UTC().Add(time.Duration(req.InviteExpiresInHours) * time.Hour)
+		mesh.InviteExpiresAt = &exp
+	}
+	if err := h.meshRepo.Create(r.Context(), mesh); err != nil {
+		respond.JsonError(w, "failed to create mesh network", http.StatusInternalServerError)
+		return
+	}
+	member := &models.MeshMember{UserID: user.ID}
+	if err := h.meshRepo.AddMember(r.Context(), mesh.ID, member); err != nil {
+		_ = h.meshRepo.Delete(r.Context(), mesh.ID)
+		respond.JsonError(w, "failed to initialize mesh membership", http.StatusInternalServerError)
+		return
+	}
+	h.auditRepo.Log(r.Context(), &user.ID, "mesh.create", map[string]interface{}{"mesh_id": mesh.ID}, r.RemoteAddr)
+	h.broadcastMeshListChanged()
+	respond.JsonOK(w, mesh, http.StatusCreated)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -134,7 +196,8 @@ func (h *MeshHandler) CreateMesh(w http.ResponseWriter, r *http.Request) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 func (h *MeshHandler) ListMyMeshes(w http.ResponseWriter, r *http.Request) {
-	meshes, err := h.meshRepo.ListPublicDirectory(r.Context())
+	user := auth.GetUser(r)
+	meshes, err := h.meshRepo.ListByUser(r.Context(), user.ID)
 	if err != nil {
 		slog.Error("mesh: list error", "error", err)
 		respond.JsonError(w, "failed to list mesh networks", http.StatusInternalServerError)
@@ -143,12 +206,12 @@ func (h *MeshHandler) ListMyMeshes(w http.ResponseWriter, r *http.Request) {
 	if meshes == nil {
 		meshes = []models.MeshNetwork{}
 	}
-	publicMeshes := make([]publicMeshNetwork, 0, len(meshes))
 	for i := range meshes {
-		publicMeshes = append(publicMeshes, toPublicMeshNetwork(meshes[i]))
+		if meshes[i].OwnerID != user.ID {
+			meshes[i].InviteCode = ""
+		}
 	}
-
-	respond.JsonOK(w, publicMeshes, http.StatusOK)
+	respond.JsonOK(w, meshes, http.StatusOK)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -161,6 +224,7 @@ type meshDetailResponse struct {
 }
 
 func (h *MeshHandler) GetMesh(w http.ResponseWriter, r *http.Request) {
+	user := auth.GetUser(r)
 	meshID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		respond.JsonError(w, "invalid mesh id", http.StatusBadRequest)
@@ -172,9 +236,12 @@ func (h *MeshHandler) GetMesh(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, "mesh not found", http.StatusNotFound)
 		return
 	}
-	if !isValidPublicMesh(mesh) {
-		respond.JsonError(w, "mesh not found", http.StatusNotFound)
+	if _, err := h.meshRepo.GetMember(r.Context(), meshID, user.ID); err != nil && mesh.OwnerID != user.ID {
+		respond.JsonError(w, "not a member of this mesh", http.StatusForbidden)
 		return
+	}
+	if mesh.OwnerID != user.ID {
+		mesh.InviteCode = ""
 	}
 
 	members, err := h.meshRepo.ListMembers(r.Context(), meshID)
@@ -187,11 +254,53 @@ func (h *MeshHandler) GetMesh(w http.ResponseWriter, r *http.Request) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// POST /mesh/join — manual mesh invites are no longer supported
+// POST /mesh/join — join a mesh using a time-limited invitation.
 // ═══════════════════════════════════════════════════════════════════════════
 
 func (h *MeshHandler) JoinMesh(w http.ResponseWriter, r *http.Request) {
-	respond.JsonError(w, "manual mesh invites are disabled", http.StatusGone)
+	user := auth.GetUser(r)
+	var req struct {
+		InviteCode string `json:"invite_code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respond.JsonError(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	req.InviteCode = strings.TrimSpace(req.InviteCode)
+	if _, err := uuid.Parse(req.InviteCode); err != nil {
+		respond.JsonError(w, "invalid invite_code format", http.StatusBadRequest)
+		return
+	}
+	mesh, err := h.meshRepo.GetByInviteCode(r.Context(), req.InviteCode)
+	if err != nil {
+		respond.JsonError(w, "invalid or expired invite code", http.StatusNotFound)
+		return
+	}
+	if !mesh.IsActive {
+		respond.JsonError(w, "mesh network is inactive", http.StatusGone)
+		return
+	}
+	if _, err := h.meshRepo.GetMember(r.Context(), mesh.ID, user.ID); err == nil {
+		respond.JsonError(w, "already a member of this mesh", http.StatusConflict)
+		return
+	}
+	count, err := h.meshRepo.CountMembers(r.Context(), mesh.ID)
+	if err != nil {
+		respond.JsonError(w, "failed to check member count", http.StatusInternalServerError)
+		return
+	}
+	if count >= mesh.MaxMembers {
+		respond.JsonError(w, "mesh network is full", http.StatusConflict)
+		return
+	}
+	member := &models.MeshMember{UserID: user.ID}
+	if err := h.meshRepo.AddMember(r.Context(), mesh.ID, member); err != nil {
+		respond.JsonError(w, "failed to join mesh", http.StatusInternalServerError)
+		return
+	}
+	h.auditRepo.Log(r.Context(), &user.ID, "mesh.join", map[string]interface{}{"mesh_id": mesh.ID}, r.RemoteAddr)
+	h.broadcastMeshListChanged()
+	respond.JsonOK(w, member, http.StatusCreated)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -683,7 +792,42 @@ func (h *MeshHandler) DeleteAutoMesh(w http.ResponseWriter, r *http.Request) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 func (h *MeshHandler) RegenerateInvite(w http.ResponseWriter, r *http.Request) {
-	respond.JsonError(w, "manual mesh invites are disabled", http.StatusGone)
+	user := auth.GetUser(r)
+	meshID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		respond.JsonError(w, "invalid mesh id", http.StatusBadRequest)
+		return
+	}
+	mesh, err := h.meshRepo.GetByID(r.Context(), meshID)
+	if err != nil {
+		respond.JsonError(w, "mesh not found", http.StatusNotFound)
+		return
+	}
+	if mesh.OwnerID != user.ID {
+		respond.JsonError(w, "only the mesh owner can regenerate the invite code", http.StatusForbidden)
+		return
+	}
+	var req struct {
+		ExpiresInHours int `json:"expires_in_hours"`
+	}
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			respond.JsonError(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+	}
+	var expiresAt *time.Time
+	if req.ExpiresInHours > 0 {
+		exp := time.Now().UTC().Add(time.Duration(req.ExpiresInHours) * time.Hour)
+		expiresAt = &exp
+	}
+	code, expiry, err := h.meshRepo.RegenerateInviteCode(r.Context(), meshID, expiresAt)
+	if err != nil {
+		respond.JsonError(w, "failed to regenerate invite code", http.StatusInternalServerError)
+		return
+	}
+	h.auditRepo.Log(r.Context(), &user.ID, "mesh.invite.regenerate", map[string]interface{}{"mesh_id": meshID}, r.RemoteAddr)
+	respond.JsonOK(w, map[string]interface{}{"invite_code": code, "invite_expires_at": expiry}, http.StatusOK)
 }
 
 // DELETE /mesh/node — deactivate; leaves or deletes every mesh the user belongs to

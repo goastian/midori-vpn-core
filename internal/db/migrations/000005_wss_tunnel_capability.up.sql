@@ -1,0 +1,12 @@
+BEGIN;
+
+ALTER TABLE vpn_servers
+    ADD COLUMN IF NOT EXISTS wss_tunnel_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS wss_host TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS wss_port INTEGER NOT NULL DEFAULT 443;
+
+ALTER TABLE vpn_servers
+    DROP CONSTRAINT IF EXISTS chk_vpn_servers_wss_port,
+    ADD CONSTRAINT chk_vpn_servers_wss_port CHECK (wss_port BETWEEN 1 AND 65535);
+
+COMMIT;

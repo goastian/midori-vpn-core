@@ -98,48 +98,6 @@ func (r *MeshRepo) NextAvailableSubnet(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("mesh: no available /24 subnet in %s.0.0/16", meshSubnetBase)
 }
 
-// nextAvailableMeshIP returns the lowest host address (.2, .3 …) within
-// subnet that is not already allocated to a mesh member.
-func (r *MeshRepo) nextAvailableMeshIP(ctx context.Context, meshID uuid.UUID, subnet string) (string, error) {
-	_, ipNet, err := net.ParseCIDR(subnet)
-	if err != nil {
-		return "", fmt.Errorf("mesh: parse subnet %q: %w", subnet, err)
-	}
-
-	rows, err := r.pool.Query(ctx,
-		`SELECT mesh_ip FROM mesh_members WHERE mesh_id = $1`, meshID)
-	if err != nil {
-		return "", fmt.Errorf("mesh: list ips: %w", err)
-	}
-	defer rows.Close()
-
-	used := make(map[string]bool)
-	for rows.Next() {
-		var ip string
-		if err := rows.Scan(&ip); err != nil {
-			return "", err
-		}
-		used[ip] = true
-	}
-	if err := rows.Err(); err != nil {
-		return "", err
-	}
-
-	base := ipNet.IP.To4()
-	if base == nil {
-		return "", fmt.Errorf("mesh: only IPv4 subnets are supported")
-	}
-
-	// .1 is reserved as the gateway; start from .2
-	for i := 2; i <= 254; i++ {
-		candidate := fmt.Sprintf("%d.%d.%d.%d", base[0], base[1], base[2], i)
-		if !used[candidate] {
-			return candidate, nil
-		}
-	}
-	return "", fmt.Errorf("mesh: subnet %s is full", subnet)
-}
-
 // nextAvailableMeshIPTx is identical to nextAvailableMeshIP but operates
 // within an existing transaction (pgx.Tx) so it sees the locked state of the
 // mesh_networks row held by AddMember.

@@ -9,22 +9,24 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/control"
 	"github.com/goastian/midori-vpn-core/internal/core"
+	"github.com/goastian/midori-vpn-core/internal/nodeauth"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 	"github.com/goastian/midori-vpn-core/internal/tunnel"
 	"github.com/goastian/midori-vpn-core/internal/wg"
 )
 
-func NewRouter(cfg *config.Config, mgr *wg.Manager) *chi.Mux {
-	return NewRouterWithDB(cfg, mgr, nil, nil)
+func NewRouter(cfg *config.Config, mgr *wg.Manager, verifier *nodeauth.Verifier) *chi.Mux {
+	return NewRouterWithDB(cfg, mgr, nil, nil, verifier)
 }
 
-func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *auth.JWKSProvider) *chi.Mux {
+func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *auth.JWKSProvider, verifier *nodeauth.Verifier) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logger)
@@ -49,18 +51,21 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 	h := core.NewHandler(cfg, mgr)
 	healthChecker := NewHealthChecker(cfg, mgr, pool)
 	metricsExporter := NewMetricsExporter(mgr)
-	wsGateway := tunnel.NewWSGateway(cfg.WGPort)
 
 	// Public Health Probes & Telemetry
 	r.Get("/health", h.Health)
 	r.Get("/livez", healthChecker.Livez)
 	r.Get("/readyz", healthChecker.Readyz)
 	r.Get("/metrics", metricsExporter.Handler)
-	r.Get("/api/v1/tunnel/ws", wsGateway.Handler)
+	if cfg.WSSTunnelEnabled {
+		serverID, _ := uuid.Parse(cfg.WSSTunnelServerID)
+		gateway := tunnel.NewWSGateway(cfg.WGPort, cfg.CredentialSigningSecret, serverID, cfg.WSSTunnelMaxClients)
+		r.Get("/api/v1/tunnel/ws", gateway.Handler)
+	}
 
-	// WireGuard core API (X-Core-Token protected)
+	// WireGuard core API protected by signed Ed25519 node requests.
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Use(core.AuthMiddleware(cfg.AuthToken))
+		r.Use(core.AuthMiddleware(verifier))
 
 		// Peers (core)
 		r.Post("/peers", h.AddPeer)
@@ -68,9 +73,6 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 		r.Put("/peers/{pubkey}", h.UpdatePeer)
 		r.Get("/peers/{pubkey}/stats", h.PeerStats)
 		r.Get("/peers", h.ListPeers)
-
-		// Keypair (Core internal)
-		r.Post("/keypair", h.GenerateKeypair)
 
 		// Stats
 		r.Get("/stats", h.ServerStats)
@@ -94,6 +96,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 		wsHub := control.NewWSHub(cfg)
 		go wsHub.Run()
 		ch := control.NewHandlerWithMesh(pool, cfg, mgr, wsHub)
+		ch.SetNodeVerifier(verifier)
 
 		// User-facing routes
 		r.Route("/api/v1/control", func(r chi.Router) {
@@ -101,8 +104,9 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 			r.Use(control.BannedCheck)
 
 			r.Get("/me", ch.Me)
-			r.Post("/keypair", ch.GenerateKeypair)
+			r.Get("/quota", ch.GetQuota)
 			r.Post("/proxy-credentials", ch.ProxyCredentials)
+			r.Post("/tunnel-credentials", ch.TunnelCredentials)
 			r.Get("/servers", ch.ListServers)
 			r.Get("/servers/ping", ch.PingServers)
 			r.Get("/servers/{id}/ikev2.mobileconfig", ch.ExportIKEv2MobileConfig)
@@ -167,6 +171,12 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 			r.Put("/servers/{id}", ch.AdminUpdateServer)
 			r.Delete("/servers/{id}", ch.AdminDeleteServer)
 
+			// Signed node identities
+			r.Get("/node-identities", ch.AdminListNodeIdentities)
+			r.Post("/node-identities", ch.AdminRegisterNodeIdentity)
+			r.Delete("/node-identities/{nodeID}", ch.AdminRevokeNodeIdentity)
+			r.Post("/node-identities/{nodeID}/restore", ch.AdminRestoreNodeIdentity)
+
 			// Peers
 			r.Get("/peers", ch.AdminListPeers)
 			r.Delete("/peers/{id}", ch.AdminForceDisconnectPeer)
@@ -187,6 +197,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 		// Start background jobs with cancellation support
 		jobCtx, jobCancel := context.WithCancel(context.Background())
 		go control.StartStatsSync(jobCtx, pool, wsHub)
+		go control.StartTransportHealthSync(jobCtx, pool)
 		go control.StartPeerCleanup(jobCtx, pool)
 		go control.StartSessionMeshCleanup(jobCtx, pool)
 		SetJobCancel(jobCancel)
@@ -234,7 +245,7 @@ func CORSMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 			if origin != "" && isOriginAllowed(origin, allowedOrigins) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Core-Token")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			}
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -18,12 +19,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/goastian/midori-vpn-core/internal/auth"
+	"github.com/goastian/midori-vpn-core/internal/billing"
 	"github.com/goastian/midori-vpn-core/internal/config"
 	vpnCrypto "github.com/goastian/midori-vpn-core/internal/crypto"
 	"github.com/goastian/midori-vpn-core/internal/models"
+	"github.com/goastian/midori-vpn-core/internal/nodeauth"
 	"github.com/goastian/midori-vpn-core/internal/proxytoken"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 	"github.com/goastian/midori-vpn-core/internal/respond"
@@ -38,13 +42,21 @@ var deviceNameRe = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
 var endpointHostRe = regexp.MustCompile(`^[a-zA-Z0-9._\[\]:-]+$`)
 
 // validateServerEndpoint checks that an optional WireGuard endpoint is a safe
-// hostname-or-IP string (not a URL scheme, no path, no query).
-func validateServerEndpoint(ep string) error {
-	if len(ep) > 253 {
-		return fmt.Errorf("endpoint is too long")
+// host:port pair or plain host.
+func validateServerEndpoint(endpoint string) error {
+	trimmed := strings.TrimSpace(endpoint)
+	if trimmed == "" {
+		return nil
 	}
-	if !endpointHostRe.MatchString(ep) {
-		return fmt.Errorf("endpoint must be a valid hostname or IP address (no scheme, path, or query)")
+	if strings.Contains(trimmed, "/") || strings.Contains(trimmed, "?") || strings.Contains(trimmed, "@") {
+		return errors.New("endpoint must not contain path, query, or credentials")
+	}
+	host := trimmed
+	if h, _, err := net.SplitHostPort(trimmed); err == nil {
+		host = h
+	}
+	if !endpointHostRe.MatchString(host) {
+		return errors.New("endpoint host contains invalid characters")
 	}
 	return nil
 }
@@ -86,19 +98,25 @@ func BannedCheck(next http.Handler) http.Handler {
 }
 
 type Handler struct {
-	userRepo          *repo.UserRepo
-	serverRepo        *repo.ServerRepo
-	peerRepo          *repo.PeerRepo
-	meshRepo          *repo.MeshRepo
-	auditRepo         *repo.AuditRepo
-	wgMgr             *wg.Manager
-	hub               *WSHub
-	maxDevicesPerUser int
-	appEnv            string
-	coreAllowLoopback bool
-	vpnDNS            string
-	authToken         string
-	connectLimiter    *userRateLimiter // per-user rate limit for the /connect endpoint
+	userRepo                *repo.UserRepo
+	serverRepo              *repo.ServerRepo
+	peerRepo                *repo.PeerRepo
+	meshRepo                *repo.MeshRepo
+	auditRepo               *repo.AuditRepo
+	billingClient           *billing.Client
+	wgMgr                   *wg.Manager
+	hub                     *WSHub
+	maxDevicesPerUser       int
+	appEnv                  string
+	coreAllowLoopback       bool
+	vpnDNS                  string
+	credentialSigningSecret string
+	connectLimiter          *userRateLimiter // per-user rate limit for the /connect endpoint
+	nodeVerifier            *nodeauth.Verifier
+}
+
+func (h *Handler) SetNodeVerifier(verifier *nodeauth.Verifier) {
+	h.nodeVerifier = verifier
 }
 
 func NewHandler(pool *pgxpool.Pool, cfg *config.Config) *Handler {
@@ -106,24 +124,38 @@ func NewHandler(pool *pgxpool.Pool, cfg *config.Config) *Handler {
 }
 
 func NewHandlerWithMesh(pool *pgxpool.Pool, cfg *config.Config, wgMgr *wg.Manager, hub *WSHub) *Handler {
+	billingRedis := billingRedisClient(cfg)
 	h := &Handler{
-		userRepo:          repo.NewUserRepo(pool),
-		serverRepo:        repo.NewServerRepo(pool),
-		peerRepo:          repo.NewPeerRepo(pool),
-		meshRepo:          repo.NewMeshRepo(pool),
-		auditRepo:         repo.NewAuditRepo(pool),
-		wgMgr:             wgMgr,
-		hub:               hub,
-		maxDevicesPerUser: cfg.MaxDevicesPerUser,
-		appEnv:            cfg.AppEnv,
-		coreAllowLoopback: cfg.CoreAllowHTTP,
-		vpnDNS:            cfg.VpnDNS,
-		authToken:         cfg.AuthToken,
+		userRepo:                repo.NewUserRepo(pool),
+		serverRepo:              repo.NewServerRepo(pool),
+		peerRepo:                repo.NewPeerRepo(pool),
+		meshRepo:                repo.NewMeshRepo(pool),
+		auditRepo:               repo.NewAuditRepo(pool),
+		billingClient:           billing.NewClient(cfg, billingRedis),
+		wgMgr:                   wgMgr,
+		hub:                     hub,
+		maxDevicesPerUser:       cfg.MaxDevicesPerUser,
+		appEnv:                  cfg.AppEnv,
+		coreAllowLoopback:       cfg.CoreAllowHTTP,
+		vpnDNS:                  cfg.VpnDNS,
+		credentialSigningSecret: cfg.CredentialSigningSecret,
 	}
 	if cfg.ConnectRateLimitRPS > 0 {
 		h.connectLimiter = newUserRateLimiter(cfg.ConnectRateLimitRPS, cfg.ConnectRateLimitBurst)
 	}
 	return h
+}
+
+func billingRedisClient(cfg *config.Config) *redis.Client {
+	if cfg == nil || cfg.RedisURL == "" {
+		return nil
+	}
+	options, err := redis.ParseURL(cfg.RedisURL)
+	if err != nil {
+		slog.Warn("billing: invalid Redis URL; entitlement caching disabled", "error", err)
+		return nil
+	}
+	return redis.NewClient(options)
 }
 
 func (h *Handler) broadcastMeshListChanged() {
@@ -181,8 +213,66 @@ func (h *Handler) detachPeerFromMeshSessions(ctx context.Context, peer *models.P
 	}
 }
 
+func (h *Handler) getUserQuota(ctx context.Context, user *models.User) models.UserQuota {
+	var breakdown models.DeviceTypeBreakdown
+	var activeCount int
+
+	if peers, err := h.peerRepo.ListByUser(ctx, user.ID); err == nil {
+		for _, p := range peers {
+			if !p.IsActive {
+				continue
+			}
+			activeCount++
+			devLower := strings.ToLower(p.DeviceName)
+			if strings.Contains(devLower, "desktop") || strings.Contains(devLower, "app") {
+				breakdown.Desktop++
+			} else if strings.Contains(devLower, "extension") || strings.Contains(devLower, "browser") || strings.Contains(devLower, "chrome") || strings.Contains(devLower, "firefox") {
+				breakdown.Extension++
+			} else {
+				breakdown.Wireguard++
+			}
+		}
+	}
+
+	maxDevices := h.maxDevicesPerUser
+	planSlug := "free"
+	planName := "Free Plan"
+
+	if h.billingClient != nil {
+		if sub, err := h.billingClient.GetUserSubscription(ctx, user.ID, user.AuthentikUID); err == nil && sub != nil {
+			if sub.MaxDevices > 0 {
+				maxDevices = sub.MaxDevices
+			}
+			if sub.PlanSlug != "" {
+				planSlug = sub.PlanSlug
+			}
+			if sub.PlanName != "" {
+				planName = sub.PlanName
+			}
+		}
+	}
+
+	if maxDevices <= 0 {
+		maxDevices = 5
+	}
+
+	avail := maxDevices - activeCount
+	if avail < 0 {
+		avail = 0
+	}
+
+	return models.UserQuota{
+		ConnectedDevices: activeCount,
+		MaxDevices:       maxDevices,
+		AvailableDevices: avail,
+		PlanSlug:         planSlug,
+		PlanName:         planName,
+		DevicesByType:    breakdown,
+	}
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
-// User profile
+// User profile & Quota
 // ═══════════════════════════════════════════════════════════════════════════
 
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
@@ -191,22 +281,29 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, "not authenticated", http.StatusUnauthorized)
 		return
 	}
-	respond.JsonOK(w, user, http.StatusOK)
+	quota := h.getUserQuota(r.Context(), user)
+	resp := map[string]any{
+		"id":            user.ID,
+		"authentik_uid": user.AuthentikUID,
+		"email":         user.Email,
+		"display_name":  user.DisplayName,
+		"groups":        user.Groups,
+		"is_banned":     user.IsBanned,
+		"created_at":    user.CreatedAt,
+		"updated_at":    user.UpdatedAt,
+		"quota":         quota,
+	}
+	respond.JsonOK(w, resp, http.StatusOK)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Keypair generation (browser-side)
-// ═══════════════════════════════════════════════════════════════════════════
-
-func (h *Handler) GenerateKeypair(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Warning", `299 - "Deprecated: generate Curve25519 keypairs locally on client via WebCrypto/native crypto"`)
-	kp, err := vpnCrypto.GenerateKeypair()
-	if err != nil {
-		slog.Error("keypair generation error", "error", err)
-		respond.JsonError(w, "failed to generate keypair", http.StatusInternalServerError)
+func (h *Handler) GetQuota(w http.ResponseWriter, r *http.Request) {
+	user := auth.GetUser(r)
+	if user == nil {
+		respond.JsonError(w, "not authenticated", http.StatusUnauthorized)
 		return
 	}
-	respond.JsonOK(w, kp, http.StatusCreated)
+	quota := h.getUserQuota(r.Context(), user)
+	respond.JsonOK(w, quota, http.StatusOK)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -282,7 +379,7 @@ func buildServerPingResults(servers []models.VPNServer) []ServerPingResult {
 			}
 			start := time.Now()
 
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 			defer cancel()
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
 			if err != nil {
@@ -314,9 +411,10 @@ func buildServerPingResults(servers []models.VPNServer) []ServerPingResult {
 // ═══════════════════════════════════════════════════════════════════════════
 
 type ConnectRequest struct {
-	ServerID   string `json:"server_id"`
-	PublicKey  string `json:"public_key"`
-	DeviceName string `json:"device_name"`
+	ServerID       string `json:"server_id"`
+	PublicKey      string `json:"public_key"`
+	DeviceName     string `json:"device_name"`
+	PQKEMPublicKey string `json:"pq_kem_public_key,omitempty"`
 }
 
 func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
@@ -350,6 +448,11 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	if existingPeer, err := h.peerRepo.GetActiveByUserAndPublicKey(r.Context(), user.ID, req.PublicKey); err == nil {
 		existingServer, sErr := h.serverRepo.GetByID(r.Context(), existingPeer.ServerID)
 		if sErr == nil {
+			wireGuard, configured := enabledServerTransport(existingServer, "wireguard")
+			if !configured {
+				respond.JsonError(w, "the existing server no longer has WireGuard enabled", http.StatusConflict)
+				return
+			}
 			serverPubKey := existingServer.PublicKey
 			if coreStats, statsErr := CallCoreServerStats(existingServer); statsErr == nil && coreStats.PublicKey != "" {
 				serverPubKey = coreStats.PublicKey
@@ -358,15 +461,11 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 			if idx := strings.Index(peerIPAddr, "/"); idx != -1 {
 				peerIPAddr = peerIPAddr[:idx]
 			}
-			epHost := existingServer.Endpoint
-			if epHost == "" {
-				epHost = existingServer.Host
-			}
 			respond.JsonOK(w, models.ConnectionConfig{
 				PeerID:          existingPeer.ID,
 				PeerIP:          peerIPAddr,
 				ServerPublicKey: serverPubKey,
-				ServerEndpoint:  wireGuardEndpointForServerHost(epHost, existingServer.WGPort),
+				ServerEndpoint:  wireGuardEndpointForServerHost(wireGuard.Host, wireGuard.Port),
 				PresharedKey:    existingPeer.PresharedKey,
 				DNS:             h.vpnDNS,
 				AllowedIPs:      "0.0.0.0/0, ::/0",
@@ -378,18 +477,11 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		// Non-fatal: continue to normal flow.
 	}
 
-	// 2. Enforce device limit
-	if h.maxDevicesPerUser > 0 {
-		activeCount, err := h.peerRepo.CountByUser(r.Context(), user.ID)
-		if err != nil {
-			slog.Error("count devices error", "error", err)
-			respond.JsonError(w, "failed to check device limit", http.StatusInternalServerError)
-			return
-		}
-		if activeCount >= h.maxDevicesPerUser {
-			respond.JsonError(w, fmt.Sprintf("device limit reached (max %d)", h.maxDevicesPerUser), http.StatusConflict)
-			return
-		}
+	// 2. Enforce global user device limit based on plan/quota
+	userQuota := h.getUserQuota(r.Context(), user)
+	if userQuota.ConnectedDevices >= userQuota.MaxDevices {
+		respond.JsonError(w, fmt.Sprintf("device limit reached (%d/%d devices in use on your %s)", userQuota.ConnectedDevices, userQuota.MaxDevices, userQuota.PlanName), http.StatusConflict)
+		return
 	}
 
 	// 2b. If an active device with this name already exists for this user,
@@ -411,7 +503,12 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		}
 		s, err := h.serverRepo.GetByID(r.Context(), serverID)
 		if err != nil {
-			respond.JsonError(w, "server not found", http.StatusNotFound)
+			slog.Error("serverRepo.GetByID error", "server_id", serverID, "error", err)
+			if errors.Is(err, pgx.ErrNoRows) {
+				respond.JsonError(w, "server not found", http.StatusNotFound)
+			} else {
+				respond.JsonError(w, "failed to get server", http.StatusInternalServerError)
+			}
 			return
 		}
 		server = s
@@ -422,6 +519,11 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		server = s
+	}
+	wireGuard, configured := enabledServerTransport(server, "wireguard")
+	if !configured {
+		respond.JsonError(w, "selected server does not have WireGuard enabled", http.StatusConflict)
+		return
 	}
 
 	// 3b. Atomically reserve a slot (prevents TOCTOU race on capacity)
@@ -443,10 +545,22 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// 4. Generate post-quantum resistant symmetric Pre-Shared Key (PSK)
-	psk, pskErr := vpnCrypto.GeneratePresharedKey()
-	if pskErr != nil {
-		slog.Warn("failed to generate PSK", "error", pskErr)
+	// 4. Generate post-quantum resistant Pre-Shared Key (PSK) or ML-KEM-768 encapsulation
+	var psk string
+	var pqCiphertext string
+	if req.PQKEMPublicKey != "" {
+		var kemErr error
+		psk, pqCiphertext, kemErr = vpnCrypto.EncapsulateSharedKey(req.PQKEMPublicKey)
+		if kemErr != nil {
+			slog.Warn("ML-KEM-768 encapsulation failed, falling back to symmetric PSK", "error", kemErr)
+			psk, _ = vpnCrypto.GeneratePresharedKey()
+		}
+	} else {
+		var pskErr error
+		psk, pskErr = vpnCrypto.GeneratePresharedKey()
+		if pskErr != nil {
+			slog.Warn("failed to generate PSK", "error", pskErr)
+		}
 	}
 
 	// 4+5. Call vpn-core to add peer (core assigns IP from pool)
@@ -457,7 +571,13 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 7. Save peer in DB
+	// 7. Clean up any previous active peers for this device, key or IP before saving
+	if req.DeviceName != "" {
+		_ = h.peerRepo.DeactivateByName(r.Context(), user.ID, req.DeviceName)
+	}
+	_ = h.peerRepo.DeactivateByPublicKey(r.Context(), user.ID, req.PublicKey)
+	_ = h.peerRepo.DeactivateByServerAndIP(r.Context(), server.ID, coreResp.AllowedIP)
+
 	peer := &models.Peer{
 		UserID:       user.ID,
 		ServerID:     server.ID,
@@ -506,17 +626,13 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	if idx := strings.Index(peerIPAddr, "/"); idx != -1 {
 		peerIPAddr = peerIPAddr[:idx]
 	}
-	// ServerEndpoint: prefer the public Endpoint field, fall back to Host.
-	epHostConnect := server.Endpoint
-	if epHostConnect == "" {
-		epHostConnect = server.Host
-	}
 	config := models.ConnectionConfig{
 		PeerID:          peer.ID,
 		PeerIP:          peerIPAddr,
 		ServerPublicKey: serverPubKey,
-		ServerEndpoint:  wireGuardEndpointForServerHost(epHostConnect, server.WGPort),
+		ServerEndpoint:  wireGuardEndpointForServerHost(wireGuard.Host, wireGuard.Port),
 		PresharedKey:    peer.PresharedKey,
+		PQKEMCiphertext: pqCiphertext,
 		DNS:             h.vpnDNS,
 		AllowedIPs:      "0.0.0.0/0, ::/0",
 	}
@@ -700,14 +816,10 @@ func (h *Handler) ProxyCredentials(w http.ResponseWriter, r *http.Request) {
 
 	endpoints := make([]proxyEndpoint, 0)
 	for _, s := range servers {
-		if s.SupportsProxy {
-			port := s.ProxyPort
-			if port == 0 {
-				port = 443
-			}
+		if transport, ok := enabledServerTransport(&s, "proxy"); ok {
 			endpoints = append(endpoints, proxyEndpoint{
-				Host:        s.Host,
-				Port:        port,
+				Host:        transport.Host,
+				Port:        transport.Port,
 				CountryCode: s.CountryCode,
 				Location:    s.Location,
 			})
@@ -715,7 +827,7 @@ func (h *Handler) ProxyCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Scoped proxy token with 15-minute validity signed with HMAC-SHA256 (aud=vpn-proxy)
-	proxyTokenStr := proxytoken.Generate(user.ID, h.authToken, proxytoken.DefaultTTL)
+	proxyTokenStr := proxytoken.Generate(user.ID, h.credentialSigningSecret, proxytoken.DefaultTTL)
 
 	respond.JsonOK(w, map[string]interface{}{
 		"proxy_token":     proxyTokenStr,
@@ -724,6 +836,30 @@ func (h *Handler) ProxyCredentials(w http.ResponseWriter, r *http.Request) {
 	}, http.StatusOK)
 }
 
+// TunnelCredentials issues a short-lived credential for an active device. It
+// does not enable a transport by itself; clients must use a server-advertised capability.
+func (h *Handler) TunnelCredentials(w http.ResponseWriter, r *http.Request) {
+	user := auth.GetUser(r)
+	var req struct {
+		PeerID string `json:"peer_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respond.JsonError(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	peerID, err := uuid.Parse(req.PeerID)
+	if err != nil {
+		respond.JsonError(w, "invalid peer_id", http.StatusBadRequest)
+		return
+	}
+	peer, err := h.peerRepo.GetByID(r.Context(), peerID)
+	if err != nil || peer.UserID != user.ID || !peer.IsActive {
+		respond.JsonError(w, "active device not found", http.StatusNotFound)
+		return
+	}
+	token := proxytoken.GenerateTunnel(proxytoken.TunnelClaims{UserID: user.ID, DeviceID: peer.ID, ServerID: peer.ServerID}, h.credentialSigningSecret, proxytoken.DefaultTTL)
+	respond.JsonOK(w, map[string]interface{}{"tunnel_token": token, "expires_in": int(proxytoken.DefaultTTL.Seconds())}, http.StatusOK)
+}
 
 // ensureServerPublicKey fetches the real WireGuard public key from the core
 // and updates the server record if it differs from what is stored.
@@ -1036,17 +1172,16 @@ func (h *Handler) AdminUnbanUser(w http.ResponseWriter, r *http.Request) {
 }
 
 type CreateServerRequest struct {
-	Name        string `json:"name"`
-	Host        string `json:"host"`
-	Endpoint    string `json:"endpoint"`
-	Port        int    `json:"port"`
-	WGPort      int    `json:"wg_port"`
-	PublicKey   string `json:"public_key"`
-	CoreToken   string `json:"core_token"`
-	Location    string `json:"location"`
-	CountryCode string `json:"country_code"`
-	MaxPeers    int    `json:"max_peers"`
-	ProxyPort   int    `json:"proxy_port"`
+	Name        string             `json:"name"`
+	Host        string             `json:"host"`
+	Endpoint    string             `json:"endpoint"`
+	Port        int                `json:"port"`
+	WGPort      int                `json:"wg_port"`
+	PublicKey   string             `json:"public_key"`
+	Location    string             `json:"location"`
+	CountryCode string             `json:"country_code"`
+	MaxPeers    int                `json:"max_peers"`
+	Transports  []TransportRequest `json:"transports"`
 }
 
 func (h *Handler) AdminListServers(w http.ResponseWriter, r *http.Request) {
@@ -1059,14 +1194,86 @@ func (h *Handler) AdminListServers(w http.ResponseWriter, r *http.Request) {
 	respond.JsonOK(w, servers, http.StatusOK)
 }
 
+func (h *Handler) AdminListNodeIdentities(w http.ResponseWriter, r *http.Request) {
+	if h.nodeVerifier == nil {
+		respond.JsonError(w, "node identity registry is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	identities, err := h.nodeVerifier.List(r.Context())
+	if err != nil {
+		respond.JsonError(w, "failed to list node identities", http.StatusServiceUnavailable)
+		return
+	}
+	respond.JsonOK(w, identities, http.StatusOK)
+}
+
+func (h *Handler) AdminRegisterNodeIdentity(w http.ResponseWriter, r *http.Request) {
+	if h.nodeVerifier == nil {
+		respond.JsonError(w, "node identity registry is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var request struct {
+		NodeID    string `json:"node_id"`
+		PublicKey string `json:"public_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		respond.JsonError(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if err := h.nodeVerifier.Register(r.Context(), request.NodeID, request.PublicKey); err != nil {
+		respond.JsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	admin := auth.GetUser(r)
+	h.auditRepo.Log(r.Context(), &admin.ID, "admin.node-identity.register", map[string]interface{}{"node_id": request.NodeID}, r.RemoteAddr)
+	respond.JsonOK(w, map[string]string{"node_id": request.NodeID, "status": "registered"}, http.StatusCreated)
+}
+
+func (h *Handler) AdminRevokeNodeIdentity(w http.ResponseWriter, r *http.Request) {
+	h.changeNodeIdentityRevocation(w, r, true)
+}
+
+func (h *Handler) AdminRestoreNodeIdentity(w http.ResponseWriter, r *http.Request) {
+	h.changeNodeIdentityRevocation(w, r, false)
+}
+
+func (h *Handler) changeNodeIdentityRevocation(w http.ResponseWriter, r *http.Request, revoked bool) {
+	if h.nodeVerifier == nil {
+		respond.JsonError(w, "node identity registry is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	nodeID := strings.TrimSpace(chi.URLParam(r, "nodeID"))
+	if nodeID == "" {
+		respond.JsonError(w, "node_id is required", http.StatusBadRequest)
+		return
+	}
+	status := "restored"
+	action := "admin.node-identity.restore"
+	var err error
+	if revoked {
+		err = h.nodeVerifier.Revoke(r.Context(), nodeID)
+		status = "revoked"
+		action = "admin.node-identity.revoke"
+	} else {
+		err = h.nodeVerifier.Restore(r.Context(), nodeID)
+	}
+	if err != nil {
+		respond.JsonError(w, "failed to update node identity", http.StatusServiceUnavailable)
+		return
+	}
+	admin := auth.GetUser(r)
+	h.auditRepo.Log(r.Context(), &admin.ID, action, map[string]interface{}{"node_id": nodeID}, r.RemoteAddr)
+	respond.JsonOK(w, map[string]string{"node_id": nodeID, "status": status}, http.StatusOK)
+}
+
 func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 	var req CreateServerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respond.JsonError(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	if req.Name == "" || req.Host == "" || req.PublicKey == "" || req.CoreToken == "" {
-		respond.JsonError(w, "name, host, public_key and core_token are required", http.StatusBadRequest)
+	if req.Name == "" || req.Host == "" || req.PublicKey == "" {
+		respond.JsonError(w, "name, host and public_key are required", http.StatusBadRequest)
 		return
 	}
 	if req.Port == 0 {
@@ -1094,7 +1301,6 @@ func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Host = normalizedHost
 	req.Port = normalizedPort
-
 	if h.appEnv == "production" && !h.coreAllowLoopback && isLoopbackServerHost(req.Host) {
 		respond.JsonError(w, "loopback hosts (localhost/127.0.0.1/::1) are not allowed in production — set CORE_ALLOW_INSECURE_HTTP=true to override", http.StatusBadRequest)
 		return
@@ -1107,11 +1313,19 @@ func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 		Port:        req.Port,
 		WGPort:      req.WGPort,
 		PublicKey:   req.PublicKey,
-		CoreToken:   req.CoreToken,
 		Location:    req.Location,
 		CountryCode: req.CountryCode,
 		MaxPeers:    req.MaxPeers,
-		ProxyPort:   req.ProxyPort,
+		IsActive:    true,
+	}
+	if req.Transports == nil {
+		respond.JsonError(w, "transports is required", http.StatusBadRequest)
+		return
+	}
+	transports, err := validateTransportRequests(req.Transports, h.appEnv == "production", h.coreAllowLoopback)
+	if err != nil {
+		respond.JsonError(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	if err := h.serverRepo.Create(r.Context(), server); err != nil {
@@ -1119,6 +1333,13 @@ func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, "failed to create server", http.StatusInternalServerError)
 		return
 	}
+	if err := h.serverRepo.ReplaceTransports(r.Context(), server.ID, transports); err != nil {
+		slog.Error("admin create server transports error", "server_id", server.ID, "error", err)
+		_ = h.serverRepo.Delete(r.Context(), server.ID)
+		respond.JsonError(w, "failed to save server transports", http.StatusInternalServerError)
+		return
+	}
+	server.SetTransports(transports)
 	server.ApplyCapabilities()
 
 	admin := auth.GetUser(r)
@@ -1129,18 +1350,17 @@ func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 }
 
 type UpdateServerRequest struct {
-	Name        string `json:"name"`
-	Host        string `json:"host"`
-	Endpoint    string `json:"endpoint"`
-	Port        int    `json:"port"`
-	WGPort      int    `json:"wg_port"`
-	PublicKey   string `json:"public_key"`
-	CoreToken   string `json:"core_token"`
-	Location    string `json:"location"`
-	CountryCode string `json:"country_code"`
-	MaxPeers    int    `json:"max_peers"`
-	IsActive    *bool  `json:"is_active"`
-	ProxyPort   *int   `json:"proxy_port"`
+	Name        string              `json:"name"`
+	Host        string              `json:"host"`
+	Endpoint    string              `json:"endpoint"`
+	Port        int                 `json:"port"`
+	WGPort      int                 `json:"wg_port"`
+	PublicKey   string              `json:"public_key"`
+	Location    string              `json:"location"`
+	CountryCode string              `json:"country_code"`
+	MaxPeers    int                 `json:"max_peers"`
+	IsActive    *bool               `json:"is_active"`
+	Transports  *[]TransportRequest `json:"transports"`
 }
 
 func (h *Handler) AdminUpdateServer(w http.ResponseWriter, r *http.Request) {
@@ -1203,9 +1423,6 @@ func (h *Handler) AdminUpdateServer(w http.ResponseWriter, r *http.Request) {
 	if req.PublicKey != "" {
 		server.PublicKey = req.PublicKey
 	}
-	if req.CoreToken != "" {
-		server.CoreToken = req.CoreToken
-	}
 	if req.Location != "" {
 		server.Location = req.Location
 	}
@@ -1218,14 +1435,27 @@ func (h *Handler) AdminUpdateServer(w http.ResponseWriter, r *http.Request) {
 	if req.IsActive != nil {
 		server.IsActive = *req.IsActive
 	}
-	if req.ProxyPort != nil {
-		server.ProxyPort = *req.ProxyPort
+	var transports []models.TransportCapability
+	if req.Transports != nil {
+		transports, err = validateTransportRequests(*req.Transports, h.appEnv == "production", h.coreAllowLoopback)
+		if err != nil {
+			respond.JsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 
 	if err := h.serverRepo.Update(r.Context(), server); err != nil {
 		slog.Error("admin update server error", "server_id", server.ID, "error", err)
 		respond.JsonError(w, "failed to update server", http.StatusInternalServerError)
 		return
+	}
+	if req.Transports != nil {
+		if err := h.serverRepo.ReplaceTransports(r.Context(), server.ID, transports); err != nil {
+			slog.Error("admin update server transports error", "server_id", server.ID, "error", err)
+			respond.JsonError(w, "failed to save server transports", http.StatusInternalServerError)
+			return
+		}
+		server.SetTransports(transports)
 	}
 	server.ApplyCapabilities()
 
