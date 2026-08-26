@@ -18,6 +18,7 @@ type Response struct {
 	OK    bool        `json:"ok"`
 	Data  interface{} `json:"data,omitempty"`
 	Error string      `json:"error,omitempty"`
+	Code  string      `json:"code,omitempty"`
 }
 
 func JsonOK(w http.ResponseWriter, data interface{}, code int) {
@@ -28,6 +29,13 @@ func JsonOK(w http.ResponseWriter, data interface{}, code int) {
 func JsonError(w http.ResponseWriter, msg string, code int) {
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(Response{OK: false, Error: msg})
+}
+
+// JsonErrorCode returns a stable machine-readable code alongside the public
+// error message. Clients should branch on Code instead of matching prose.
+func JsonErrorCode(w http.ResponseWriter, msg, errorCode string, status int) {
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(Response{OK: false, Error: msg, Code: errorCode})
 }
 
 // SafeError returns a generic error message in production and the real

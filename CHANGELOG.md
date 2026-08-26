@@ -22,6 +22,7 @@
 ### Mesh
 
 - Restored authenticated creation, invitation rotation and joining of named Mesh networks, with ownership, capacity and expiry checks.
+- Auto-Mesh no longer invents a country for private or loopback origins. Client IP forwarding is accepted only from `TRUSTED_PROXIES`, unavailable geolocation returns the stable `origin_country_unavailable` contract, and session meshes are never persisted with a fabricated location.
 
 ### Transport contracts
 

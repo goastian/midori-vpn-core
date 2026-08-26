@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/goastian/midori-vpn-core/internal/auth"
+	"github.com/goastian/midori-vpn-core/internal/clientip"
 	"github.com/goastian/midori-vpn-core/internal/models"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 	"github.com/goastian/midori-vpn-core/internal/respond"
@@ -24,6 +26,10 @@ import (
 )
 
 const publicMeshNameFormat = "Servidor Comunitario %s [%s]"
+
+const originCountryUnavailableCode = "origin_country_unavailable"
+
+var errOriginCountryUnavailable = errors.New("public origin country is temporarily unavailable; try again later")
 
 const (
 	meshNameMaxLen   = 80
@@ -44,12 +50,14 @@ type ipCacheEntry struct {
 }
 
 type MeshHandler struct {
-	meshRepo  *repo.MeshRepo
-	peerRepo  *repo.PeerRepo
-	auditRepo *repo.AuditRepo
-	wgMgr     *wg.Manager
-	hub       *WSHub
-	pool      *pgxpool.Pool
+	meshRepo       *repo.MeshRepo
+	peerRepo       *repo.PeerRepo
+	auditRepo      *repo.AuditRepo
+	wgMgr          *wg.Manager
+	hub            *WSHub
+	pool           *pgxpool.Pool
+	geoClient      *http.Client
+	trustedProxies clientip.TrustedProxies
 
 	// autoMeshLocks serializes ensureAutoMesh per user so concurrent
 	// activate calls (e.g. agent restart racing with OAuth callback)
@@ -57,14 +65,20 @@ type MeshHandler struct {
 	autoMeshLocks sync.Map // map[uuid.UUID]*sync.Mutex
 }
 
-func NewMeshHandler(pool *pgxpool.Pool, wgMgr *wg.Manager, hub *WSHub) *MeshHandler {
+func NewMeshHandler(pool *pgxpool.Pool, wgMgr *wg.Manager, hub *WSHub, trustedProxies ...string) *MeshHandler {
+	trustedRaw := ""
+	if len(trustedProxies) > 0 {
+		trustedRaw = trustedProxies[0]
+	}
 	return &MeshHandler{
-		meshRepo:  repo.NewMeshRepo(pool),
-		peerRepo:  repo.NewPeerRepo(pool),
-		auditRepo: repo.NewAuditRepo(pool),
-		wgMgr:     wgMgr,
-		hub:       hub,
-		pool:      pool,
+		meshRepo:       repo.NewMeshRepo(pool),
+		peerRepo:       repo.NewPeerRepo(pool),
+		auditRepo:      repo.NewAuditRepo(pool),
+		wgMgr:          wgMgr,
+		hub:            hub,
+		pool:           pool,
+		geoClient:      &http.Client{Timeout: 5 * time.Second},
+		trustedProxies: clientip.ParseTrustedProxies(trustedRaw),
 	}
 }
 
@@ -469,7 +483,7 @@ func (h *MeshHandler) ActivateNode(w http.ResponseWriter, r *http.Request) {
 	mesh, member, created, err := h.ensureAutoMesh(r.Context(), r, user)
 	if err != nil {
 		slog.Warn("mesh: activate node failed", "error", err)
-		respond.JsonError(w, err.Error(), http.StatusUnprocessableEntity)
+		writeAutoMeshError(w, err)
 		return
 	}
 	h.attachMemberToActivePeer(r.Context(), user.ID, mesh.ID, member.MeshIP)
@@ -540,8 +554,8 @@ func statusCreated(created bool) int {
 // Unknown/private origins are rejected so "[XX]" is never persisted.
 func (h *MeshHandler) countryFromIP(ctx context.Context, ip string) (string, error) {
 	parsed := net.ParseIP(ip)
-	if parsed == nil || parsed.IsLoopback() || parsed.IsPrivate() {
-		return "DO", nil
+	if parsed == nil || !parsed.IsGlobalUnicast() || parsed.IsLoopback() || parsed.IsPrivate() {
+		return "", errOriginCountryUnavailable
 	}
 
 	// 1. In-memory cache
@@ -568,19 +582,25 @@ func (h *MeshHandler) countryFromIP(ctx context.Context, ip string) (string, err
 	}
 
 	// 3. Remote geo-IP API (ipapi.co)
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("https://ipapi.co/%s/country/", ip))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("https://ipapi.co/%s/country/", ip), nil)
+	if err != nil {
+		return "", errOriginCountryUnavailable
+	}
+	resp, err := h.geoClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("could not determine public origin country")
+		if resp != nil {
+			resp.Body.Close()
+		}
+		return "", errOriginCountryUnavailable
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 8))
 	if err != nil {
-		return "", fmt.Errorf("could not determine public origin country")
+		return "", errOriginCountryUnavailable
 	}
 	code := strings.ToUpper(strings.TrimSpace(string(body)))
 	if !isValidCountryCode(code) {
-		return "", fmt.Errorf("could not determine public origin country")
+		return "", errOriginCountryUnavailable
 	}
 
 	// Persist to in-memory cache
@@ -606,27 +626,6 @@ func (h *MeshHandler) countryFromIP(ctx context.Context, ip string) (string, err
 	return code, nil
 }
 
-// realIP extracts the client IP from X-Forwarded-For or RemoteAddr.
-func realIP(r *http.Request) string {
-	if cf := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); cf != "" {
-		return cf
-	}
-	if xrip := strings.TrimSpace(r.Header.Get("X-Real-IP")); xrip != "" {
-		return xrip
-	}
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		if ip := strings.TrimSpace(parts[0]); ip != "" {
-			return ip
-		}
-	}
-	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
-	if ip == "" {
-		return r.RemoteAddr
-	}
-	return ip
-}
-
 func (h *MeshHandler) ensureAutoMesh(ctx context.Context, r *http.Request, u *models.User) (*models.MeshNetwork, *models.MeshMember, bool, error) {
 	// Serialize per user so concurrent activate calls cannot both miss the
 	// existing session mesh and race to create duplicates.
@@ -635,7 +634,7 @@ func (h *MeshHandler) ensureAutoMesh(ctx context.Context, r *http.Request, u *mo
 	lock.Lock()
 	defer lock.Unlock()
 
-	originIP := realIP(r)
+	originIP := clientip.RealIP(r, h.trustedProxies)
 	meshes, err := h.meshRepo.ListByUser(ctx, u.ID)
 	if err == nil {
 		for i := range meshes {
@@ -731,7 +730,7 @@ func (h *MeshHandler) AutoMesh(w http.ResponseWriter, r *http.Request) {
 	mesh, member, created, err := h.ensureAutoMesh(r.Context(), r, u)
 	if err != nil {
 		slog.Warn("auto-mesh: could not provision", "error", err)
-		respond.JsonError(w, err.Error(), http.StatusUnprocessableEntity)
+		writeAutoMeshError(w, err)
 		return
 	}
 	h.attachMemberToActivePeer(r.Context(), u.ID, mesh.ID, member.MeshIP)
@@ -743,6 +742,14 @@ func (h *MeshHandler) AutoMesh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respond.JsonOK(w, mesh, statusCreated(created))
+}
+
+func writeAutoMeshError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errOriginCountryUnavailable) {
+		respond.JsonErrorCode(w, errOriginCountryUnavailable.Error(), originCountryUnavailableCode, http.StatusServiceUnavailable)
+		return
+	}
+	respond.JsonError(w, err.Error(), http.StatusUnprocessableEntity)
 }
 
 // DELETE /mesh/auto — delete all session meshes for this user (logout/close)

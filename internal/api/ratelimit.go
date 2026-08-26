@@ -4,15 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/time/rate"
 
+	"github.com/goastian/midori-vpn-core/internal/clientip"
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/respond"
 )
@@ -93,7 +92,7 @@ type DistributedRateLimiter struct {
 	local       *ipLimiter
 	limit       int
 	windowMs    int64
-	trustedNets []*net.IPNet
+	trustedNets clientip.TrustedProxies
 }
 
 func NewDistributedRateLimiter(cfg *config.Config) *DistributedRateLimiter {
@@ -122,7 +121,7 @@ func NewDistributedRateLimiter(cfg *config.Config) *DistributedRateLimiter {
 		local:       newIPLimiter(float64(cfg.RateLimitRPS), cfg.RateLimitBurst),
 		limit:       limit,
 		windowMs:    1000, // 1 second window
-		trustedNets: parseTrustedProxies(cfg.TrustedProxies),
+		trustedNets: clientip.ParseTrustedProxies(cfg.TrustedProxies),
 	}
 }
 
@@ -145,7 +144,7 @@ func RateLimitMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := realIP(r, limiter.trustedNets)
+			ip := clientip.RealIP(r, limiter.trustedNets)
 			if !limiter.Allow(r.Context(), ip) {
 				w.Header().Set("Retry-After", "1")
 				respond.JsonError(w, "rate limit exceeded", http.StatusTooManyRequests)
@@ -154,74 +153,4 @@ func RateLimitMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
-}
-
-// parseTrustedProxies parses a comma-separated list of IPs and CIDRs
-func parseTrustedProxies(raw string) []*net.IPNet {
-	var nets []*net.IPNet
-	for _, entry := range strings.Split(raw, ",") {
-		entry = strings.TrimSpace(entry)
-		if entry == "" {
-			continue
-		}
-		if !strings.Contains(entry, "/") {
-			ip := net.ParseIP(entry)
-			if ip == nil {
-				continue
-			}
-			var mask net.IPMask
-			if ip.To4() != nil {
-				mask = net.CIDRMask(32, 32)
-			} else {
-				mask = net.CIDRMask(128, 128)
-			}
-			nets = append(nets, &net.IPNet{IP: ip, Mask: mask})
-			continue
-		}
-		_, cidr, err := net.ParseCIDR(entry)
-		if err == nil {
-			nets = append(nets, cidr)
-		}
-	}
-	return nets
-}
-
-func isTrusted(ipStr string, trusted []*net.IPNet) bool {
-	ip := net.ParseIP(ipStr)
-	if ip == nil {
-		return false
-	}
-	for _, net := range trusted {
-		if net.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-func realIP(r *http.Request, trusted []*net.IPNet) string {
-	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		remoteHost = r.RemoteAddr
-	}
-
-	if !isTrusted(remoteHost, trusted) {
-		return remoteHost
-	}
-
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		for i := len(parts) - 1; i >= 0; i-- {
-			candidate := strings.TrimSpace(parts[i])
-			if candidate != "" && !isTrusted(candidate, trusted) {
-				return candidate
-			}
-		}
-	}
-
-	if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
-		return xri
-	}
-
-	return remoteHost
 }
