@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -92,6 +94,12 @@ func probeTransport(ctx context.Context, server *models.VPNServer, transport mod
 		healthy = probeTLSProxy(probeCtx, transport)
 	case "masque":
 		healthy = probeMASQUE(probeCtx, transport)
+	case "openvpn":
+		var configured bool
+		healthy, configured = probeOpenVPN(probeCtx, transport)
+		if !configured {
+			return "unknown", false
+		}
 	default:
 		return "unknown", false
 	}
@@ -99,6 +107,51 @@ func probeTransport(ctx context.Context, server *models.VPNServer, transport mod
 		return "healthy", true
 	}
 	return "degraded", true
+}
+
+func probeOpenVPN(ctx context.Context, transport models.TransportCapability) (bool, bool) {
+	healthURL, ok := transport.Metadata["health_url"].(string)
+	if !ok {
+		return false, false
+	}
+	parsed, ok := validOpenVPNHealthURL(healthURL)
+	if !ok {
+		return false, false
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return false, true
+	}
+	response, err := coreHTTP.Do(request)
+	if err != nil {
+		return false, true
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return false, true
+	}
+	var status struct {
+		OK  bool `json:"ok"`
+		DCO bool `json:"dco"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 4096))
+	if err := decoder.Decode(&status); err != nil {
+		return false, true
+	}
+	return status.OK && status.DCO, true
+}
+
+func validOpenVPNHealthURL(value string) (*url.URL, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.Scheme != "http" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "/healthz" {
+		return nil, false
+	}
+	ip := net.ParseIP(parsed.Hostname())
+	port, portErr := strconv.Atoi(parsed.Port())
+	if ip == nil || !ip.IsLoopback() || portErr != nil || port < 1024 || port > 65535 {
+		return nil, false
+	}
+	return parsed, true
 }
 
 func probeMASQUE(ctx context.Context, transport models.TransportCapability) bool {

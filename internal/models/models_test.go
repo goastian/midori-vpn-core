@@ -68,3 +68,17 @@ func TestVPNServerApplyCapabilitiesInactive(t *testing.T) {
 		t.Fatal("inactive server must not advertise transports")
 	}
 }
+
+func TestCertificateTransportRequiresExplicitCertification(t *testing.T) {
+	transport := TransportCapability{
+		Protocol: "openvpn", Enabled: true, HealthStatus: "healthy",
+		Metadata: map[string]interface{}{"certified": false},
+	}
+	if transport.IsUsable() {
+		t.Fatal("healthy but uncertified OpenVPN must not be usable")
+	}
+	transport.Metadata["certified"] = true
+	if !transport.IsUsable() {
+		t.Fatal("healthy certified OpenVPN should be usable")
+	}
+}

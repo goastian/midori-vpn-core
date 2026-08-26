@@ -19,6 +19,7 @@
 - Added reversible Quadlet configuration for MASQUE, Redis 8.10.1 migration with volume export, PostgreSQL 18 migration-chain tests, Certbot reload hook and Redis persistence sysctl.
 - Updated CI to Go 1.27, Node 24/npm 12 and current stable action majors; Linux releases are signed RPMs built entirely with rootless Podman.
 - Added a validated Quadlet helper that pins locally built images to `Pull=never`, avoiding an accidental registry pull during a controlled staging restart.
+- Added a rootless OpenVPN 2.7.5 gateway image with a pinned runtime base, device-CA CRL refresh, namespace-scoped forwarding/NAT and a Quadlet template that deliberately omits public port publication.
 
 ### Mesh
 
@@ -32,5 +33,6 @@
 - Added short-lived `vpn-tunnel` credentials bound to a user, active device and server; the credential endpoint does not expose an unfinished transport.
 - Added authenticated UDP↔WSS and RFC 9298 HTTP/3 CONNECT-UDP MASQUE gateways with server binding, connection limits and race-tested end-to-end relay tests.
 - Smart transport selection now measures real WireGuard handshakes and falls back by health and priority across WireGuard, WSS and MASQUE.
-- Health-gated capabilities prevent an enabled but unreachable gateway from being advertised.
-- Removed inactive simulated drivers and implicit ports; unsupported OpenVPN and IKEv2 selections cannot report a false connection.
+- Health-gated capabilities prevent an enabled but unreachable gateway from being advertised. OpenVPN health now requires its loopback management socket, live interface and an explicit DCO initialization marker; arbitrary health URLs are rejected.
+- Added a non-overwriting PKI bootstrap for a P-256 device CA and DNS-bound server-auth gateway certificate. The gateway never mounts the CA signing key.
+- Removed inactive simulated drivers and implicit ports; unsupported IKEv2 selections cannot report a false connection.

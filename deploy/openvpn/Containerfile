@@ -1,0 +1,28 @@
+ARG GO_IMAGE=docker.io/library/golang:1.27.0-bookworm
+ARG RUNTIME_IMAGE=registry.opensuse.org/opensuse/tumbleweed@sha256:c249e585be229e74c59e28725f9381d3c433aeb6497d4108e423dd14383487dd
+ARG OPENVPN_VERSION=2.7.5-1.1
+
+FROM ${GO_IMAGE} AS health_builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/openvpn-health ./cmd/openvpn-health
+COPY internal/openvpnhealth ./internal/openvpnhealth
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/openvpn-health ./cmd/openvpn-health
+
+FROM ${RUNTIME_IMAGE}
+ARG OPENVPN_VERSION
+RUN zypper --non-interactive install --no-recommends bash ca-certificates coreutils curl iproute2 nftables openssl "openvpn=${OPENVPN_VERSION}" sed && \
+    zypper clean --all && \
+    openvpn --version | grep -Eq '^OpenVPN 2\.(7|[89])\.' && \
+    openvpn --version | grep -Fq '[DCO]'
+
+COPY --from=health_builder /out/openvpn-health /usr/local/bin/openvpn-health
+COPY deploy/openvpn/server.conf.template /usr/share/midorivpn/openvpn/server.conf.template
+COPY deploy/openvpn/entrypoint.sh /usr/local/bin/midorivpn-openvpn-entrypoint
+
+RUN chmod 0755 /usr/local/bin/openvpn-health /usr/local/bin/midorivpn-openvpn-entrypoint && \
+    install -d -m 0700 /run/openvpn
+
+EXPOSE 1194/udp
+ENTRYPOINT ["/usr/local/bin/midorivpn-openvpn-entrypoint"]

@@ -325,6 +325,16 @@ func (h *Handler) ListServers(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, "failed to list servers", http.StatusInternalServerError)
 		return
 	}
+	for index := range servers {
+		usable := make([]models.TransportCapability, 0, len(servers[index].Transports))
+		for _, transport := range servers[index].Transports {
+			if transport.IsUsable() {
+				usable = append(usable, transport)
+			}
+		}
+		servers[index].SetTransports(usable)
+		servers[index].ApplyCapabilities()
+	}
 	respond.JsonOK(w, servers, http.StatusOK)
 }
 

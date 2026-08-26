@@ -58,7 +58,14 @@ func (s *VPNServer) SetTransports(transports []TransportCapability) {
 }
 
 func (t TransportCapability) IsUsable() bool {
-	return t.Enabled && t.HealthStatus == "healthy"
+	if !t.Enabled || t.HealthStatus != "healthy" {
+		return false
+	}
+	if t.Protocol == "openvpn" || t.Protocol == "ikev2" {
+		certified, ok := t.Metadata["certified"].(bool)
+		return ok && certified
+	}
+	return true
 }
 
 func (s *VPNServer) ApplyCapabilities() {

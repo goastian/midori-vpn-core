@@ -20,6 +20,28 @@ func TestProbeTransportKeepsUnverifiableProtocolsUnknown(t *testing.T) {
 	}
 }
 
+func TestProbeOpenVPNRequiresLoopbackDCOHealth(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"dco":true}`))
+	}))
+	defer server.Close()
+	transport := models.TransportCapability{Protocol: "openvpn", Metadata: map[string]interface{}{"health_url": server.URL + "/healthz"}}
+	status, checked := probeTransport(context.Background(), &models.VPNServer{}, transport)
+	if !checked || status != "healthy" {
+		t.Fatalf("OpenVPN probe result = %q, %t", status, checked)
+	}
+
+	transport.Metadata["health_url"] = "http://example.test:9194/healthz"
+	if status, checked := probeTransport(context.Background(), &models.VPNServer{}, transport); checked || status != "unknown" {
+		t.Fatalf("external health URL result = %q, %t", status, checked)
+	}
+}
+
 func TestProbeWSSRequiresAuthenticationResponse(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/tunnel/ws" {

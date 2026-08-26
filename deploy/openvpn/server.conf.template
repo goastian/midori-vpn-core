@@ -1,0 +1,33 @@
+mode server
+tls-server
+dev __INTERFACE__
+dev-type tun
+topology subnet
+proto udp
+port __PORT__
+server __NETWORK__ __NETMASK__
+
+ca /run/secrets/client-ca.pem
+cert /run/secrets/gateway.crt
+key /run/secrets/gateway.key
+crl-verify /run/openvpn/client.crl
+verify-client-cert require
+remote-cert-tls client
+
+tls-version-min 1.3
+data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305
+auth SHA256
+allow-compression no
+tls-groups X25519:prime256v1
+
+push "redirect-gateway def1 bypass-dhcp"
+push "dhcp-option DNS __DNS__"
+keepalive 10 60
+explicit-exit-notify 1
+
+management /run/openvpn/management.sock unix
+management-log-cache 50
+status /run/openvpn/status.log 10
+status-version 2
+log-append /run/openvpn/openvpn.log
+verb 3

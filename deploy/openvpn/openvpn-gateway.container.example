@@ -1,0 +1,27 @@
+[Unit]
+Description=MidoriVPN OpenVPN 2.7 DCO gateway
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=localhost/midorivpn-openvpn:2.0.0
+ContainerName=midori-openvpn
+Pod=midori-control.pod
+AddCapability=NET_ADMIN
+AddCapability=NET_RAW
+AddDevice=/dev/net/tun
+EnvironmentFile=%h/.config/containers/systemd/midori-control/openvpn.env
+Volume=%h/.config/midorivpn/pki/client-ca.pem:/run/secrets/client-ca.pem:ro,Z
+Volume=%h/.config/midorivpn/pki/gateway.crt:/run/secrets/gateway.crt:ro,Z
+Volume=%h/.config/midorivpn/pki/gateway.key:/run/secrets/gateway.key:ro,Z
+HealthCmd=curl --fail --silent http://127.0.0.1:9194/healthz
+HealthInterval=10s
+HealthTimeout=4s
+HealthRetries=6
+
+[Service]
+Restart=on-failure
+TimeoutStartSec=90
+
+[Install]
+WantedBy=default.target

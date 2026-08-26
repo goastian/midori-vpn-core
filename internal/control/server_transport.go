@@ -3,6 +3,7 @@ package control
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 
 	"github.com/goastian/midori-vpn-core/internal/models"
@@ -59,12 +60,86 @@ func validateTransportRequests(requests []TransportRequest, production bool, all
 		} else if len(encoded) > 8192 {
 			return nil, fmt.Errorf("transport %q: metadata must not exceed 8 KiB", protocol)
 		}
+		if protocol == "openvpn" {
+			if err := validateOpenVPNMetadata(request.Metadata); err != nil {
+				return nil, fmt.Errorf("transport %q: %w", protocol, err)
+			}
+		}
 		transports = append(transports, models.TransportCapability{
 			Protocol: protocol, Host: host, Port: port, Enabled: *request.Enabled,
 			Priority: request.Priority, HealthStatus: "unknown", Metadata: request.Metadata,
 		})
 	}
 	return transports, nil
+}
+
+func validateOpenVPNMetadata(metadata map[string]interface{}) error {
+	serverName, ok := metadata["server_name"].(string)
+	serverName = strings.TrimSpace(serverName)
+	if !ok || !validDNSCertificateName(serverName) {
+		return fmt.Errorf("metadata.server_name must be a DNS certificate name")
+	}
+	if _, ok := validOpenVPNHealthURL(metadataStringValue(metadata, "health_url")); !ok {
+		return fmt.Errorf("metadata.health_url must be a loopback /healthz URL")
+	}
+	if certified, exists := metadata["certified"]; exists {
+		if _, ok := certified.(bool); !ok {
+			return fmt.Errorf("metadata.certified must be a boolean")
+		}
+	}
+	dnsValues := metadataStringSlice(metadata["dns"])
+	if len(dnsValues) == 0 {
+		return fmt.Errorf("metadata.dns must contain at least one IP address")
+	}
+	for _, value := range dnsValues {
+		if net.ParseIP(value) == nil {
+			return fmt.Errorf("metadata.dns contains an invalid IP address")
+		}
+	}
+	return nil
+}
+
+func validDNSCertificateName(value string) bool {
+	if value == "" || len(value) > 253 || net.ParseIP(value) != nil {
+		return false
+	}
+	labels := strings.Split(value, ".")
+	if len(labels) < 2 {
+		return false
+	}
+	for _, label := range labels {
+		if len(label) < 1 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, character := range label {
+			if character != '-' && (character < '0' || character > '9') && (character < 'A' || character > 'Z') && (character < 'a' || character > 'z') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func metadataStringValue(metadata map[string]interface{}, key string) string {
+	value, _ := metadata[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func metadataStringSlice(value interface{}) []string {
+	result := []string{}
+	switch typed := value.(type) {
+	case []string:
+		result = append(result, typed...)
+	case []interface{}:
+		for _, item := range typed {
+			if text, ok := item.(string); ok {
+				result = append(result, strings.TrimSpace(text))
+			}
+		}
+	case string:
+		result = strings.FieldsFunc(typed, func(r rune) bool { return r == ',' || r == ' ' })
+	}
+	return result
 }
 
 func enabledServerTransport(server *models.VPNServer, protocol string) (models.TransportCapability, bool) {
