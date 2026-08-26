@@ -4,6 +4,7 @@
 
 ### Security
 
+- Added a shared OpenVPN/IKEv2 client PKI based on device-generated ECDSA CSRs. Core signs and revokes public certificates, publishes a CRL, enforces per-account certificate limits, and never receives or stores device private keys.
 - HTTPS-only CONNECT proxy contract with TLS required either directly or at the trusted host Nginx endpoint.
 - Proxy authentication now accepts only short-lived `vpn-proxy` scoped credentials; general access tokens are rejected.
 - WSS and MASQUE relays require short-lived `vpn-tunnel` credentials bound to the user, active peer and selected server.
@@ -13,7 +14,7 @@
 ### Operations
 
 - Added rootless Podman development images for Go, Control and Desktop workflows.
-- Added immutable migrations through version 9, including billing/quotas, transport health, unique active peer addresses, Ed25519 identities and removal of retired transport columns.
+- Added immutable migrations through version 10, including billing/quotas, transport health, unique active peer addresses, Ed25519 identities, removal of retired transport columns and revocable per-device client certificates.
 - Deployment scripts reject default credentials and publish proxy upstream only on loopback.
 - Added reversible Quadlet configuration for MASQUE, Redis 8.10.1 migration with volume export, PostgreSQL 18 migration-chain tests, Certbot reload hook and Redis persistence sysctl.
 - Updated CI to Go 1.27, Node 24/npm 12 and current stable action majors; Linux releases are signed RPMs built entirely with rootless Podman.

@@ -96,6 +96,24 @@ type Peer struct {
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 }
 
+// DeviceCertificate is a client-authentication certificate issued from a CSR.
+// Only the public certificate is persisted; the device private key never
+// leaves the client that generated it.
+type DeviceCertificate struct {
+	ID               uuid.UUID  `json:"id"`
+	UserID           uuid.UUID  `json:"user_id"`
+	ServerID         uuid.UUID  `json:"server_id"`
+	DeviceName       string     `json:"device_name"`
+	SerialNumber     string     `json:"serial_number"`
+	CertificatePEM   string     `json:"certificate_pem,omitempty"`
+	PublicKeySHA256  string     `json:"public_key_sha256"`
+	NotBefore        time.Time  `json:"not_before"`
+	NotAfter         time.Time  `json:"not_after"`
+	RevokedAt        *time.Time `json:"revoked_at,omitempty"`
+	RevocationReason string     `json:"revocation_reason,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+}
+
 type AuditLog struct {
 	ID        uuid.UUID              `json:"id"`
 	UserID    *uuid.UUID             `json:"user_id,omitempty"`

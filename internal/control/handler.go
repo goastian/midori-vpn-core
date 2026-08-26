@@ -24,6 +24,7 @@ import (
 
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/billing"
+	"github.com/goastian/midori-vpn-core/internal/clientpki"
 	"github.com/goastian/midori-vpn-core/internal/config"
 	vpnCrypto "github.com/goastian/midori-vpn-core/internal/crypto"
 	"github.com/goastian/midori-vpn-core/internal/models"
@@ -113,10 +114,16 @@ type Handler struct {
 	credentialSigningSecret string
 	connectLimiter          *userRateLimiter // per-user rate limit for the /connect endpoint
 	nodeVerifier            *nodeauth.Verifier
+	clientCertificateRepo   *repo.DeviceCertificateRepo
+	clientCertificateCA     *clientpki.Authority
 }
 
 func (h *Handler) SetNodeVerifier(verifier *nodeauth.Verifier) {
 	h.nodeVerifier = verifier
+}
+
+func (h *Handler) SetClientCertificateAuthority(authority *clientpki.Authority) {
+	h.clientCertificateCA = authority
 }
 
 func NewHandler(pool *pgxpool.Pool, cfg *config.Config) *Handler {
@@ -131,6 +138,7 @@ func NewHandlerWithMesh(pool *pgxpool.Pool, cfg *config.Config, wgMgr *wg.Manage
 		peerRepo:                repo.NewPeerRepo(pool),
 		meshRepo:                repo.NewMeshRepo(pool),
 		auditRepo:               repo.NewAuditRepo(pool),
+		clientCertificateRepo:   repo.NewDeviceCertificateRepo(pool),
 		billingClient:           billing.NewClient(cfg, billingRedis),
 		wgMgr:                   wgMgr,
 		hub:                     hub,
@@ -1327,6 +1335,10 @@ func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if hasEnabledCertificateTransport(transports) && h.clientCertificateCA == nil {
+		respond.JsonErrorCode(w, "client PKI must be configured before enabling OpenVPN or IKEv2", clientPKIUnavailableCode, http.StatusConflict)
+		return
+	}
 
 	if err := h.serverRepo.Create(r.Context(), server); err != nil {
 		slog.Error("admin create server error", "error", err)
@@ -1440,6 +1452,10 @@ func (h *Handler) AdminUpdateServer(w http.ResponseWriter, r *http.Request) {
 		transports, err = validateTransportRequests(*req.Transports, h.appEnv == "production", h.coreAllowLoopback)
 		if err != nil {
 			respond.JsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if hasEnabledCertificateTransport(transports) && h.clientCertificateCA == nil {
+			respond.JsonErrorCode(w, "client PKI must be configured before enabling OpenVPN or IKEv2", clientPKIUnavailableCode, http.StatusConflict)
 			return
 		}
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/goastian/midori-vpn-core/internal/auth"
+	"github.com/goastian/midori-vpn-core/internal/clientpki"
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/control"
 	"github.com/goastian/midori-vpn-core/internal/core"
@@ -23,10 +24,10 @@ import (
 )
 
 func NewRouter(cfg *config.Config, mgr *wg.Manager, verifier *nodeauth.Verifier) *chi.Mux {
-	return NewRouterWithDB(cfg, mgr, nil, nil, verifier)
+	return NewRouterWithDB(cfg, mgr, nil, nil, verifier, nil)
 }
 
-func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *auth.JWKSProvider, verifier *nodeauth.Verifier) *chi.Mux {
+func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *auth.JWKSProvider, verifier *nodeauth.Verifier, clientCertificateAuthority *clientpki.Authority) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logger)
@@ -97,6 +98,11 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 		go wsHub.Run()
 		ch := control.NewHandlerWithMesh(pool, cfg, mgr, wsHub)
 		ch.SetNodeVerifier(verifier)
+		ch.SetClientCertificateAuthority(clientCertificateAuthority)
+		if clientCertificateAuthority != nil {
+			r.Get("/pki/client-ca.pem", ch.ClientCACertificate)
+			r.Get("/pki/client.crl", ch.ClientCertificateCRL)
+		}
 
 		// User-facing routes
 		r.Route("/api/v1/control", func(r chi.Router) {
@@ -110,6 +116,9 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 			r.Get("/servers", ch.ListServers)
 			r.Get("/servers/ping", ch.PingServers)
 			r.Get("/servers/{id}/ikev2.mobileconfig", ch.ExportIKEv2MobileConfig)
+			r.Post("/certificates", ch.EnrollDeviceCertificate)
+			r.Get("/certificates", ch.ListDeviceCertificates)
+			r.Delete("/certificates/{id}", ch.RevokeDeviceCertificate)
 
 			// Connections
 			r.Post("/connections", ch.Connect)

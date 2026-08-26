@@ -15,6 +15,14 @@ Version 2.0.0 is an active rework. Linux x86_64 RPM is the only production clien
 | OpenVPN DCO | `1194/udp` | Not advertised until a real gateway/client is deployed |
 | IKEv2 | `500/udp`, `4500/udp` | Not advertised until a real gateway/profile flow is deployed |
 
+OpenVPN and IKEv2 share a client-certificate authority. Devices generate an
+ECDSA P-256 private key locally and submit only a signed CSR to Core. Core
+stores the resulting public certificate and revocation state; device private
+keys are never accepted by the API or stored in PostgreSQL. Operators must
+configure `VPN_CLIENT_CA_CERT` and `VPN_CLIENT_CA_KEY` before either transport
+can be enabled. The public CA and CRL are served from `/pki/client-ca.pem` and
+`/pki/client.crl`.
+
 Smart mode tries only healthy advertised transports and accepts a connection only after a WireGuard handshake. There are no simulated sessions or implicit transport ports.
 
 ## Workspace

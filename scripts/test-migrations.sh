@@ -36,6 +36,18 @@ remaining="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT count(*) FROM information_schema.columns WHERE table_name = 'vpn_servers' AND column_name IN ('proxy_port','proxy_scheme','wss_tunnel_enabled','wss_host','wss_port')")"
 [ "${remaining}" = "0" ] || { printf 'error: migration 9 left %s retired columns\n' "${remaining}" >&2; exit 1; }
 
+certificate_table="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT to_regclass('public.device_certificates') IS NOT NULL")"
+[ "${certificate_table}" = "t" ] || { printf 'error: migration 10 did not create device_certificates\n' >&2; exit 1; }
+
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000010_device_certificates.down.sql >/dev/null
+certificate_table="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT to_regclass('public.device_certificates') IS NOT NULL")"
+[ "${certificate_table}" = "f" ] || { printf 'error: migration 10 rollback left device_certificates\n' >&2; exit 1; }
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000010_device_certificates.up.sql >/dev/null
+
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000009_remove_legacy_transport_columns.down.sql >/dev/null
 restored="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
@@ -45,4 +57,4 @@ restored="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000009_remove_legacy_transport_columns.up.sql >/dev/null
 
-printf 'Migration chain 1-9 and migration 9 rollback verified on PostgreSQL 18.\n'
+printf 'Migration chain 1-10 and migrations 9-10 rollback verified on PostgreSQL 18.\n'

@@ -84,6 +84,13 @@ type Config struct {
 	// VPN client configuration
 	VpnDNS string // comma-separated DNS servers pushed to VPN clients
 
+	// Shared client PKI for OpenVPN and IKEv2. Devices submit CSRs; the CA
+	// private key signs certificates but never receives device private keys.
+	VPNClientCACert       string
+	VPNClientCAKey        string
+	VPNClientCertTTLHours int
+	VPNClientCRLURL       string
+
 	// HTTP / HTTPS CONNECT proxy
 	ProxyEnabled         bool   // enable the HTTP CONNECT forward proxy
 	ProxyPort            int    // TCP port for the forward proxy (default 8443)
@@ -178,6 +185,11 @@ func Load() *Config {
 
 		VpnDNS: requireEnv("VPN_DNS"),
 
+		VPNClientCACert:       env("VPN_CLIENT_CA_CERT"),
+		VPNClientCAKey:        env("VPN_CLIENT_CA_KEY"),
+		VPNClientCertTTLHours: envIntDefault("VPN_CLIENT_CERT_TTL_HOURS", 2160),
+		VPNClientCRLURL:       env("VPN_CLIENT_CRL_URL"),
+
 		ProxyEnabled:         requireEnvBool("PROXY_ENABLED"),
 		ProxyPort:            requireEnvInt("PROXY_PORT"),
 		ProxyMaxConnsPerUser: requireEnvInt("PROXY_MAX_CONNS_PER_USER"),
@@ -231,6 +243,20 @@ func Load() *Config {
 	}
 	if cfg.AppEnv == "production" && cfg.NodeAuthRedisURL == "" {
 		log.Fatal("FATAL: NODE_AUTH_REDIS_URL is required in production for shared replay prevention and immediate revocation")
+	}
+	if (cfg.VPNClientCACert == "") != (cfg.VPNClientCAKey == "") {
+		log.Fatal("FATAL: VPN_CLIENT_CA_CERT and VPN_CLIENT_CA_KEY must be configured together")
+	}
+	if cfg.VPNClientCACert != "" {
+		if cfg.VPNClientCertTTLHours < 24 || cfg.VPNClientCertTTLHours > 8760 {
+			log.Fatal("FATAL: VPN_CLIENT_CERT_TTL_HOURS must be between 24 and 8760")
+		}
+		if cfg.VPNClientCRLURL == "" {
+			cfg.VPNClientCRLURL = cfg.PublicBaseURL + "/pki/client.crl"
+		}
+		if u, err := url.ParseRequestURI(cfg.VPNClientCRLURL); err != nil || u.Scheme != "https" || u.Host == "" {
+			log.Fatal("FATAL: VPN_CLIENT_CRL_URL must be an absolute HTTPS URL")
+		}
 	}
 
 	// Validate WireGuard interface name against a safe character set to prevent
@@ -589,6 +615,18 @@ func requireEnv(key string) string {
 
 func requireEnvInt(key string) int {
 	v := requireEnv(key)
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		log.Fatalf("FATAL: %s must be an integer, got %q", key, v)
+	}
+	return n
+}
+
+func envIntDefault(key string, defaultValue int) int {
+	v := env(key)
+	if v == "" {
+		return defaultValue
+	}
 	n, err := strconv.Atoi(v)
 	if err != nil {
 		log.Fatalf("FATAL: %s must be an integer, got %q", key, v)

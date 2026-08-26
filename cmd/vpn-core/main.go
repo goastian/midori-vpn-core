@@ -12,6 +12,7 @@ import (
 
 	"github.com/goastian/midori-vpn-core/internal/api"
 	"github.com/goastian/midori-vpn-core/internal/auth"
+	"github.com/goastian/midori-vpn-core/internal/clientpki"
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/control"
 	"github.com/goastian/midori-vpn-core/internal/db"
@@ -26,6 +27,17 @@ import (
 func main() {
 	cfg := config.Load()
 	respond.SetAppEnv(cfg.AppEnv)
+	var clientCertificateAuthority *clientpki.Authority
+	if cfg.VPNClientCACert != "" {
+		var err error
+		clientCertificateAuthority, err = clientpki.LoadAuthority(
+			cfg.VPNClientCACert, cfg.VPNClientCAKey,
+			time.Duration(cfg.VPNClientCertTTLHours)*time.Hour, cfg.VPNClientCRLURL,
+		)
+		if err != nil {
+			log.Fatalf("failed to initialize client certificate authority: %v", err)
+		}
+	}
 	verifier, err := nodeauth.NewVerifier(cfg.NodeAuthorizedKeys, cfg.NodeRevokedIDs, cfg.NodeAuthRedisURL)
 	if err != nil {
 		log.Fatalf("failed to initialize node signature verifier: %v", err)
@@ -68,7 +80,7 @@ func main() {
 		}
 
 		slog.Info("Control API enabled", "auth", "PostgreSQL + Authentik")
-		router = api.NewRouterWithDB(cfg, manager, pool, jwks, verifier)
+		router = api.NewRouterWithDB(cfg, manager, pool, jwks, verifier, clientCertificateAuthority)
 
 		// Start HTTP CONNECT proxy if enabled
 		if cfg.ProxyEnabled {

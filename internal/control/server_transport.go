@@ -75,3 +75,21 @@ func enabledServerTransport(server *models.VPNServer, protocol string) (models.T
 	}
 	return models.TransportCapability{}, false
 }
+
+func configuredServerTransport(server *models.VPNServer, protocol string) (models.TransportCapability, bool) {
+	for _, transport := range server.Transports {
+		if transport.Protocol == protocol && transport.Enabled {
+			return transport, true
+		}
+	}
+	return models.TransportCapability{}, false
+}
+
+func hasEnabledCertificateTransport(transports []models.TransportCapability) bool {
+	for _, transport := range transports {
+		if transport.Enabled && (transport.Protocol == "openvpn" || transport.Protocol == "ikev2") {
+			return true
+		}
+	}
+	return false
+}
