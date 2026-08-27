@@ -38,5 +38,6 @@
 - Smart transport selection now measures real WireGuard handshakes and falls back by health and priority across WireGuard, WSS and MASQUE.
 - Health-gated capabilities prevent an enabled but unreachable gateway from being advertised. OpenVPN health now requires its loopback management socket, live interface and an explicit DCO initialization marker; arbitrary health URLs are rejected.
 - IKEv2 health requires a live VICI daemon and the expected connection. A root-owned worker atomically refreshes a fixed status file every five seconds; Core rejects stale, unsafe or malformed state from its read-only mount, and the capability remains hidden until separately certified.
+- Device-certificate enrollment validity metadata now uses the exact second precision signed into X.509, preventing native clients from rejecting a correctly issued certificate because JSON retained fractional seconds.
 - Added a non-overwriting PKI bootstrap for a P-256 device CA and DNS-bound server-auth gateway certificate. The gateway never mounts the CA signing key.
 - Removed inactive simulated drivers and implicit ports; OpenVPN and IKEv2 now use real native clients and cannot report a connection before completing their authenticated handshakes.

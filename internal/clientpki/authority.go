@@ -165,8 +165,12 @@ func (a *Authority) Issue(csrPEM string, certificateID uuid.UUID, now time.Time)
 	if err != nil {
 		return nil, err
 	}
-	notBefore := now.UTC().Add(-5 * time.Minute)
-	notAfter := now.UTC().Add(a.certificateTTL)
+	// ASN.1 UTCTime/GeneralizedTime in an X.509 certificate has second
+	// precision. Return the same precision in the API metadata so clients can
+	// compare the signed certificate with the enrollment response exactly.
+	certificateTime := now.UTC().Truncate(time.Second)
+	notBefore := certificateTime.Add(-5 * time.Minute)
+	notAfter := certificateTime.Add(a.certificateTTL)
 	if notAfter.After(a.certificate.NotAfter) {
 		notAfter = a.certificate.NotAfter
 	}

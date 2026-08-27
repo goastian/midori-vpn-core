@@ -31,7 +31,7 @@ func TestAuthorityIssuesVerifiedClientCertificateFromCSR(t *testing.T) {
 	}
 	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
 	id := uuid.New()
-	now := time.Now().UTC().Truncate(time.Second)
+	now := time.Now().UTC().Truncate(time.Second).Add(731 * time.Millisecond)
 	issued, err := authority.Issue(string(csrPEM), id, now)
 	if err != nil {
 		t.Fatalf("Issue() error = %v", err)
@@ -57,6 +57,10 @@ func TestAuthorityIssuesVerifiedClientCertificateFromCSR(t *testing.T) {
 	}
 	if issued.PublicKeySHA256 == "" || issued.SerialNumber == "" {
 		t.Fatalf("missing public metadata: %+v", issued)
+	}
+	if !issued.NotBefore.Equal(certificate.NotBefore) || !issued.NotAfter.Equal(certificate.NotAfter) {
+		t.Fatalf("validity metadata (%s, %s) differs from certificate (%s, %s)",
+			issued.NotBefore, issued.NotAfter, certificate.NotBefore, certificate.NotAfter)
 	}
 }
 
