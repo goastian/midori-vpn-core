@@ -29,17 +29,28 @@ The service validates the server-auth purpose and DNS SAN, downloads Core's DER 
 
 ## Private health path for rootless Core
 
-The health process serves HTTP only through `/run/midorivpn-health/ikev2.sock`. It calls VICI and requires the `midori-ikev2` connection to be loaded; a live PID or bound UDP socket is insufficient.
+The health process calls VICI every five seconds and requires the
+`midori-ikev2` connection to be loaded; a live PID or bound UDP socket is
+insufficient. After a successful query it atomically publishes
+`/run/midorivpn-health/ikev2.json`. Core rejects non-regular, writable, invalid
+or older-than-15-second status files. A failed VICI query removes the file.
 
-Bind-mount the host directory read-only into the Core container:
+Bind-mount the host directory read-only into the Core container. Create it on
+every boot with `systemd-tmpfiles` as root-owned mode 0755. On SELinux hosts,
+register `/run/midorivpn-health(/.*)?` as `container_file_t` with
+`semanage fcontext`, run `restorecon`, and mount it without a Podman relabel.
+This lets the capability-limited root gateway publish status while the
+rootless Core can only read it:
 
 ```ini
 Volume=/run/midorivpn-health:/run/midorivpn-health:ro
 ```
 
-The directory is root-owned and mode 0755. The query-only socket is mode 0666 so the remapped rootless Core UID can connect; the VICI socket and all private keys stay in the separate mode-0700 `/run/midorivpn-ikev2` directory.
+The directory is root-owned and mode 0755. The status file is mode 0644; the
+VICI socket and all private keys stay in the separate mode-0700
+`/run/midorivpn-ikev2` directory.
 
-Configure the transport with the fixed socket and keep it uncertified:
+Configure the transport with the fixed status file and keep it uncertified:
 
 ```json
 {
@@ -51,7 +62,7 @@ Configure the transport with the fixed socket and keep it uncertified:
   "metadata": {
     "server_name": "vpn.example.test",
     "dns": ["10.85.0.1"],
-    "health_socket": "/run/midorivpn-health/ikev2.sock",
+    "health_file": "/run/midorivpn-health/ikev2.json",
     "certified": false
   }
 }

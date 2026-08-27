@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/goastian/midori-vpn-core/internal/ikev2health"
 	"github.com/goastian/midori-vpn-core/internal/models"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -115,38 +116,16 @@ func probeTransport(ctx context.Context, server *models.VPNServer, transport mod
 	return "degraded", true
 }
 
-func probeIKEv2(ctx context.Context, transport models.TransportCapability) (bool, bool) {
-	healthSocket, ok := transport.Metadata["health_socket"].(string)
-	if !ok || healthSocket != "/run/midorivpn-health/ikev2.sock" {
+func probeIKEv2(_ context.Context, transport models.TransportCapability) (bool, bool) {
+	return probeIKEv2Status(transport, time.Now(), ikev2health.ReadFresh)
+}
+
+func probeIKEv2Status(transport models.TransportCapability, now time.Time, readFresh func(string, time.Time) error) (bool, bool) {
+	healthFile, ok := transport.Metadata["health_file"].(string)
+	if !ok || healthFile != ikev2health.StatusFile {
 		return false, false
 	}
-	transportClient := &http.Client{Transport: &http.Transport{
-		DialContext: func(dialCtx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{Timeout: 2 * time.Second}).DialContext(dialCtx, "unix", healthSocket)
-		},
-	}}
-	defer transportClient.CloseIdleConnections()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://midorivpn-ikev2/healthz", nil)
-	if err != nil {
-		return false, true
-	}
-	response, err := transportClient.Do(request)
-	if err != nil {
-		return false, true
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return false, true
-	}
-	var status struct {
-		OK    bool `json:"ok"`
-		IKEv2 bool `json:"ikev2"`
-	}
-	decoder := json.NewDecoder(io.LimitReader(response.Body, 4096))
-	if err := decoder.Decode(&status); err != nil {
-		return false, true
-	}
-	return status.OK && status.IKEv2, true
+	return readFresh(healthFile, now) == nil, true
 }
 
 func probeOpenVPN(ctx context.Context, transport models.TransportCapability) (bool, bool) {

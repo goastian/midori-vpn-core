@@ -25,5 +25,4 @@ charon {
 
 swanctl {
     socket = unix:///run/midorivpn-ikev2/charon.vici
-    load_creds = /run/midorivpn-ikev2/swanctl
 }

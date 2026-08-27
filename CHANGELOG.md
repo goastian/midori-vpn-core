@@ -20,8 +20,9 @@
 - Updated CI to Go 1.27, Node 24/npm 12 and current stable action majors; Linux releases are signed RPMs built entirely with rootless Podman.
 - Added a validated Quadlet helper that pins locally built images to `Pull=never`, avoiding an accidental registry pull during a controlled staging restart.
 - Added a rootless OpenVPN 2.7.5 gateway image with a pinned runtime base, device-CA CRL refresh, namespace-scoped forwarding/NAT and a Quadlet template that deliberately omits public port publication.
-- Added a strongSwan 6.0.7 IKEv2/EAP-TLS host gateway with verified CRL refresh, XFRM-backed traffic, private Unix-socket health and a systemd hardening profile. Rootless container deployment is explicitly rejected because its user namespace cannot create `NETLINK_XFRM`.
+- Added a strongSwan 6.0.7 IKEv2/EAP-TLS host gateway with verified CRL refresh, XFRM-backed traffic, fresh VICI-backed atomic health status and a systemd hardening profile. Rootless container deployment is explicitly rejected because its user namespace cannot create `NETLINK_XFRM`.
 - Normalize Core's DER client CRL to verified PEM in both OpenVPN and strongSwan gateways before atomic activation.
+- Route the public device CA and DER CRL through Nginx before the SPA fallback, and document the persistent SELinux label required for a rootless Core to read host gateway health.
 
 ### Mesh
 
@@ -36,6 +37,6 @@
 - Added authenticated UDP↔WSS and RFC 9298 HTTP/3 CONNECT-UDP MASQUE gateways with server binding, connection limits and race-tested end-to-end relay tests.
 - Smart transport selection now measures real WireGuard handshakes and falls back by health and priority across WireGuard, WSS and MASQUE.
 - Health-gated capabilities prevent an enabled but unreachable gateway from being advertised. OpenVPN health now requires its loopback management socket, live interface and an explicit DCO initialization marker; arbitrary health URLs are rejected.
-- IKEv2 health requires a live VICI daemon and the expected connection through a fixed Unix socket shared read-only with Core; the capability remains hidden until separately certified.
+- IKEv2 health requires a live VICI daemon and the expected connection. A root-owned worker atomically refreshes a fixed status file every five seconds; Core rejects stale, unsafe or malformed state from its read-only mount, and the capability remains hidden until separately certified.
 - Added a non-overwriting PKI bootstrap for a P-256 device CA and DNS-bound server-auth gateway certificate. The gateway never mounts the CA signing key.
 - Removed inactive simulated drivers and implicit ports; OpenVPN and IKEv2 now use real native clients and cannot report a connection before completing their authenticated handshakes.

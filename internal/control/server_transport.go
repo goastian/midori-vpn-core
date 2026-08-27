@@ -84,8 +84,8 @@ func validateIKEv2Metadata(metadata map[string]interface{}) error {
 	if !ok || !validDNSCertificateName(serverName) {
 		return fmt.Errorf("metadata.server_name must be a DNS certificate name")
 	}
-	if metadataStringValue(metadata, "health_socket") != "/run/midorivpn-health/ikev2.sock" {
-		return fmt.Errorf("metadata.health_socket must use the private IKEv2 health socket")
+	if metadataStringValue(metadata, "health_file") != "/run/midorivpn-health/ikev2.json" {
+		return fmt.Errorf("metadata.health_file must use the private IKEv2 health status file")
 	}
 	if certified, exists := metadata["certified"]; exists {
 		if _, ok := certified.(bool); !ok {
