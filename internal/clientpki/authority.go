@@ -264,7 +264,7 @@ func (a *Authority) CreateCRL(entries []RevokedCertificate, now time.Time) ([]by
 	if err != nil {
 		return nil, fmt.Errorf("sign client certificate revocation list: %w", err)
 	}
-	return pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: der}), nil
+	return der, nil
 }
 
 func revocationReasonCode(reason string) int {

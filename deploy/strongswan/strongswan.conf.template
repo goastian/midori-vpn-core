@@ -1,0 +1,29 @@
+charon {
+    load_modular = no
+    load = random nonce x509 revocation constraints pubkey pem openssl pkcs1 pkcs8 gmp kdf gcm drbg kernel-netlink socket-default vici eap-identity eap-tls
+    port = __IKE_PORT__
+    port_nat_t = __NAT_T_PORT__
+    install_routes = yes
+    install_virtual_ip = yes
+    plugins {
+        kernel-netlink {
+            install_routes_xfrmi = no
+        }
+        vici {
+            socket = unix:///run/midorivpn-ikev2/charon.vici
+        }
+    }
+    filelog {
+        stderr {
+            default = 2
+            flush_line = yes
+            ike_name = yes
+            time_format = %Y-%m-%dT%H:%M:%S%z
+        }
+    }
+}
+
+swanctl {
+    socket = unix:///run/midorivpn-ikev2/charon.vici
+    load_creds = /run/midorivpn-ikev2/swanctl
+}

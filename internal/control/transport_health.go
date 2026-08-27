@@ -100,6 +100,12 @@ func probeTransport(ctx context.Context, server *models.VPNServer, transport mod
 		if !configured {
 			return "unknown", false
 		}
+	case "ikev2":
+		var configured bool
+		healthy, configured = probeIKEv2(probeCtx, transport)
+		if !configured {
+			return "unknown", false
+		}
 	default:
 		return "unknown", false
 	}
@@ -107,6 +113,40 @@ func probeTransport(ctx context.Context, server *models.VPNServer, transport mod
 		return "healthy", true
 	}
 	return "degraded", true
+}
+
+func probeIKEv2(ctx context.Context, transport models.TransportCapability) (bool, bool) {
+	healthSocket, ok := transport.Metadata["health_socket"].(string)
+	if !ok || healthSocket != "/run/midorivpn-health/ikev2.sock" {
+		return false, false
+	}
+	transportClient := &http.Client{Transport: &http.Transport{
+		DialContext: func(dialCtx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{Timeout: 2 * time.Second}).DialContext(dialCtx, "unix", healthSocket)
+		},
+	}}
+	defer transportClient.CloseIdleConnections()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://midorivpn-ikev2/healthz", nil)
+	if err != nil {
+		return false, true
+	}
+	response, err := transportClient.Do(request)
+	if err != nil {
+		return false, true
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return false, true
+	}
+	var status struct {
+		OK    bool `json:"ok"`
+		IKEv2 bool `json:"ikev2"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 4096))
+	if err := decoder.Decode(&status); err != nil {
+		return false, true
+	}
+	return status.OK && status.IKEv2, true
 }
 
 func probeOpenVPN(ctx context.Context, transport models.TransportCapability) (bool, bool) {

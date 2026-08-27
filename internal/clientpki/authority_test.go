@@ -79,14 +79,13 @@ func TestAuthorityRejectsIncompatibleCSRKey(t *testing.T) {
 func TestAuthorityCreatesSignedCRL(t *testing.T) {
 	authority, caCertificate := testAuthority(t)
 	now := time.Now().UTC().Truncate(time.Second)
-	crlPEM, err := authority.CreateCRL([]RevokedCertificate{{
+	crlDER, err := authority.CreateCRL([]RevokedCertificate{{
 		SerialNumber: "2a", RevokedAt: now.Add(-time.Hour), Reason: "key_compromise",
 	}}, now)
 	if err != nil {
 		t.Fatalf("CreateCRL() error = %v", err)
 	}
-	block, _ := pem.Decode(crlPEM)
-	crl, err := x509.ParseRevocationList(block.Bytes)
+	crl, err := x509.ParseRevocationList(crlDER)
 	if err != nil {
 		t.Fatal(err)
 	}

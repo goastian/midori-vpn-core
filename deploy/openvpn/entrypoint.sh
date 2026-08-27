@@ -72,10 +72,12 @@ openssl x509 -in /run/secrets/gateway.crt -noout -checkend 86400 >/dev/null || d
 openssl verify -purpose sslserver -CAfile /run/secrets/client-ca.pem /run/secrets/gateway.crt >/dev/null || die "gateway certificate verification failed"
 
 install -d -m 0700 /run/openvpn
-curl --fail --silent --show-error --proto '=https' --tlsv1.2 "${VPN_CLIENT_CRL_URL}" -o /run/openvpn/client.crl.next
+curl --fail --silent --show-error --proto '=https' --tlsv1.2 "${VPN_CLIENT_CRL_URL}" -o /run/openvpn/client.crl.der
+openssl crl -inform DER -in /run/openvpn/client.crl.der -out /run/openvpn/client.crl.next -outform PEM || die "initial client CRL encoding is invalid"
 openssl crl -in /run/openvpn/client.crl.next -CAfile /run/secrets/client-ca.pem -noout -verify >/dev/null || die "initial client CRL verification failed"
 chmod 0644 /run/openvpn/client.crl.next
 mv /run/openvpn/client.crl.next /run/openvpn/client.crl
+rm -f /run/openvpn/client.crl.der
 
 sed \
   -e "s|__PORT__|$(sed_escape "${OPENVPN_PORT}")|g" \
@@ -94,14 +96,16 @@ nft add rule ip midori_openvpn postrouting ip saddr "${OPENVPN_NETWORK_CIDR}" ma
 
 refresh_crl() {
   while sleep 60; do
-    if curl --fail --silent --show-error --proto '=https' --tlsv1.2 "${VPN_CLIENT_CRL_URL}" -o /run/openvpn/client.crl.next && \
+    if curl --fail --silent --show-error --proto '=https' --tlsv1.2 "${VPN_CLIENT_CRL_URL}" -o /run/openvpn/client.crl.der && \
+      openssl crl -inform DER -in /run/openvpn/client.crl.der -out /run/openvpn/client.crl.next -outform PEM && \
       openssl crl -in /run/openvpn/client.crl.next -CAfile /run/secrets/client-ca.pem -noout -verify >/dev/null; then
       chmod 0644 /run/openvpn/client.crl.next
       mv /run/openvpn/client.crl.next /run/openvpn/client.crl
     else
-      rm -f /run/openvpn/client.crl.next
+      rm -f /run/openvpn/client.crl.der /run/openvpn/client.crl.next
       printf 'warning: rejected client CRL refresh\n' >&2
     fi
+    rm -f /run/openvpn/client.crl.der
   done
 }
 

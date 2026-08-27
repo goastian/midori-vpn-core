@@ -86,3 +86,30 @@ func TestValidateOpenVPNMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateIKEv2Metadata(t *testing.T) {
+	valid := map[string]interface{}{
+		"server_name":   "vpn.example.test",
+		"health_socket": "/run/midorivpn-health/ikev2.sock",
+		"dns":           []interface{}{"10.85.0.1"},
+		"certified":     false,
+	}
+	if err := validateIKEv2Metadata(valid); err != nil {
+		t.Fatalf("valid IKEv2 metadata rejected: %v", err)
+	}
+	for key, value := range map[string]interface{}{
+		"server_name":   "127.0.0.1",
+		"health_socket": "/tmp/attacker.sock",
+		"dns":           []interface{}{"not-an-ip"},
+		"certified":     "yes",
+	} {
+		metadata := map[string]interface{}{
+			"server_name": "vpn.example.test", "health_socket": "/run/midorivpn-health/ikev2.sock",
+			"dns": []interface{}{"10.85.0.1"}, "certified": false,
+		}
+		metadata[key] = value
+		if err := validateIKEv2Metadata(metadata); err == nil {
+			t.Fatalf("invalid IKEv2 metadata %s=%v accepted", key, value)
+		}
+	}
+}

@@ -1,0 +1,43 @@
+connections {
+    midori-ikev2 {
+        version = 2
+        local_addrs = 0.0.0.0
+        proposals = aes256gcm16-prfsha384-ecp384,aes128gcm16-prfsha256-ecp256
+        pools = midori-v4
+        fragmentation = yes
+        mobike = yes
+        dpd_delay = 30s
+        reauth_time = 0s
+        local {
+            auth = pubkey
+            certs = gateway.crt
+            id = __SERVER_NAME__
+        }
+        remote {
+            auth = eap-tls
+            eap_id = %any
+        }
+        children {
+            midori-full {
+                local_ts = 0.0.0.0/0
+                esp_proposals = aes256gcm16-ecp384,aes128gcm16-ecp256
+                dpd_action = clear
+                close_action = none
+                start_action = none
+            }
+        }
+    }
+}
+
+pools {
+    midori-v4 {
+        addrs = __NETWORK_CIDR__
+        dns = __DNS__
+    }
+}
+
+secrets {
+    private-gateway {
+        file = gateway.key
+    }
+}

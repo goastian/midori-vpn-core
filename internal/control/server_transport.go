@@ -65,12 +65,43 @@ func validateTransportRequests(requests []TransportRequest, production bool, all
 				return nil, fmt.Errorf("transport %q: %w", protocol, err)
 			}
 		}
+		if protocol == "ikev2" {
+			if err := validateIKEv2Metadata(request.Metadata); err != nil {
+				return nil, fmt.Errorf("transport %q: %w", protocol, err)
+			}
+		}
 		transports = append(transports, models.TransportCapability{
 			Protocol: protocol, Host: host, Port: port, Enabled: *request.Enabled,
 			Priority: request.Priority, HealthStatus: "unknown", Metadata: request.Metadata,
 		})
 	}
 	return transports, nil
+}
+
+func validateIKEv2Metadata(metadata map[string]interface{}) error {
+	serverName, ok := metadata["server_name"].(string)
+	serverName = strings.TrimSpace(serverName)
+	if !ok || !validDNSCertificateName(serverName) {
+		return fmt.Errorf("metadata.server_name must be a DNS certificate name")
+	}
+	if metadataStringValue(metadata, "health_socket") != "/run/midorivpn-health/ikev2.sock" {
+		return fmt.Errorf("metadata.health_socket must use the private IKEv2 health socket")
+	}
+	if certified, exists := metadata["certified"]; exists {
+		if _, ok := certified.(bool); !ok {
+			return fmt.Errorf("metadata.certified must be a boolean")
+		}
+	}
+	dnsValues := metadataStringSlice(metadata["dns"])
+	if len(dnsValues) == 0 {
+		return fmt.Errorf("metadata.dns must contain at least one IP address")
+	}
+	for _, value := range dnsValues {
+		if net.ParseIP(value) == nil {
+			return fmt.Errorf("metadata.dns contains an invalid IP address")
+		}
+	}
+	return nil
 }
 
 func validateOpenVPNMetadata(metadata map[string]interface{}) error {
