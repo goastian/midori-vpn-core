@@ -17,23 +17,43 @@ type TrustedExtensionRepo struct {
 	pool *pgxpool.Pool
 }
 
+type ExtensionOriginStatus uint8
+
+const (
+	ExtensionOriginUnknown ExtensionOriginStatus = iota
+	ExtensionOriginTrusted
+	ExtensionOriginRevoked
+)
+
 func NewTrustedExtensionRepo(pool *pgxpool.Pool) *TrustedExtensionRepo {
 	return &TrustedExtensionRepo{pool: pool}
 }
 
 // IsTrusted returns true when the origin exists and has not been revoked.
 func (r *TrustedExtensionRepo) IsTrusted(ctx context.Context, origin string) (bool, error) {
+	status, err := r.Status(ctx, origin)
+	return status == ExtensionOriginTrusted, err
+}
+
+// Status distinguishes an origin that has never completed OAuth from an
+// explicitly revoked origin. Callers must not treat both states as the same:
+// unknown origins may bootstrap through the PKCE callback, revoked origins may
+// not.
+func (r *TrustedExtensionRepo) Status(ctx context.Context, origin string) (ExtensionOriginStatus, error) {
 	var revoked bool
 	err := r.pool.QueryRow(ctx,
 		`SELECT revoked FROM trusted_extension_origins WHERE origin = $1`,
 		origin).Scan(&revoked)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
+			return ExtensionOriginUnknown, nil
 		}
-		return false, err
+		return ExtensionOriginUnknown, err
 	}
-	return !revoked, nil
+	if revoked {
+		return ExtensionOriginRevoked, nil
+	}
+	return ExtensionOriginTrusted, nil
 }
 
 // Register inserts the origin if it doesn't exist, or bumps last_seen_at and
@@ -51,15 +71,16 @@ func (r *TrustedExtensionRepo) Register(ctx context.Context, origin string, _ *u
 
 // List returns every registered origin (including revoked ones) for admin UIs.
 type TrustedExtensionOrigin struct {
-	Origin    string
-	Revoked   bool
-	CreatedAt string
-	UpdatedAt string
+	ID        uuid.UUID `json:"id"`
+	Origin    string    `json:"origin"`
+	Revoked   bool      `json:"revoked"`
+	CreatedAt string    `json:"created_at"`
+	UpdatedAt string    `json:"updated_at"`
 }
 
 func (r *TrustedExtensionRepo) List(ctx context.Context) ([]TrustedExtensionOrigin, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT origin, revoked, created_at::text, updated_at::text
+		SELECT id, origin, revoked, created_at::text, updated_at::text
 		FROM trusted_extension_origins
 		ORDER BY updated_at DESC`)
 	if err != nil {
@@ -69,7 +90,7 @@ func (r *TrustedExtensionRepo) List(ctx context.Context) ([]TrustedExtensionOrig
 	var out []TrustedExtensionOrigin
 	for rows.Next() {
 		var o TrustedExtensionOrigin
-		if err := rows.Scan(&o.Origin, &o.Revoked, &o.CreatedAt, &o.UpdatedAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.Origin, &o.Revoked, &o.CreatedAt, &o.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, o)
@@ -77,10 +98,11 @@ func (r *TrustedExtensionRepo) List(ctx context.Context) ([]TrustedExtensionOrig
 	return out, rows.Err()
 }
 
-// SetRevoked toggles the revoked flag for an origin. Used by admin tooling.
-func (r *TrustedExtensionRepo) SetRevoked(ctx context.Context, origin string, revoked bool) error {
-	_, err := r.pool.Exec(ctx,
-		`UPDATE trusted_extension_origins SET revoked = $2 WHERE origin = $1`,
-		origin, revoked)
-	return err
+// SetRevokedByID toggles the revoked flag for an origin. Used by admin tooling.
+func (r *TrustedExtensionRepo) SetRevokedByID(ctx context.Context, id uuid.UUID, revoked bool) (string, error) {
+	var origin string
+	err := r.pool.QueryRow(ctx,
+		`UPDATE trusted_extension_origins SET revoked = $2, updated_at = NOW() WHERE id = $1 RETURNING origin`,
+		id, revoked).Scan(&origin)
+	return origin, err
 }

@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,7 +38,22 @@ type Server struct {
 	mu       sync.Mutex
 	active   map[string]int
 	maxConns int
+	resolver ipResolver
+	dialer   contextDialer
 }
+
+type ipResolver interface {
+	LookupIP(context.Context, string, string) ([]net.IP, error)
+}
+
+type contextDialer interface {
+	DialContext(context.Context, string, string) (net.Conn, error)
+}
+
+var (
+	errInvalidTarget   = errors.New("invalid proxy target")
+	errForbiddenTarget = errors.New("forbidden proxy target")
+)
 
 // New creates a new proxy server.
 func New(cfg *config.Config, jwks *auth.JWKSProvider) *Server {
@@ -46,6 +63,8 @@ func New(cfg *config.Config, jwks *auth.JWKSProvider) *Server {
 		addr:     fmt.Sprintf(":%d", cfg.ProxyPort),
 		active:   make(map[string]int),
 		maxConns: cfg.ProxyMaxConnsPerUser,
+		resolver: net.DefaultResolver,
+		dialer:   &net.Dialer{Timeout: 10 * time.Second},
 	}
 }
 
@@ -97,44 +116,45 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Authenticate via Proxy-Authorization: Bearer <proxy token> or Basic.
 	sub, err := s.authenticate(r)
 	if err != nil {
-		slog.Info("proxy auth failed", "remote", r.RemoteAddr, "target", r.Host, "error", err)
+		slog.Info("proxy authentication rejected")
 		w.Header().Set("Proxy-Authenticate", `Basic realm="midorivpn"`)
 		http.Error(w, "proxy authentication required", http.StatusProxyAuthRequired)
 		return
 	}
 
-	slog.Info("proxy CONNECT authenticated", "user", sub, "target", r.Host, "remote", r.RemoteAddr)
-
 	// Per-user concurrency limit
 	if !s.acquireSlot(sub) {
-		slog.Warn("proxy concurrency limit hit", "user", sub)
+		slog.Warn("proxy concurrency limit hit")
 		http.Error(w, "too many concurrent connections", http.StatusTooManyRequests)
 		return
 	}
 	defer s.releaseSlot(sub)
 
 	// Validate target: must be host:port
-	host, port, err := net.SplitHostPort(r.Host)
+	_, port, err := net.SplitHostPort(r.Host)
 	if err != nil {
 		http.Error(w, "invalid target address", http.StatusBadRequest)
 		return
 	}
 
-	// Block requests to private/reserved IP ranges (SSRF protection)
-	if isPrivateTarget(host) {
-		slog.Warn("proxy SSRF attempt blocked", "user", sub, "target", r.Host)
-		http.Error(w, "forbidden target", http.StatusForbidden)
+	if parsedPort, parseErr := strconv.Atoi(port); parseErr != nil || parsedPort < 1 || parsedPort > 65535 {
+		http.Error(w, "invalid target address", http.StatusBadRequest)
 		return
 	}
-
-	// Block requests to privileged ports (< 1) — port is already validated by SplitHostPort
-	_ = port
 
 	// Dial the target (or chain through exit node if configured)
 	targetConn, err := s.dialTarget(r.Context(), sub, r.Host)
 	if err != nil {
-		slog.Warn("proxy dial failed", "user", sub, "target", r.Host, "error", err)
-		http.Error(w, "failed to connect to target", http.StatusBadGateway)
+		switch {
+		case errors.Is(err, errInvalidTarget):
+			http.Error(w, "invalid target address", http.StatusBadRequest)
+		case errors.Is(err, errForbiddenTarget):
+			slog.Warn("proxy target rejected by SSRF policy")
+			http.Error(w, "forbidden target", http.StatusForbidden)
+		default:
+			slog.Warn("proxy target unavailable")
+			http.Error(w, "failed to connect to target", http.StatusBadGateway)
+		}
 		return
 	}
 	defer targetConn.Close()
@@ -145,7 +165,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	deadline := time.Now().Add(maxTunnelDuration)
 	targetConn.SetDeadline(deadline)
 
-	slog.Info("proxy tunnel established", "user", sub, "target", r.Host)
+	slog.Info("proxy tunnel established")
 
 	// Hijack the client connection
 	hijacker, ok := w.(http.Hijacker)
@@ -197,8 +217,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	wg.Wait()
 
 	slog.Info("proxy tunnel closed",
-		"user", sub,
-		"target", r.Host,
 		"duration_s", int(time.Since(tunnelStart).Seconds()),
 		"bytes_up", bytesUp,
 		"bytes_down", bytesDown,
@@ -208,17 +226,32 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // dialTarget opens a TCP connection to target, optionally chaining through
 // the user's selected exit-node proxy (CONNECT-over-CONNECT).
 func (s *Server) dialTarget(ctx context.Context, sub string, target string) (net.Conn, error) {
+	validatedTargets, err := s.resolvePublicTargets(ctx, target)
+	if err != nil {
+		return nil, err
+	}
 	if s.pool != nil {
 		userUUID, err := uuid.Parse(sub)
 		if err == nil {
 			exitRepo := repo.NewExitNodeRepo(s.pool)
 			sel, err := exitRepo.GetUserExitNode(ctx, userUUID)
 			if err == nil && sel != nil && sel.MeshIP != "" && sel.ProxyPort > 0 && sel.ProxyScheme == "http-connect" {
-				return dialViaProxy(sel.MeshIP, sel.ProxyPort, target)
+				for _, validatedTarget := range validatedTargets {
+					if conn, dialErr := dialViaProxy(sel.MeshIP, sel.ProxyPort, validatedTarget); dialErr == nil {
+						return conn, nil
+					}
+				}
+				return nil, fmt.Errorf("dial selected exit proxy target")
 			}
 		}
 	}
-	return net.DialTimeout("tcp", target, 10*time.Second)
+	for _, validatedTarget := range validatedTargets {
+		conn, dialErr := s.dialer.DialContext(ctx, "tcp", validatedTarget)
+		if dialErr == nil {
+			return conn, nil
+		}
+	}
+	return nil, fmt.Errorf("dial public target")
 }
 
 // dialViaProxy chains an HTTP CONNECT through an upstream proxy at host:port
@@ -250,7 +283,7 @@ func dialViaProxy(proxyHost string, proxyPort int, target string) (net.Conn, err
 		return nil, fmt.Errorf("exit proxy CONNECT failed: %s", resp.Status)
 	}
 
-	slog.Info("proxy chained via exit node", "exit_proxy", proxyAddr, "target", target)
+	slog.Info("proxy tunnel chained through selected exit node")
 	return conn, nil
 }
 
@@ -316,49 +349,63 @@ func (s *Server) releaseSlot(sub string) {
 	}
 }
 
-// isPrivateTarget returns true if the host resolves to a private/reserved IP or
-// is a known private hostname pattern.
-func isPrivateTarget(host string) bool {
-	// Block well-known private hostnames
-	lower := strings.ToLower(host)
-	if lower == "localhost" || strings.HasSuffix(lower, ".local") {
-		return true
-	}
-
-	// Resolve and check IPs
-	ips, err := net.LookupIP(host)
+func (s *Server) resolvePublicTargets(ctx context.Context, target string) ([]string, error) {
+	host, port, err := net.SplitHostPort(target)
 	if err != nil {
-		// If resolution fails, allow (the dial will fail anyway)
-		return false
+		return nil, fmt.Errorf("%w: address", errInvalidTarget)
 	}
-
+	if parsedPort, parseErr := strconv.Atoi(port); parseErr != nil || parsedPort < 1 || parsedPort > 65535 {
+		return nil, fmt.Errorf("%w: port", errInvalidTarget)
+	}
+	lower := strings.ToLower(strings.TrimSuffix(host, "."))
+	if lower == "localhost" || strings.HasSuffix(lower, ".local") {
+		return nil, errForbiddenTarget
+	}
+	var ips []net.IP
+	if literal := net.ParseIP(host); literal != nil {
+		ips = []net.IP{literal}
+	} else {
+		ips, err = s.resolver.LookupIP(ctx, "ip", host)
+		if err != nil || len(ips) == 0 {
+			return nil, fmt.Errorf("target resolution failed")
+		}
+	}
+	validated := make([]string, 0, len(ips))
 	for _, ip := range ips {
-		// Allow mesh subnet 10.200.0.0/16 — mesh peers must reach each other via proxy.
-		if isMeshIP(ip) {
-			continue
+		if isForbiddenProxyIP(ip) {
+			// Mixed public/private DNS is rejected as a whole. Filtering only the
+			// private answer would allow an attacker to change answer ordering.
+			return nil, errForbiddenTarget
 		}
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
-			ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
-			return true
-		}
-		// Block IPv4-mapped IPv6 loopback
-		if ip4 := ip.To4(); ip4 != nil {
-			if ip4[0] == 127 {
-				return true
-			}
-		}
+		validated = append(validated, net.JoinHostPort(ip.String(), port))
 	}
-
-	return false
+	return validated, nil
 }
 
-// meshSubnet is the overlay network range allocated to mesh networks.
-var meshSubnet = func() *net.IPNet {
-	_, n, _ := net.ParseCIDR("10.200.0.0/16")
-	return n
-}()
+var forbiddenProxyPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("2001:db8::/32"),
+}
 
-// isMeshIP reports whether ip falls within the mesh overlay subnet.
-func isMeshIP(ip net.IP) bool {
-	return meshSubnet != nil && meshSubnet.Contains(ip)
+func isForbiddenProxyIP(ip net.IP) bool {
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return true
+	}
+	addr = addr.Unmap()
+	if !addr.IsGlobalUnicast() || addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() {
+		return true
+	}
+	for _, prefix := range forbiddenProxyPrefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
 }

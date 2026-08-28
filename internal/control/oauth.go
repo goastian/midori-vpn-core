@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/repo"
@@ -25,10 +27,16 @@ type OAuthHandler struct {
 	cfg                     *config.Config
 	allowedOrigins          []string
 	allowedExtensionOrigins []string // nil means TOFU is active (DB-backed allow-list)
-	trustedExt              *repo.TrustedExtensionRepo
+	trustedExt              trustedExtensionStore
 }
 
-func NewOAuthHandler(cfg *config.Config, trustedExt *repo.TrustedExtensionRepo) *OAuthHandler {
+type trustedExtensionStore interface {
+	IsTrusted(context.Context, string) (bool, error)
+	Status(context.Context, string) (repo.ExtensionOriginStatus, error)
+	Register(context.Context, string, *uuid.UUID) error
+}
+
+func NewOAuthHandler(cfg *config.Config, trustedExt trustedExtensionStore) *OAuthHandler {
 	origins := make([]string, 0)
 	for _, o := range strings.Split(cfg.CORSAllowedOrigins, ",") {
 		o = strings.TrimSpace(o)
@@ -77,12 +85,7 @@ func (h *OAuthHandler) csrfCheck(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	if !h.isAllowedOrigin(origin) {
-		slog.Warn("[AUTH] CSRF check failed: origin not allowed",
-			"path", r.URL.Path,
-			"origin", origin,
-			"allowed_origins", h.allowedOrigins,
-			"allowed_extension_origins", h.allowedExtensionOrigins,
-		)
+		slog.Warn("[AUTH] CSRF check failed: origin not allowed", "path", r.URL.Path)
 		respond.JsonError(w, "origin not allowed", http.StatusForbidden)
 		return false
 	}
@@ -109,7 +112,7 @@ func (h *OAuthHandler) isAllowedOrigin(origin string) bool {
 					return true
 				}
 			}
-			slog.Warn("extension origin rejected: not in ALLOWED_EXTENSION_ORIGINS", "origin", origin)
+			slog.Warn("extension origin rejected: not in configured allow-list")
 			return false
 		}
 		if h.trustedExt != nil {
@@ -117,15 +120,15 @@ func (h *OAuthHandler) isAllowedOrigin(origin string) bool {
 			defer cancel()
 			ok, err := h.trustedExt.IsTrusted(ctx, origin)
 			if err != nil {
-				slog.Error("trusted extension origin lookup failed", "origin", origin, "error", err)
+				slog.Error("trusted extension origin lookup failed", "error", err)
 				return false
 			}
 			if !ok {
-				slog.Warn("extension origin rejected: not yet registered (TOFU)", "origin", origin)
+				slog.Warn("extension origin rejected: not yet registered")
 			}
 			return ok
 		}
-		slog.Warn("extension origin rejected: no allow-list and no TOFU repo", "origin", origin)
+		slog.Warn("extension origin rejected: no allow-list and no TOFU repository")
 		return false
 	}
 
@@ -309,7 +312,7 @@ func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 
 	origin := r.Header.Get("Origin")
 	if origin != "" && !h.isAllowedOrigin(origin) {
-		slog.Warn("[AUTH] Refresh CSRF check failed: origin not allowed", "origin", origin)
+		slog.Warn("[AUTH] Refresh CSRF check failed: origin not allowed")
 		respond.JsonError(w, "origin not allowed", http.StatusForbidden)
 		return
 	}
@@ -342,13 +345,7 @@ func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
-	slog.Info("[AUTH] Callback hit",
-		"method", r.Method,
-		"path", r.URL.Path,
-		"remote", r.RemoteAddr,
-		"origin", r.Header.Get("Origin"),
-		"referer", r.Header.Get("Referer"),
-	)
+	slog.Info("[AUTH] Callback hit", "method", r.Method, "path", r.URL.Path)
 
 	// Read and parse the body first so we can inspect code_verifier before
 	// deciding whether CSRF validation is needed.
@@ -359,11 +356,7 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("[AUTH] Callback parsed request",
-		"code_length", len(req.Code),
-		"redirect_uri", req.RedirectURI,
-		"has_verifier", req.CodeVerifier != "",
-	)
+	slog.Info("[AUTH] Callback parsed request", "has_verifier", req.CodeVerifier != "")
 
 	// When a code_verifier is present the client is using PKCE, which already
 	// binds the token exchange to the original authorization request and
@@ -372,7 +365,17 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	// this endpoint directly.
 	if req.CodeVerifier == "" {
 		if !h.csrfCheck(w, r) {
-			slog.Warn("[AUTH] Callback CSRF check failed", "origin", r.Header.Get("Origin"), "referer", r.Header.Get("Referer"))
+			slog.Warn("[AUTH] Callback CSRF check failed")
+			return
+		}
+	}
+
+	// PKCE permits an unknown extension origin to bootstrap into the TOFU
+	// registry, but it must never bypass a prior administrative revocation.
+	// Enforce this before sending the one-time code to Authentik.
+	if origin := r.Header.Get("Origin"); isExtensionOrigin(origin) {
+		if !h.extensionCallbackOriginAllowed(r.Context(), origin) {
+			respond.JsonError(w, "origin not allowed", http.StatusForbidden)
 			return
 		}
 	}
@@ -384,10 +387,7 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.isAllowedRedirectURI(req.RedirectURI) {
-		slog.Warn("[AUTH] Callback redirect_uri not allowed",
-			"redirect_uri", req.RedirectURI,
-			"allowed_origins", h.allowedOrigins,
-		)
+		slog.Warn("[AUTH] Callback redirect_uri not allowed")
 		respond.JsonError(w, "redirect_uri not allowed", http.StatusBadRequest)
 		return
 	}
@@ -437,16 +437,37 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		if origin := r.Header.Get("Origin"); isExtensionOrigin(origin) {
 			regCtx, regCancel := context.WithTimeout(context.Background(), 2*time.Second)
 			if err := h.trustedExt.Register(regCtx, origin, nil); err != nil {
-				slog.Warn("[AUTH] Callback failed to register trusted extension origin",
-					"origin", origin, "error", err)
+				slog.Warn("[AUTH] Callback failed to register trusted extension origin", "error", err)
 			} else {
-				slog.Info("[AUTH] Callback registered trusted extension origin", "origin", origin)
+				slog.Info("[AUTH] Callback registered trusted extension origin")
 			}
 			regCancel()
 		}
 	}
 
 	respond.JsonOK(w, tokenResp, http.StatusOK)
+}
+
+func (h *OAuthHandler) extensionCallbackOriginAllowed(ctx context.Context, origin string) bool {
+	if len(h.allowedExtensionOrigins) > 0 {
+		for _, allowed := range h.allowedExtensionOrigins {
+			if origin == allowed {
+				return true
+			}
+		}
+		return false
+	}
+	if h.trustedExt == nil {
+		return false
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	status, err := h.trustedExt.Status(checkCtx, origin)
+	if err != nil {
+		slog.Error("trusted extension origin status lookup failed", "error", err)
+		return false
+	}
+	return status != repo.ExtensionOriginRevoked
 }
 
 // isAllowedRedirectURI accepts only exact callback URIs. OAuth redirect URI

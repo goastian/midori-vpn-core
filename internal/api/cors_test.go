@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/goastian/midori-vpn-core/internal/config"
+	"github.com/goastian/midori-vpn-core/internal/repo"
 )
 
 func corsRequest(t *testing.T, middleware func(http.Handler) http.Handler, method, path, origin string) *httptest.ResponseRecorder {
@@ -23,7 +24,9 @@ func corsRequest(t *testing.T, middleware func(http.Handler) http.Handler, metho
 
 func TestCORSRejectsUnregisteredExtensionOutsideInitialPKCECallback(t *testing.T) {
 	cfg := &config.Config{CORSAllowedOrigins: "https://vpn.example.test"}
-	checker := func(context.Context, string) (bool, error) { return false, nil }
+	checker := func(context.Context, string) (repo.ExtensionOriginStatus, error) {
+		return repo.ExtensionOriginUnknown, nil
+	}
 	middleware := CORSMiddleware(cfg, checker)
 
 	response := corsRequest(t, middleware, http.MethodGet, "/api/v1/control/servers", "moz-extension://unregistered")
@@ -37,8 +40,11 @@ func TestCORSAllowsRegisteredAndConfiguredExtensionOrigins(t *testing.T) {
 		CORSAllowedOrigins:      "https://vpn.example.test",
 		AllowedExtensionOrigins: "chrome-extension://configured",
 	}
-	checker := func(_ context.Context, origin string) (bool, error) {
-		return origin == "moz-extension://registered", nil
+	checker := func(_ context.Context, origin string) (repo.ExtensionOriginStatus, error) {
+		if origin == "moz-extension://registered" {
+			return repo.ExtensionOriginTrusted, nil
+		}
+		return repo.ExtensionOriginUnknown, nil
 	}
 	middleware := CORSMiddleware(cfg, checker)
 
@@ -52,7 +58,10 @@ func TestCORSAllowsRegisteredAndConfiguredExtensionOrigins(t *testing.T) {
 
 func TestCORSAllowsOnlyInitialPKCECallbackForUnknownExtension(t *testing.T) {
 	cfg := &config.Config{CORSAllowedOrigins: "https://vpn.example.test"}
-	middleware := CORSMiddleware(cfg)
+	checker := func(context.Context, string) (repo.ExtensionOriginStatus, error) {
+		return repo.ExtensionOriginUnknown, nil
+	}
+	middleware := CORSMiddleware(cfg, checker)
 	origin := "moz-extension://first-use"
 
 	for _, method := range []string{http.MethodOptions, http.MethodPost} {
@@ -69,10 +78,26 @@ func TestCORSAllowsOnlyInitialPKCECallbackForUnknownExtension(t *testing.T) {
 
 func TestCORSFailsClosedOnTrustedOriginLookupError(t *testing.T) {
 	cfg := &config.Config{CORSAllowedOrigins: "https://vpn.example.test"}
-	checker := func(context.Context, string) (bool, error) { return false, errors.New("database unavailable") }
+	checker := func(context.Context, string) (repo.ExtensionOriginStatus, error) {
+		return repo.ExtensionOriginUnknown, errors.New("database unavailable")
+	}
 	response := corsRequest(t, CORSMiddleware(cfg, checker), http.MethodGet, "/api/v1/control/servers", "chrome-extension://registered")
 	if got := response.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Fatalf("lookup failure allowed extension origin: %q", got)
+	}
+}
+
+func TestCORSRejectsRevokedExtensionIncludingPKCECallback(t *testing.T) {
+	cfg := &config.Config{CORSAllowedOrigins: "https://vpn.example.test"}
+	checker := func(context.Context, string) (repo.ExtensionOriginStatus, error) {
+		return repo.ExtensionOriginRevoked, nil
+	}
+	middleware := CORSMiddleware(cfg, checker)
+	for _, method := range []string{http.MethodOptions, http.MethodPost} {
+		response := corsRequest(t, middleware, method, "/api/v1/auth/callback", "moz-extension://revoked")
+		if got := response.Header().Get("Access-Control-Allow-Origin"); got != "" {
+			t.Fatalf("revoked extension received callback CORS origin %q", got)
+		}
 	}
 }
 

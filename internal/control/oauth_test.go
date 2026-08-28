@@ -1,7 +1,9 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,7 +12,24 @@ import (
 	"time"
 
 	"github.com/goastian/midori-vpn-core/internal/config"
+	"github.com/goastian/midori-vpn-core/internal/repo"
+	"github.com/google/uuid"
 )
+
+type trustedExtensionStoreStub struct {
+	status repo.ExtensionOriginStatus
+	err    error
+}
+
+func (s trustedExtensionStoreStub) IsTrusted(context.Context, string) (bool, error) {
+	return s.status == repo.ExtensionOriginTrusted, s.err
+}
+
+func (s trustedExtensionStoreStub) Status(context.Context, string) (repo.ExtensionOriginStatus, error) {
+	return s.status, s.err
+}
+
+func (trustedExtensionStoreStub) Register(context.Context, string, *uuid.UUID) error { return nil }
 
 func newOAuthTestHandler(tokenServerURL string) *OAuthHandler {
 	return NewOAuthHandler(&config.Config{
@@ -243,5 +262,36 @@ func TestOAuthCallbackUpstreamTimeoutReturnsRetryAfter(t *testing.T) {
 	}
 	if got["error"] != "auth provider temporarily unavailable; retry later" {
 		t.Fatalf("error = %v", got["error"])
+	}
+}
+
+func TestExtensionCallbackOriginPolicy(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status repo.ExtensionOriginStatus
+		err    error
+		want   bool
+	}{
+		{name: "unknown origin may bootstrap", status: repo.ExtensionOriginUnknown, want: true},
+		{name: "trusted origin remains allowed", status: repo.ExtensionOriginTrusted, want: true},
+		{name: "revoked origin is denied", status: repo.ExtensionOriginRevoked, want: false},
+		{name: "lookup failure is denied", status: repo.ExtensionOriginUnknown, err: errors.New("database unavailable"), want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			handler := NewOAuthHandler(&config.Config{}, trustedExtensionStoreStub{status: test.status, err: test.err})
+			if got := handler.extensionCallbackOriginAllowed(context.Background(), "moz-extension://test"); got != test.want {
+				t.Fatalf("extensionCallbackOriginAllowed() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestExtensionCallbackStaticAllowListIsAuthoritative(t *testing.T) {
+	handler := NewOAuthHandler(&config.Config{AllowedExtensionOrigins: "chrome-extension://allowed"}, trustedExtensionStoreStub{status: repo.ExtensionOriginTrusted})
+	if !handler.extensionCallbackOriginAllowed(context.Background(), "chrome-extension://allowed") {
+		t.Fatal("configured extension origin was denied")
+	}
+	if handler.extensionCallbackOriginAllowed(context.Background(), "moz-extension://database-trusted") {
+		t.Fatal("database origin bypassed configured static allow-list")
 	}
 }

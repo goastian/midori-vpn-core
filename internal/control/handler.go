@@ -104,6 +104,7 @@ type Handler struct {
 	peerRepo                *repo.PeerRepo
 	meshRepo                *repo.MeshRepo
 	auditRepo               *repo.AuditRepo
+	trustedExtensionRepo    *repo.TrustedExtensionRepo
 	billingClient           *billing.Client
 	wgMgr                   *wg.Manager
 	hub                     *WSHub
@@ -138,6 +139,7 @@ func NewHandlerWithMesh(pool *pgxpool.Pool, cfg *config.Config, wgMgr *wg.Manage
 		peerRepo:                repo.NewPeerRepo(pool),
 		meshRepo:                repo.NewMeshRepo(pool),
 		auditRepo:               repo.NewAuditRepo(pool),
+		trustedExtensionRepo:    repo.NewTrustedExtensionRepo(pool),
 		clientCertificateRepo:   repo.NewDeviceCertificateRepo(pool),
 		billingClient:           billing.NewClient(cfg, billingRedis),
 		wgMgr:                   wgMgr,

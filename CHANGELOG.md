@@ -4,6 +4,8 @@
 
 ### Security
 
+- Extension trust now distinguishes unknown, trusted and administratively revoked origins. Revoked installations are denied before an OAuth code is exchanged, and administrators can list, revoke and restore exact extension origins through protected endpoints.
+- CONNECT target validation now resolves once and dials only the validated public IP answers, rejects mixed public/private DNS results and reserved ranges, and omits browsing targets, users and client addresses from proxy logs.
 - Browser-extension CORS now accepts only explicitly configured or database-registered exact origins. The one first-use exception is limited to the PKCE token callback, and trusted-origin persistence now matches the deployed `created_at`/`updated_at` schema.
 - Public readiness now exposes only aggregate state. PostgreSQL/Redis latency and WireGuard interface diagnostics moved behind the authenticated administrator API, and Nginx explicitly refuses public `/metrics` requests.
 - Added a shared OpenVPN/IKEv2 client PKI based on device-generated ECDSA CSRs. Core signs and revokes public certificates, publishes a CRL, enforces per-account certificate limits, and never receives or stores device private keys.

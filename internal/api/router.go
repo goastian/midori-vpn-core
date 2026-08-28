@@ -35,7 +35,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 	var trustedExtensionOrigin ExtensionOriginChecker
 	if pool != nil {
 		trustedExtRepo = repo.NewTrustedExtensionRepo(pool)
-		trustedExtensionOrigin = trustedExtRepo.IsTrusted
+		trustedExtensionOrigin = trustedExtRepo.Status
 	}
 
 	r.Use(middleware.Logger)
@@ -204,6 +204,8 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 
 			// Audit
 			r.Get("/audit-logs", ch.AdminListAuditLogs)
+			r.Get("/trusted-extension-origins", ch.AdminListTrustedExtensionOrigins)
+			r.Put("/trusted-extension-origins/{id}", ch.AdminUpdateTrustedExtensionOrigin)
 		})
 
 		// WebSocket for real-time stats (JWT authenticated via first message)
@@ -250,7 +252,7 @@ func CancelJobs() {
 	}
 }
 
-type ExtensionOriginChecker func(context.Context, string) (bool, error)
+type ExtensionOriginChecker func(context.Context, string) (repo.ExtensionOriginStatus, error)
 
 func CORSMiddleware(cfg *config.Config, extensionCheckers ...ExtensionOriginChecker) func(http.Handler) http.Handler {
 	allowedOrigins := parseAllowedOrigins(cfg.CORSAllowedOrigins)
@@ -289,13 +291,6 @@ func CORSMiddleware(cfg *config.Config, extensionCheckers ...ExtensionOriginChec
 }
 
 func extensionOriginAllowed(r *http.Request, origin string, configured []string, trusted ExtensionOriginChecker) bool {
-	// The first PKCE callback must be readable before the origin exists in the
-	// DB registry. This exception is intentionally limited to the one token
-	// exchange route; the handler still requires an exact redirect URI and a
-	// valid authorization code + verifier before registering the origin.
-	if r.URL.Path == "/api/v1/auth/callback" && (r.Method == http.MethodPost || r.Method == http.MethodOptions) {
-		return true
-	}
 	for _, allowed := range configured {
 		if origin == allowed {
 			return true
@@ -306,12 +301,19 @@ func extensionOriginAllowed(r *http.Request, origin string, configured []string,
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
-	allowed, err := trusted(ctx, origin)
+	status, err := trusted(ctx, origin)
 	if err != nil {
-		slog.Error("CORS trusted extension origin lookup failed", "origin", origin, "error", err)
+		slog.Error("CORS trusted extension origin lookup failed", "error", err)
 		return false
 	}
-	return allowed
+	if status == repo.ExtensionOriginTrusted {
+		return true
+	}
+	// Only an origin that has never been seen may bootstrap through the exact
+	// PKCE exchange route. Revocation is authoritative and blocks new OAuth.
+	return status == repo.ExtensionOriginUnknown &&
+		r.URL.Path == "/api/v1/auth/callback" &&
+		(r.Method == http.MethodPost || r.Method == http.MethodOptions)
 }
 
 func isBrowserExtensionOrigin(origin string) bool {
