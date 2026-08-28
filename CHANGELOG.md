@@ -14,7 +14,7 @@
 ### Operations
 
 - Added rootless Podman development images for Go, Control and Desktop workflows.
-- Added immutable migrations through version 10, including billing/quotas, transport health, unique active peer addresses, Ed25519 identities, removal of retired transport columns and revocable per-device client certificates.
+- Added immutable migrations through version 11, including billing/quotas, transport health, unique active peer addresses, Ed25519 identities, removal of retired transport columns, revocable per-device client certificates and the missing Mesh exit-node protocol/capability fields.
 - Deployment scripts reject default credentials and publish proxy upstream only on loopback.
 - Added reversible Quadlet configuration for MASQUE, Redis 8.10.1 migration with volume export, PostgreSQL 18 migration-chain tests, Certbot reload hook and Redis persistence sysctl.
 - Updated CI to Go 1.27, Node 24/npm 12 and current stable action majors; Linux releases are signed RPMs built entirely with rootless Podman.
@@ -28,6 +28,7 @@
 
 - Restored authenticated creation, invitation rotation and joining of named Mesh networks, with ownership, capacity and expiry checks.
 - Auto-Mesh no longer invents a country for private or loopback origins. Client IP forwarding is accepted only from `TRUSTED_PROXIES`, unavailable geolocation returns the stable `origin_country_unavailable` contract, and session meshes are never persisted with a fabricated location.
+- Added the forward-and-backward-tested migration for `proxy_scheme`, TCP and UDP capabilities in Mesh members and user exit-node selections, eliminating registration failures on upgraded databases.
 
 ### Transport contracts
 

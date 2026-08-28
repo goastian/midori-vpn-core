@@ -40,6 +40,18 @@ certificate_table="$(podman exec "${container}" psql -U midori -d midori_vpn -At
   "SELECT to_regclass('public.device_certificates') IS NOT NULL")"
 [ "${certificate_table}" = "t" ] || { printf 'error: migration 10 did not create device_certificates\n' >&2; exit 1; }
 
+mesh_capabilities="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND ((table_name = 'mesh_members' AND column_name IN ('proxy_scheme','supports_tcp','supports_udp')) OR (table_name = 'user_exit_node' AND column_name IN ('proxy_scheme','supports_tcp','supports_udp')))")"
+[ "${mesh_capabilities}" = "6" ] || { printf 'error: migration 11 created %s of 6 exit-node capability columns\n' "${mesh_capabilities}" >&2; exit 1; }
+
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000011_mesh_exit_node_capabilities.down.sql >/dev/null
+mesh_capabilities="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND ((table_name = 'mesh_members' AND column_name IN ('proxy_scheme','supports_tcp','supports_udp')) OR (table_name = 'user_exit_node' AND column_name IN ('proxy_scheme','supports_tcp','supports_udp')))")"
+[ "${mesh_capabilities}" = "0" ] || { printf 'error: migration 11 rollback left %s exit-node capability columns\n' "${mesh_capabilities}" >&2; exit 1; }
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000011_mesh_exit_node_capabilities.up.sql >/dev/null
+
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000010_device_certificates.down.sql >/dev/null
 certificate_table="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
@@ -57,4 +69,4 @@ restored="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000009_remove_legacy_transport_columns.up.sql >/dev/null
 
-printf 'Migration chain 1-10 and migrations 9-10 rollback verified on PostgreSQL 18.\n'
+printf 'Migration chain 1-11 and migrations 9-11 rollback verified on PostgreSQL 18.\n'
