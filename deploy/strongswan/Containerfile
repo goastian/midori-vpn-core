@@ -1,0 +1,29 @@
+ARG GO_IMAGE=docker.io/library/golang:1.27.0-bookworm
+ARG RUNTIME_IMAGE=registry.opensuse.org/opensuse/tumbleweed@sha256:c249e585be229e74c59e28725f9381d3c433aeb6497d4108e423dd14383487dd
+ARG STRONGSWAN_VERSION=6.0.7-1.3
+
+FROM ${GO_IMAGE} AS health_builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/ikev2-health ./cmd/ikev2-health
+COPY internal/ikev2health ./internal/ikev2health
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/ikev2-health ./cmd/ikev2-health
+
+FROM ${RUNTIME_IMAGE}
+ARG STRONGSWAN_VERSION
+RUN zypper --non-interactive install --no-recommends \
+      bash ca-certificates coreutils curl iproute2 nftables openssl sed \
+      "strongswan=${STRONGSWAN_VERSION}" && \
+    zypper clean --all && \
+    /usr/libexec/ipsec/charon --version | grep -Fq 'strongSwan 6.0.7'
+
+COPY --from=health_builder /out/ikev2-health /usr/local/bin/ikev2-health
+COPY deploy/strongswan/strongswan.conf.template /usr/share/midorivpn/strongswan/strongswan.conf.template
+COPY deploy/strongswan/swanctl.conf.template /usr/share/midorivpn/strongswan/swanctl.conf.template
+COPY deploy/strongswan/entrypoint.sh /usr/local/bin/midorivpn-ikev2-entrypoint
+
+RUN chmod 0755 /usr/local/bin/ikev2-health /usr/local/bin/midorivpn-ikev2-entrypoint
+
+EXPOSE 500/udp 4500/udp
+ENTRYPOINT ["/usr/local/bin/midorivpn-ikev2-entrypoint"]

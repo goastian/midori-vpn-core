@@ -22,7 +22,7 @@ COPY deploy/openvpn/server.conf.template /usr/share/midorivpn/openvpn/server.con
 COPY deploy/openvpn/entrypoint.sh /usr/local/bin/midorivpn-openvpn-entrypoint
 
 RUN chmod 0755 /usr/local/bin/openvpn-health /usr/local/bin/midorivpn-openvpn-entrypoint && \
-    install -d -m 0700 /run/openvpn
+    install -d -m 0700 /run/midorivpn-openvpn
 
 EXPOSE 1194/udp
 ENTRYPOINT ["/usr/local/bin/midorivpn-openvpn-entrypoint"]

@@ -4,9 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -17,6 +15,7 @@ import (
 
 	"github.com/goastian/midori-vpn-core/internal/ikev2health"
 	"github.com/goastian/midori-vpn-core/internal/models"
+	"github.com/goastian/midori-vpn-core/internal/openvpnhealth"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quic-go/quic-go"
@@ -128,49 +127,18 @@ func probeIKEv2Status(transport models.TransportCapability, now time.Time, readF
 	return readFresh(healthFile, now) == nil, true
 }
 
-func probeOpenVPN(ctx context.Context, transport models.TransportCapability) (bool, bool) {
-	healthURL, ok := transport.Metadata["health_url"].(string)
-	if !ok {
-		return false, false
-	}
-	parsed, ok := validOpenVPNHealthURL(healthURL)
-	if !ok {
-		return false, false
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
-	if err != nil {
-		return false, true
-	}
-	response, err := coreHTTP.Do(request)
-	if err != nil {
-		return false, true
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return false, true
-	}
-	var status struct {
-		OK  bool `json:"ok"`
-		DCO bool `json:"dco"`
-	}
-	decoder := json.NewDecoder(io.LimitReader(response.Body, 4096))
-	if err := decoder.Decode(&status); err != nil {
-		return false, true
-	}
-	return status.OK && status.DCO, true
+func probeOpenVPN(_ context.Context, transport models.TransportCapability) (bool, bool) {
+	return probeOpenVPNStatus(transport, time.Now(), openvpnhealth.ReadFresh)
 }
 
-func validOpenVPNHealthURL(value string) (*url.URL, bool) {
-	parsed, err := url.Parse(strings.TrimSpace(value))
-	if err != nil || parsed.Scheme != "http" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "/healthz" {
-		return nil, false
+func probeOpenVPNStatus(transport models.TransportCapability, now time.Time, readFresh func(string, time.Time) error) (bool, bool) {
+	if healthFile, ok := transport.Metadata["health_file"].(string); ok {
+		if healthFile != openvpnhealth.StatusFile {
+			return false, false
+		}
+		return readFresh(healthFile, now) == nil, true
 	}
-	ip := net.ParseIP(parsed.Hostname())
-	port, portErr := strconv.Atoi(parsed.Port())
-	if ip == nil || !ip.IsLoopback() || portErr != nil || port < 1024 || port > 65535 {
-		return nil, false
-	}
-	return parsed, true
+	return false, false
 }
 
 func probeMASQUE(ctx context.Context, transport models.TransportCapability) bool {

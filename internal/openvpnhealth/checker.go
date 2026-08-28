@@ -4,17 +4,31 @@ package openvpnhealth
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
-const maxManagementResponse = 1 << 20
+const (
+	StatusFile            = "/run/midorivpn-health/openvpn.json"
+	MaxStatusAge          = 15 * time.Second
+	maxStatusSize         = 4096
+	maxManagementResponse = 1 << 20
+)
+
+type Status struct {
+	OK        bool      `json:"ok"`
+	DCO       bool      `json:"dco"`
+	CheckedAt time.Time `json:"checked_at"`
+}
 
 type Checker struct {
 	ManagementSocket string
@@ -73,19 +87,101 @@ func (c Checker) requireDCOLogMarker() error {
 	if err != nil {
 		return fmt.Errorf("stat OpenVPN log: %w", err)
 	}
-	const tailSize = int64(256 * 1024)
-	if info.Size() > tailSize {
-		if _, err := file.Seek(-tailSize, io.SeekEnd); err != nil {
-			return fmt.Errorf("seek OpenVPN log: %w", err)
-		}
-	}
-	data, err := io.ReadAll(io.LimitReader(file, tailSize))
+	const windowSize = int64(256 * 1024)
+	data, err := io.ReadAll(io.LimitReader(file, windowSize))
 	if err != nil {
 		return fmt.Errorf("read OpenVPN log: %w", err)
 	}
 	marker := "DCO device " + c.InterfaceName + " opened"
+	if strings.Contains(string(data), marker) {
+		return nil
+	}
+	if info.Size() > windowSize {
+		if _, err := file.Seek(-windowSize, io.SeekEnd); err != nil {
+			return fmt.Errorf("seek OpenVPN log: %w", err)
+		}
+		data, err = io.ReadAll(io.LimitReader(file, windowSize))
+		if err != nil {
+			return fmt.Errorf("read OpenVPN log tail: %w", err)
+		}
+	}
 	if !strings.Contains(string(data), marker) {
 		return errors.New("openvpn DCO initialization marker is absent")
+	}
+	return nil
+}
+
+// Publish atomically replaces the health status after the checker has
+// verified the DCO interface and the private management socket.
+func Publish(path string, checkedAt time.Time) error {
+	if path != StatusFile {
+		return errors.New("invalid OpenVPN health status path")
+	}
+	return publish(path, checkedAt)
+}
+
+func publish(path string, checkedAt time.Time) error {
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".openvpn-health-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	status := Status{OK: true, DCO: true, CheckedAt: checkedAt.UTC()}
+	if err := json.NewEncoder(temporary).Encode(status); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Chmod(0o644); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, path)
+}
+
+// ReadFresh rejects links, writable files, stale timestamps and status that
+// cannot have originated from a successful DCO-aware gateway check.
+func ReadFresh(path string, now time.Time) error {
+	if path != StatusFile {
+		return errors.New("invalid OpenVPN health status path")
+	}
+	return readFresh(path, now)
+}
+
+func readFresh(path string, now time.Time) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 || info.Size() < 1 || info.Size() > maxStatusSize {
+		return errors.New("invalid OpenVPN health status file")
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(io.LimitReader(bytes.NewReader(content), maxStatusSize))
+	decoder.DisallowUnknownFields()
+	var status Status
+	if err := decoder.Decode(&status); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return errors.New("invalid trailing OpenVPN health status data")
+	}
+	if !status.OK || !status.DCO || status.CheckedAt.IsZero() {
+		return errors.New("OpenVPN control plane is unhealthy")
+	}
+	age := now.Sub(status.CheckedAt)
+	if age < -5*time.Second || age > MaxStatusAge {
+		return errors.New("OpenVPN health status is stale")
 	}
 	return nil
 }

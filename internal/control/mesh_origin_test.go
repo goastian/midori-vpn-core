@@ -26,6 +26,15 @@ func TestCountryFromIPRejectsPrivateOrigins(t *testing.T) {
 	}
 }
 
+func TestUnknownOriginCountryCreatesGlobalMeshName(t *testing.T) {
+	if !isValidCountryCode(unknownOriginCountry) {
+		t.Fatal("global fallback country must remain queryable")
+	}
+	if got := meshNameForCountry(unknownOriginCountry); got != "Servidor Comunitario [Global]" {
+		t.Fatalf("meshNameForCountry(ZZ) = %q", got)
+	}
+}
+
 func TestCountryFromIPUsesProviderResponse(t *testing.T) {
 	h := &MeshHandler{geoClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if req.Context() == nil {

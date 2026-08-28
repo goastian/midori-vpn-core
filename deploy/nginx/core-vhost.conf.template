@@ -30,6 +30,12 @@ server {
         proxy_read_timeout 5s;
     }
 
+    # Prometheus details are intentionally private to the host scraping path.
+    # Do not let the SPA fallback or a future broad proxy expose them.
+    location = /metrics {
+        return 404;
+    }
+
     # Public device CA and DER CRL used by certificate-based transports.
     # Keep this before the SPA fallback so /pki/* cannot return index.html.
     location /pki/ {

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/goastian/midori-vpn-core/internal/models"
+	"github.com/goastian/midori-vpn-core/internal/openvpnhealth"
 )
 
 var supportedTransportProtocols = map[string]struct{}{
@@ -110,8 +111,15 @@ func validateOpenVPNMetadata(metadata map[string]interface{}) error {
 	if !ok || !validDNSCertificateName(serverName) {
 		return fmt.Errorf("metadata.server_name must be a DNS certificate name")
 	}
-	if _, ok := validOpenVPNHealthURL(metadataStringValue(metadata, "health_url")); !ok {
-		return fmt.Errorf("metadata.health_url must be a loopback /healthz URL")
+	healthFile := metadataStringValue(metadata, "health_file")
+	if healthFile == "" {
+		return fmt.Errorf("metadata.health_file is required")
+	}
+	if healthFile != openvpnhealth.StatusFile {
+		return fmt.Errorf("metadata.health_file must use the private OpenVPN health status file")
+	}
+	if _, exists := metadata["health_url"]; exists {
+		return fmt.Errorf("metadata.health_url is not supported")
 	}
 	if certified, exists := metadata["certified"]; exists {
 		if _, ok := certified.(bool); !ok {

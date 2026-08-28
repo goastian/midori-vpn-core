@@ -7,10 +7,10 @@ proto udp
 port __PORT__
 server __NETWORK__ __NETMASK__
 
-ca /run/secrets/client-ca.pem
-cert /run/secrets/gateway.crt
-key /run/secrets/gateway.key
-crl-verify /run/openvpn/client.crl
+ca __CA_CERT__
+cert __GATEWAY_CERT__
+key __GATEWAY_KEY__
+crl-verify /run/midorivpn-openvpn/client.crl
 verify-client-cert require
 remote-cert-tls client
 
@@ -25,9 +25,9 @@ push "dhcp-option DNS __DNS__"
 keepalive 10 60
 explicit-exit-notify 1
 
-management /run/openvpn/management.sock unix
+management /run/midorivpn-openvpn/management.sock unix
 management-log-cache 50
-status /run/openvpn/status.log 10
+status /run/midorivpn-openvpn/status.log 10
 status-version 2
-log-append /run/openvpn/openvpn.log
+log-append /run/midorivpn-openvpn/openvpn.log
 verb 3

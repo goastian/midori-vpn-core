@@ -21,25 +21,21 @@ func TestProbeTransportKeepsUnverifiableProtocolsUnknown(t *testing.T) {
 	}
 }
 
-func TestProbeOpenVPNRequiresLoopbackDCOHealth(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/healthz" {
-			http.NotFound(w, r)
-			return
+func TestProbeOpenVPNPrefersFreshPrivateHealthFile(t *testing.T) {
+	privateFile := "/run/midorivpn-health/openvpn.json"
+	transport := models.TransportCapability{Protocol: "openvpn", Metadata: map[string]interface{}{"health_file": privateFile}}
+	healthy, checked := probeOpenVPNStatus(transport, time.Now(), func(path string, _ time.Time) error {
+		if path != privateFile {
+			t.Fatalf("status path = %q", path)
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"dco":true}`))
-	}))
-	defer server.Close()
-	transport := models.TransportCapability{Protocol: "openvpn", Metadata: map[string]interface{}{"health_url": server.URL + "/healthz"}}
-	status, checked := probeTransport(context.Background(), &models.VPNServer{}, transport)
-	if !checked || status != "healthy" {
-		t.Fatalf("OpenVPN probe result = %q, %t", status, checked)
+		return nil
+	})
+	if !healthy || !checked {
+		t.Fatalf("OpenVPN file probe result = %t, %t", healthy, checked)
 	}
-
-	transport.Metadata["health_url"] = "http://example.test:9194/healthz"
-	if status, checked := probeTransport(context.Background(), &models.VPNServer{}, transport); checked || status != "unknown" {
-		t.Fatalf("external health URL result = %q, %t", status, checked)
+	transport.Metadata["health_file"] = "/tmp/attacker.json"
+	if _, checked := probeOpenVPNStatus(transport, time.Now(), func(string, time.Time) error { return nil }); checked {
+		t.Fatal("external OpenVPN health file was accepted")
 	}
 }
 

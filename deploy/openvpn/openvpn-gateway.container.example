@@ -1,27 +1,35 @@
 [Unit]
-Description=MidoriVPN OpenVPN 2.7 DCO gateway
+Description=MidoriVPN OpenVPN 2.7 DCO rootful gateway
 After=network-online.target
 Wants=network-online.target
+Conflicts=midorivpn-openvpn.service
 
 [Container]
 Image=localhost/midorivpn-openvpn:2.0.0
 ContainerName=midori-openvpn
-Pod=midori-control.pod
+Network=host
+DropCapability=all
 AddCapability=NET_ADMIN
 AddCapability=NET_RAW
+AddCapability=NET_BIND_SERVICE
 AddDevice=/dev/net/tun
-EnvironmentFile=%h/.config/containers/systemd/midori-control/openvpn.env
-Volume=%h/.config/midorivpn/pki/client-ca.pem:/run/secrets/client-ca.pem:ro,Z
-Volume=%h/.config/midorivpn/pki/gateway.crt:/run/secrets/gateway.crt:ro,Z
-Volume=%h/.config/midorivpn/pki/gateway.key:/run/secrets/gateway.key:ro,Z
-HealthCmd=curl --fail --silent http://127.0.0.1:9194/healthz
-HealthInterval=10s
-HealthTimeout=4s
-HealthRetries=6
+NoNewPrivileges=true
+ReadOnly=true
+EnvironmentFile=/etc/midorivpn/openvpn.env
+Environment=OPENVPN_DEPLOYMENT_MODE=rootful
+Environment=OPENVPN_CA_CERT=/etc/midorivpn/pki/client-ca.pem
+Environment=OPENVPN_GATEWAY_CERT=/etc/midorivpn/pki/gateway.crt
+Environment=OPENVPN_GATEWAY_KEY=/etc/midorivpn/pki/gateway.key
+Environment=OPENVPN_HEALTH_BINARY=/usr/local/bin/openvpn-health
+Volume=/etc/midorivpn/pki:/etc/midorivpn/pki:ro
+Volume=/run/midorivpn-health:/run/midorivpn-health:rw
+Tmpfs=/run/midorivpn-openvpn:rw,nodev,nosuid,noexec,mode=0700
+Tmpfs=/tmp:rw,nodev,nosuid,noexec,mode=0700
 
 [Service]
 Restart=on-failure
 TimeoutStartSec=90
+TimeoutStopSec=20
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

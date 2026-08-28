@@ -50,7 +50,8 @@ done
 openssl x509 -in "${IKEV2_GATEWAY_CERT}" -noout -checkend 86400 >/dev/null || die "gateway certificate expires within 24 hours"
 openssl verify -purpose sslserver -verify_hostname "${IKEV2_SERVER_NAME}" -CAfile "${IKEV2_CA_CERT}" "${IKEV2_GATEWAY_CERT}" >/dev/null || die "gateway certificate verification failed"
 
-install -d -m 0700 "${IKEV2_RUNTIME_DIR}" "${IKEV2_RUNTIME_DIR}"/swanctl/{private,x509,x509ca,x509crl}
+install -d -m 0700 "${IKEV2_RUNTIME_DIR}" \
+  "${IKEV2_RUNTIME_DIR}"/swanctl/{ecdsa,pkcs8,pkcs12,private,pubkey,rsa,x509,x509aa,x509ac,x509ca,x509crl,x509ocsp}
 install -d -m 0755 /run/midorivpn-health
 rm -f "${IKEV2_HEALTH_FILE}" /run/midorivpn-health/ikev2.sock
 install -m 0600 "${IKEV2_GATEWAY_KEY}" "${IKEV2_RUNTIME_DIR}/swanctl/private/gateway.key"
@@ -74,7 +75,7 @@ sed \
   /usr/share/midorivpn/strongswan/swanctl.conf.template >"${IKEV2_SWANCTL_CONFIG}"
 chmod 0600 "${IKEV2_RUNTIME_DIR}/strongswan.conf" "${IKEV2_SWANCTL_CONFIG}"
 
-[ "$(sysctl -n net.ipv4.ip_forward)" = "1" ] || die "pod network namespace must start with net.ipv4.ip_forward=1"
+[ "$(sysctl -n net.ipv4.ip_forward)" = "1" ] || die "execution network namespace must start with net.ipv4.ip_forward=1"
 nft delete table ip midori_ikev2 2>/dev/null || true
 nft add table ip midori_ikev2
 nft 'add chain ip midori_ikev2 postrouting { type nat hook postrouting priority srcnat; policy accept; }'

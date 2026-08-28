@@ -43,6 +43,13 @@ set -a
 source "${ENV_FILE}"
 set +a
 
+if [ "${DEPLOYMENT_PROFILE:-}" != "principal" ]; then
+  die "DEPLOYMENT_PROFILE must be principal"
+fi
+
+require_value CORE_NODE_NAME
+[[ "${CORE_NODE_NAME}" =~ ^[a-z0-9][a-z0-9-]{0,30}$ ]] || die "CORE_NODE_NAME must be a lowercase DNS label"
+
 for required_var in \
   CORE_IMAGE CONTROL_IMAGE POSTGRES_IMAGE REDIS_IMAGE \
   VPN_CORE_PORT VPN_CORE_HOST_PORT CONTROL_CONTAINER_PORT CONTROL_HOST_PORT \

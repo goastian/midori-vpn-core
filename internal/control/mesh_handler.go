@@ -26,6 +26,7 @@ import (
 )
 
 const publicMeshNameFormat = "Servidor Comunitario %s [%s]"
+const unknownOriginCountry = "ZZ"
 
 const originCountryUnavailableCode = "origin_country_unavailable"
 
@@ -521,6 +522,9 @@ func isValidCountryCode(code string) bool {
 }
 
 func meshNameForCountry(country string) string {
+	if country == unknownOriginCountry {
+		return "Servidor Comunitario [Global]"
+	}
 	return fmt.Sprintf(publicMeshNameFormat, countryFlag(country), country)
 }
 
@@ -665,9 +669,13 @@ func (h *MeshHandler) ensureAutoMesh(ctx context.Context, r *http.Request, u *mo
 		}
 	}
 
-	country, err := h.countryFromIP(ctx, originIP)
-	if err != nil {
-		return nil, nil, false, err
+	country, countryErr := h.countryFromIP(ctx, originIP)
+	if countryErr != nil {
+		// Geo-IP is discovery metadata, not a prerequisite for encrypted Mesh.
+		// Provision a neutral global session and refresh its origin on a later
+		// activation when the provider/cache becomes available.
+		country = unknownOriginCountry
+		slog.Warn("auto-mesh: origin country unavailable; using global session")
 	}
 
 	subnet, err := h.meshRepo.NextAvailableSubnet(ctx)

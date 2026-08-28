@@ -39,31 +39,29 @@ func (r *TrustedExtensionRepo) IsTrusted(ctx context.Context, origin string) (bo
 // Register inserts the origin if it doesn't exist, or bumps last_seen_at and
 // seen_count if it does. Revoked origins are NOT un-revoked automatically.
 // userID may be nil for unauthenticated registration paths (currently unused).
-func (r *TrustedExtensionRepo) Register(ctx context.Context, origin string, userID *uuid.UUID) error {
+func (r *TrustedExtensionRepo) Register(ctx context.Context, origin string, _ *uuid.UUID) error {
 	_, err := r.pool.Exec(ctx, `
-		INSERT INTO trusted_extension_origins (origin, first_user_id, first_seen_at, last_seen_at, seen_count)
-		VALUES ($1, $2, NOW(), NOW(), 1)
+		INSERT INTO trusted_extension_origins (origin, created_at, updated_at)
+		VALUES ($1, NOW(), NOW())
 		ON CONFLICT (origin) DO UPDATE
-		SET last_seen_at = NOW(),
-		    seen_count   = trusted_extension_origins.seen_count + 1
-	`, origin, userID)
+		SET updated_at = NOW()
+	`, origin)
 	return err
 }
 
 // List returns every registered origin (including revoked ones) for admin UIs.
 type TrustedExtensionOrigin struct {
-	Origin      string
-	Revoked     bool
-	SeenCount   int64
-	FirstSeenAt string
-	LastSeenAt  string
+	Origin    string
+	Revoked   bool
+	CreatedAt string
+	UpdatedAt string
 }
 
 func (r *TrustedExtensionRepo) List(ctx context.Context) ([]TrustedExtensionOrigin, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT origin, revoked, seen_count, first_seen_at::text, last_seen_at::text
+		SELECT origin, revoked, created_at::text, updated_at::text
 		FROM trusted_extension_origins
-		ORDER BY last_seen_at DESC`)
+		ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +69,7 @@ func (r *TrustedExtensionRepo) List(ctx context.Context) ([]TrustedExtensionOrig
 	var out []TrustedExtensionOrigin
 	for rows.Next() {
 		var o TrustedExtensionOrigin
-		if err := rows.Scan(&o.Origin, &o.Revoked, &o.SeenCount, &o.FirstSeenAt, &o.LastSeenAt); err != nil {
+		if err := rows.Scan(&o.Origin, &o.Revoked, &o.CreatedAt, &o.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, o)

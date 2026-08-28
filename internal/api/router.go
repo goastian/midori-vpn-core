@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -29,11 +31,17 @@ func NewRouter(cfg *config.Config, mgr *wg.Manager, verifier *nodeauth.Verifier)
 
 func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *auth.JWKSProvider, verifier *nodeauth.Verifier, clientCertificateAuthority *clientpki.Authority) *chi.Mux {
 	r := chi.NewRouter()
+	var trustedExtRepo *repo.TrustedExtensionRepo
+	var trustedExtensionOrigin ExtensionOriginChecker
+	if pool != nil {
+		trustedExtRepo = repo.NewTrustedExtensionRepo(pool)
+		trustedExtensionOrigin = trustedExtRepo.IsTrusted
+	}
 
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.SetHeader("Content-Type", "application/json"))
-	r.Use(CORSMiddleware(cfg))
+	r.Use(CORSMiddleware(cfg, trustedExtensionOrigin))
 	if cfg.RateLimitRPS > 0 {
 		r.Use(RateLimitMiddleware(cfg))
 	}
@@ -81,7 +89,6 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 
 	// Control API (JWT/Authentik protected) — only if DB is available
 	if pool != nil && jwks != nil {
-		trustedExtRepo := repo.NewTrustedExtensionRepo(pool)
 		oauthH := control.NewOAuthHandler(cfg, trustedExtRepo)
 		r.Get(cfg.ExtensionCallbackPath, oauthH.ExtensionCallback)
 		r.Post("/api/v1/auth/callback", oauthH.Callback)
@@ -163,6 +170,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 
 			// Dashboard
 			r.Get("/dashboard/stats", ch.AdminDashboardStats)
+			r.Get("/health", healthChecker.DetailedReadyz)
 
 			// Users
 			r.Get("/users", ch.AdminListUsers)
@@ -242,8 +250,15 @@ func CancelJobs() {
 	}
 }
 
-func CORSMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
+type ExtensionOriginChecker func(context.Context, string) (bool, error)
+
+func CORSMiddleware(cfg *config.Config, extensionCheckers ...ExtensionOriginChecker) func(http.Handler) http.Handler {
 	allowedOrigins := parseAllowedOrigins(cfg.CORSAllowedOrigins)
+	allowedExtensionOrigins := parseAllowedOrigins(cfg.AllowedExtensionOrigins)
+	var trustedExtensionOrigin ExtensionOriginChecker
+	if len(extensionCheckers) > 0 {
+		trustedExtensionOrigin = extensionCheckers[0]
+	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -251,7 +266,12 @@ func CORSMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 			// Always set Vary: Origin so caches distinguish responses by origin
 			w.Header().Set("Vary", "Origin")
 
-			if origin != "" && isOriginAllowed(origin, allowedOrigins) {
+			originAllowed := origin != "" && isOriginAllowed(origin, allowedOrigins)
+			if isBrowserExtensionOrigin(origin) {
+				originAllowed = extensionOriginAllowed(r, origin, allowedExtensionOrigins, trustedExtensionOrigin)
+			}
+
+			if originAllowed {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -268,6 +288,40 @@ func CORSMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 	}
 }
 
+func extensionOriginAllowed(r *http.Request, origin string, configured []string, trusted ExtensionOriginChecker) bool {
+	// The first PKCE callback must be readable before the origin exists in the
+	// DB registry. This exception is intentionally limited to the one token
+	// exchange route; the handler still requires an exact redirect URI and a
+	// valid authorization code + verifier before registering the origin.
+	if r.URL.Path == "/api/v1/auth/callback" && (r.Method == http.MethodPost || r.Method == http.MethodOptions) {
+		return true
+	}
+	for _, allowed := range configured {
+		if origin == allowed {
+			return true
+		}
+	}
+	if trusted == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	allowed, err := trusted(ctx, origin)
+	if err != nil {
+		slog.Error("CORS trusted extension origin lookup failed", "origin", origin, "error", err)
+		return false
+	}
+	return allowed
+}
+
+func isBrowserExtensionOrigin(origin string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil || (parsed.Scheme != "moz-extension" && parsed.Scheme != "chrome-extension") {
+		return false
+	}
+	return parsed.Host != "" && parsed.User == nil && parsed.Port() == "" && parsed.Path == "" && parsed.RawQuery == "" && parsed.Fragment == ""
+}
+
 func parseAllowedOrigins(raw string) []string {
 	parts := strings.Split(raw, ",")
 	result := make([]string, 0, len(parts))
@@ -281,12 +335,6 @@ func parseAllowedOrigins(raw string) []string {
 }
 
 func isOriginAllowed(origin string, allowed []string) bool {
-	// Browser extensions are trusted clients with dynamic origins.
-	if strings.HasPrefix(origin, "moz-extension://") ||
-		strings.HasPrefix(origin, "chrome-extension://") {
-		return true
-	}
-
 	// Parse the incoming origin once for proper scheme/host extraction.
 	parsedOrigin, err := url.Parse(origin)
 	if err != nil || parsedOrigin.Host == "" || parsedOrigin.Scheme == "" {

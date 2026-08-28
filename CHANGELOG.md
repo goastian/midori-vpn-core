@@ -4,6 +4,8 @@
 
 ### Security
 
+- Browser-extension CORS now accepts only explicitly configured or database-registered exact origins. The one first-use exception is limited to the PKCE token callback, and trusted-origin persistence now matches the deployed `created_at`/`updated_at` schema.
+- Public readiness now exposes only aggregate state. PostgreSQL/Redis latency and WireGuard interface diagnostics moved behind the authenticated administrator API, and Nginx explicitly refuses public `/metrics` requests.
 - Added a shared OpenVPN/IKEv2 client PKI based on device-generated ECDSA CSRs. Core signs and revokes public certificates, publishes a CRL, enforces per-account certificate limits, and never receives or stores device private keys.
 - HTTPS-only CONNECT proxy contract with TLS required either directly or at the trusted host Nginx endpoint.
 - Proxy authentication now accepts only short-lived `vpn-proxy` scoped credentials; general access tokens are rejected.
@@ -19,15 +21,23 @@
 - Added reversible Quadlet configuration for MASQUE, Redis 8.10.1 migration with volume export, PostgreSQL 18 migration-chain tests, Certbot reload hook and Redis persistence sysctl.
 - Updated CI to Go 1.27, Node 24/npm 12 and current stable action majors; Linux releases are signed RPMs built entirely with rootless Podman.
 - Added a validated Quadlet helper that pins locally built images to `Pull=never`, avoiding an accidental registry pull during a controlled staging restart.
-- Added a rootless OpenVPN 2.7.5 gateway image with a pinned runtime base, device-CA CRL refresh, namespace-scoped forwarding/NAT and a Quadlet template that deliberately omits public port publication.
-- Added a strongSwan 6.0.7 IKEv2/EAP-TLS host gateway with verified CRL refresh, XFRM-backed traffic, fresh VICI-backed atomic health status and a systemd hardening profile. Rootless container deployment is explicitly rejected because its user namespace cannot create `NETLINK_XFRM`.
+- Added explicit principal (Control plus local Core) and regional Core deployment
+  profiles. Regional nodes omit the business database, Authentik, Control SPA
+  and private Control/CA signing keys and accept only Ed25519-signed management.
+- Added rootful system Quadlets for OpenVPN 2.7.5/DCO and strongSwan 6.0.7/XFRM
+  after their kernel data planes failed in user namespaces. Both use host
+  networking, minimal capabilities, read-only filesystems, private runtime
+  tmpfs mounts and atomic health files; hardened host units remain fallbacks.
 - Normalize Core's DER client CRL to verified PEM in both OpenVPN and strongSwan gateways before atomic activation.
 - Route the public device CA and DER CRL through Nginx before the SPA fallback, and document the persistent SELinux label required for a rootless Core to read host gateway health.
+- Added a hardened host OpenVPN fallback for kernels where the rootful DCO
+  probe fails. Its verifier publishes fresh atomic health through the same
+  read-only runtime boundary used by IKEv2.
 
 ### Mesh
 
 - Restored authenticated creation, invitation rotation and joining of named Mesh networks, with ownership, capacity and expiry checks.
-- Auto-Mesh no longer invents a country for private or loopback origins. Client IP forwarding is accepted only from `TRUSTED_PROXIES`, unavailable geolocation returns the stable `origin_country_unavailable` contract, and session meshes are never persisted with a fabricated location.
+- Auto-Mesh treats Geo-IP as optional discovery metadata: trusted client-origin parsing remains strict, but an unavailable provider now creates a neutral `[Global]` session (`ZZ`) instead of blocking encrypted Mesh activation. A later activation refreshes the real country when lookup recovers.
 - Added the forward-and-backward-tested migration for `proxy_scheme`, TCP and UDP capabilities in Mesh members and user exit-node selections, eliminating registration failures on upgraded databases.
 
 ### Transport contracts
@@ -37,7 +47,7 @@
 - Added short-lived `vpn-tunnel` credentials bound to a user, active device and server; the credential endpoint does not expose an unfinished transport.
 - Added authenticated UDP↔WSS and RFC 9298 HTTP/3 CONNECT-UDP MASQUE gateways with server binding, connection limits and race-tested end-to-end relay tests.
 - Smart transport selection now measures real WireGuard handshakes and falls back by health and priority across WireGuard, WSS and MASQUE.
-- Health-gated capabilities prevent an enabled but unreachable gateway from being advertised. OpenVPN health now requires its loopback management socket, live interface and an explicit DCO initialization marker; arbitrary health URLs are rejected.
+- Health-gated capabilities prevent an enabled but unreachable gateway from being advertised. OpenVPN health now requires its private management socket, live interface and an explicit DCO initialization marker; new host deployments use a fixed, fresh status file while arbitrary paths and health URLs are rejected.
 - IKEv2 health requires a live VICI daemon and the expected connection. A root-owned worker atomically refreshes a fixed status file every five seconds; Core rejects stale, unsafe or malformed state from its read-only mount, and the capability remains hidden until separately certified.
 - Device-certificate enrollment validity metadata now uses the exact second precision signed into X.509, preventing native clients from rejecting a correctly issued certificate because JSON retained fractional seconds.
 - Added a non-overwriting PKI bootstrap for a P-256 device CA and DNS-bound server-auth gateway certificate. The gateway never mounts the CA signing key.

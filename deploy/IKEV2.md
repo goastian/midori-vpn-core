@@ -2,26 +2,37 @@
 
 IKEv2 is implemented with the same per-device P-256 certificate issued by Core for OpenVPN. The Desktop private key is generated locally, remains in Secret Service and is materialized only in its mode-0700 runtime directory while the tunnel exists.
 
-## Why this gateway is a host service
+## Why this gateway is rootful
 
-The gateway must use the Linux XFRM IPsec stack. A rootless Podman smoke on the supported host fails to create `NETLINK_XFRM` even with container `NET_ADMIN`, so a rootless strongSwan process cannot install a real CHILD_SA. strongSwan's `kernel-libipsec` alternative uses a TUN device and user-space ESP, but its own documentation discourages it for security gateways and high traffic. Therefore this one component runs as a hardened host systemd service; Core, Control, OpenVPN and the other services remain rootless containers.
+The gateway must use the Linux XFRM IPsec stack. A rootless Podman smoke on the
+supported host fails to create `NETLINK_XFRM` even with container `NET_ADMIN`,
+so a rootless strongSwan process cannot install a real CHILD_SA. strongSwan's
+`kernel-libipsec` alternative uses a TUN device and user-space ESP, but its own
+documentation discourages it for security gateways and high traffic. The next
+required tier is a rootful Podman container with host networking and only its
+network capabilities. The hardened host unit is a fallback only if the target
+kernel fails the rootful XFRM probe.
 
-Do not add an IKEv2 Containerfile or claim container health unless a real CHILD_SA and traffic have been demonstrated. References: [strongSwan cloud/container guidance](https://docs.strongswan.org/docs/latest/howtos/cloudPlatforms.html) and [kernel-libipsec limitations](https://docs.strongswan.org/docs/latest/plugins/kernel-libipsec.html).
+Do not certify IKEv2 merely from process or VICI health: a real CHILD_SA and
+traffic must still be demonstrated. References: [strongSwan cloud/container guidance](https://docs.strongswan.org/docs/latest/howtos/cloudPlatforms.html) and [kernel-libipsec limitations](https://docs.strongswan.org/docs/latest/plugins/kernel-libipsec.html).
 
-## Prerequisites and installation layout
+## Rootful Quadlet
 
-The staging host needs strongSwan `6.0.7`, nftables, curl and OpenSSL. Use the distribution package and verify `/usr/libexec/ipsec/charon --version` before starting.
+The image supplies strongSwan `6.0.7`, nftables, curl and OpenSSL. The host
+supplies rootful Podman, Linux XFRM and forwarding:
 
-Build the health binary with the repository's Go 1.27 Podman runner, then install the following files as root:
-
-```text
-cmd/ikev2-health                         -> /usr/local/libexec/midorivpn-ikev2-health (0755)
-deploy/strongswan/entrypoint.sh          -> /usr/local/libexec/midorivpn-ikev2-entrypoint (0755)
-deploy/strongswan/strongswan.conf.template -> /usr/share/midorivpn/strongswan/strongswan.conf.template (0644)
-deploy/strongswan/swanctl.conf.template  -> /usr/share/midorivpn/strongswan/swanctl.conf.template (0644)
-deploy/strongswan/ikev2.env.example      -> /etc/midorivpn/ikev2.env (0600)
-deploy/strongswan/midorivpn-ikev2.service.example -> /etc/systemd/system/midorivpn-ikev2.service (0644)
+```bash
+podman build -f deploy/strongswan/Containerfile \
+  -t localhost/midorivpn-ikev2:2.0.0 .
+install -m 0600 deploy/strongswan/ikev2.env.example /etc/midorivpn/ikev2.env
+install -m 0644 deploy/strongswan/ikev2-gateway.container.example \
+  /etc/containers/systemd/midori-ikev2.container
+systemctl daemon-reload
+systemctl enable --now midori-ikev2.service
 ```
+
+`midorivpn-ikev2.service.example` is the final host fallback. It must not
+coexist with the rootful Quadlet.
 
 Generate PKI once with `scripts/bootstrap-client-pki.sh`. Core receives the CA certificate and signing key. The gateway receives only `client-ca.pem`, `gateway.crt` and `gateway.key`; the CA signing key must never be copied to it.
 

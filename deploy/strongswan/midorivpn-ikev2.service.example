@@ -3,6 +3,7 @@ Description=MidoriVPN strongSwan 6 IKEv2 gateway
 After=network-online.target
 Wants=network-online.target
 ConditionPathExists=/etc/midorivpn/ikev2.env
+Conflicts=midori-ikev2.service
 
 [Service]
 Type=simple

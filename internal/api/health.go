@@ -40,7 +40,19 @@ func (h *HealthChecker) Livez(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HealthChecker) Readyz(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	status, _, httpCode := h.readiness(r.Context())
+	respond.JsonOK(w, map[string]interface{}{"status": status}, httpCode)
+}
+
+// DetailedReadyz exposes dependency names, latency and interface details only
+// through the JWT- and admin-protected route.
+func (h *HealthChecker) DetailedReadyz(w http.ResponseWriter, r *http.Request) {
+	status, checks, httpCode := h.readiness(r.Context())
+	respond.JsonOK(w, map[string]interface{}{"status": status, "checks": checks}, httpCode)
+}
+
+func (h *HealthChecker) readiness(parent context.Context) (string, map[string]interface{}, int) {
+	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 	defer cancel()
 
 	checks := make(map[string]interface{})
@@ -104,8 +116,5 @@ func (h *HealthChecker) Readyz(w http.ResponseWriter, r *http.Request) {
 		httpCode = http.StatusServiceUnavailable
 	}
 
-	respond.JsonOK(w, map[string]interface{}{
-		"status": status,
-		"checks": checks,
-	}, httpCode)
+	return status, checks, httpCode
 }

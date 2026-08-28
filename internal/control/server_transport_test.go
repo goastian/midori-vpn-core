@@ -68,7 +68,7 @@ func TestValidateOpenVPNMetadata(t *testing.T) {
 	valid := map[string]interface{}{
 		"server_name": "vpn.example.test",
 		"dns":         []interface{}{"10.9.0.1", "2001:db8::53"},
-		"health_url":  "http://127.0.0.1:9194/healthz",
+		"health_file": "/run/midorivpn-health/openvpn.json",
 		"certified":   false,
 	}
 	if err := validateOpenVPNMetadata(valid); err != nil {
@@ -76,8 +76,10 @@ func TestValidateOpenVPNMetadata(t *testing.T) {
 	}
 	for name, metadata := range map[string]map[string]interface{}{
 		"external health": {"server_name": "vpn.example.test", "dns": []interface{}{"10.9.0.1"}, "health_url": "http://example.test:9194/healthz"},
-		"IP certificate":  {"server_name": "192.0.2.1", "dns": []interface{}{"10.9.0.1"}, "health_url": "http://127.0.0.1:9194/healthz"},
-		"invalid DNS":     {"server_name": "vpn.example.test", "dns": []interface{}{"resolver.invalid"}, "health_url": "http://127.0.0.1:9194/healthz"},
+		"external file":   {"server_name": "vpn.example.test", "dns": []interface{}{"10.9.0.1"}, "health_file": "/tmp/openvpn.json"},
+		"both health":     {"server_name": "vpn.example.test", "dns": []interface{}{"10.9.0.1"}, "health_file": "/run/midorivpn-health/openvpn.json", "health_url": "http://127.0.0.1:9194/healthz"},
+		"IP certificate":  {"server_name": "192.0.2.1", "dns": []interface{}{"10.9.0.1"}, "health_file": "/run/midorivpn-health/openvpn.json"},
+		"invalid DNS":     {"server_name": "vpn.example.test", "dns": []interface{}{"resolver.invalid"}, "health_file": "/run/midorivpn-health/openvpn.json"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := validateOpenVPNMetadata(metadata); err == nil {
