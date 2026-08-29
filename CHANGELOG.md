@@ -4,6 +4,7 @@
 
 ### Security
 
+- HTTP access logs now record only the method and normalized path plus response metrics. OAuth callback query parameters, client addresses, headers and request bodies are never written to the access log.
 - Extension trust now distinguishes unknown, trusted and administratively revoked origins. Revoked installations are denied before an OAuth code is exchanged, and administrators can list, revoke and restore exact extension origins through protected endpoints.
 - CONNECT target validation now resolves once and dials only the validated public IP answers, rejects mixed public/private DNS results and reserved ranges, and omits browsing targets, users and client addresses from proxy logs.
 - Browser-extension CORS now accepts only explicitly configured or database-registered exact origins. The one first-use exception is limited to the PKCE token callback, and trusted-origin persistence now matches the deployed `created_at`/`updated_at` schema.

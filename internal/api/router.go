@@ -38,7 +38,7 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 		trustedExtensionOrigin = trustedExtRepo.Status
 	}
 
-	r.Use(middleware.Logger)
+	r.Use(sanitizedRequestLogger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.SetHeader("Content-Type", "application/json"))
 	r.Use(CORSMiddleware(cfg, trustedExtensionOrigin))
@@ -223,6 +223,30 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 	}
 
 	return r
+}
+
+// sanitizedRequestLogger records enough request metadata for operations while
+// deliberately excluding the query string, client address, headers and body.
+// OAuth callbacks carry short-lived authorization codes and CSRF state in the
+// query, so logging RequestURI would turn normal access logs into credentials.
+func sanitizedRequestLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		next.ServeHTTP(ww, r)
+
+		status := ww.Status()
+		if status == 0 {
+			status = http.StatusOK
+		}
+		slog.Info("http request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", status,
+			"bytes", ww.BytesWritten(),
+			"duration_ms", time.Since(started).Milliseconds(),
+		)
+	})
 }
 
 // jobCancelFunc stores the cancel function for background jobs
