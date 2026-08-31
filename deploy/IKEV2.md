@@ -83,7 +83,11 @@ Core records `healthy` only when the Unix-socket probe succeeds. User clients st
 
 ## Certification gate
 
-Initially set `IKEV2_PORT=15000` and `IKEV2_NAT_T_PORT=14500`, leaving router and firewalld rules closed. Verify service health and local XFRM state first. During the controlled staging window, restrict the real UDP 500/4500 rules to the tester address and validate:
+Initially set `IKEV2_PORT=15000` and `IKEV2_NAT_T_PORT=14500`, leaving router and firewalld rules closed. Verify service health and local XFRM state first. Before the remote E2E, restart the rootful gateway with `IKEV2_PORT=500` and `IKEV2_NAT_T_PORT=4500`, then restrict those UDP ports to the tester address.
+
+The router must preserve the IKE ports: public `500` must reach host `500`, and public `4500` must reach host `4500`. Do not translate `500` to `15000` or `4500` to `14500`. A client contacting port 500 sends plain IKE, while strongSwan treats traffic received on a non-standard port as encapsulated and expects a four-byte Non-ESP marker; port-only translation therefore causes a silent handshake drop.
+
+During the controlled staging window, validate:
 
 1. EAP-TLS handshake and a real CHILD_SA with the device URN identity.
 2. Full-tunnel traffic, assigned virtual IP, DNS through the configured resolver and leak prevention.
