@@ -18,6 +18,7 @@
 
 ### Operations
 
+- Pinned the Core builder, Alpine runtime and rootless analysis tools to exact supported versions and image digests. Staticcheck and govulncheck no longer resolve mutable `latest` releases during a rebuild.
 - Added rootless Podman development images for Go, Control and Desktop workflows.
 - Added immutable migrations through version 11, including billing/quotas, transport health, unique active peer addresses, Ed25519 identities, removal of retired transport columns, revocable per-device client certificates and the missing Mesh exit-node protocol/capability fields.
 - Deployment scripts reject default credentials and publish proxy upstream only on loopback.

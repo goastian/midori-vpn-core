@@ -1,8 +1,8 @@
-FROM docker.io/library/golang:1.27-alpine
+FROM docker.io/library/golang:1.27.0-alpine3.24@sha256:c0ef102fd47cc7cfb3db3e93c4830f500307e37dad1dca44a3795e783cb0bf58
 
 RUN apk add --no-cache bash build-base git ca-certificates && \
-    go install honnef.co/go/tools/cmd/staticcheck@latest && \
-    go install golang.org/x/vuln/cmd/govulncheck@latest
+    go install honnef.co/go/tools/cmd/staticcheck@2026.2.1 && \
+    go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
 
 ENV GOCACHE=/tmp/go-cache
 WORKDIR /workspace
