@@ -1,34 +1,62 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# Midori VPN — Automated PostgreSQL Backup & Restore Validation Script (SEC-01)
-# ==============================================================================
-set -euo pipefail
+set -Eeuo pipefail
 
-BACKUP_DIR="${BACKUP_DIR:-/tmp/midori-backups}"
-TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-BACKUP_FILE="$BACKUP_DIR/midori_vpn_backup_$TIMESTAMP.sql.gz"
-RESTORE_DB="midori_vpn_restore_test_$TIMESTAMP"
+die() {
+  printf 'Error: %s\n' "$*" >&2
+  exit 1
+}
 
-mkdir -p "$BACKUP_DIR"
+require_identifier() {
+  local name="$1"
+  local value="$2"
+  [[ "$value" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]] || die "$name must be a PostgreSQL identifier"
+}
 
-echo "=== [1/4] Starting PostgreSQL Backup ==="
-podman exec -t postgres-db pg_dump -U midori -d midori_vpn | gzip > "$BACKUP_FILE"
-echo "Backup saved to: $BACKUP_FILE ($(du -h "$BACKUP_FILE" | cut -f1))"
+command -v podman >/dev/null 2>&1 || die "podman is required"
+: "${POSTGRES_CONTAINER:?POSTGRES_CONTAINER is required}"
+: "${POSTGRES_USER:?POSTGRES_USER is required}"
+: "${POSTGRES_DB:?POSTGRES_DB is required}"
+require_identifier POSTGRES_USER "$POSTGRES_USER"
+require_identifier POSTGRES_DB "$POSTGRES_DB"
+[[ "$POSTGRES_DB" != "postgres" && "$POSTGRES_DB" != template* ]] || die "refusing to test a PostgreSQL maintenance database"
 
-echo "=== [2/4] Creating Ephemeral Test Database ==="
-podman exec -t postgres-db psql -U midori -d postgres -c "CREATE DATABASE $RESTORE_DB;"
+podman container exists "$POSTGRES_CONTAINER" || die "PostgreSQL container does not exist"
+[[ "$(podman inspect --format '{{.State.Running}}' "$POSTGRES_CONTAINER")" == "true" ]] || die "PostgreSQL container is not running"
 
-echo "=== [3/4] Restoring into Ephemeral Database ==="
-gunzip -c "$BACKUP_FILE" | podman exec -i postgres-db psql -U midori -d "$RESTORE_DB"
+restore_db="midorivpn_restore_$(date -u +%Y%m%d_%H%M%S)_$$"
+require_identifier restore_db "$restore_db"
+work_dir="$(mktemp -d /tmp/midorivpn-backup-restore.XXXXXX)"
+backup_file="$work_dir/database.dump"
+restore_created=false
 
-echo "=== [4/4] Validating Data Integrity ==="
-USER_COUNT=$(podman exec -t postgres-db psql -U midori -d "$RESTORE_DB" -t -c "SELECT COUNT(*) FROM users;")
-PEER_COUNT=$(podman exec -t postgres-db psql -U midori -d "$RESTORE_DB" -t -c "SELECT COUNT(*) FROM peers;")
+cleanup() {
+  if [[ "$restore_created" == true ]]; then
+    podman exec "$POSTGRES_CONTAINER" dropdb --if-exists --force --username "$POSTGRES_USER" "$restore_db" >/dev/null 2>&1 || true
+  fi
+  rm -rf -- "$work_dir"
+}
+trap cleanup EXIT INT TERM
 
-echo "Restored User Count: $(echo "$USER_COUNT" | tr -d ' ')"
-echo "Restored Peer Count: $(echo "$PEER_COUNT" | tr -d ' ')"
+printf 'Creating a consistent custom-format backup...\n'
+podman exec "$POSTGRES_CONTAINER" pg_dump \
+  --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+  --format custom --compress=6 --no-owner --no-privileges >"$backup_file"
+[[ -s "$backup_file" ]] || die "pg_dump produced an empty backup"
 
-echo "=== Cleanup Ephemeral Database ==="
-podman exec -t postgres-db psql -U midori -d postgres -c "DROP DATABASE $RESTORE_DB;"
+printf 'Restoring into isolated database %s...\n' "$restore_db"
+podman exec "$POSTGRES_CONTAINER" createdb --username "$POSTGRES_USER" "$restore_db"
+restore_created=true
+podman exec -i "$POSTGRES_CONTAINER" pg_restore \
+  --username "$POSTGRES_USER" --dbname "$restore_db" \
+  --exit-on-error --no-owner --no-privileges <"$backup_file"
 
-echo "=== Backup & Restore Validation PASSED ==="
+for table_name in users peers schema_migrations; do
+  require_identifier table_name "$table_name"
+  source_count="$(podman exec "$POSTGRES_CONTAINER" psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align --command "SELECT count(*) FROM $table_name")"
+  restored_count="$(podman exec "$POSTGRES_CONTAINER" psql --username "$POSTGRES_USER" --dbname "$restore_db" --tuples-only --no-align --command "SELECT count(*) FROM $table_name")"
+  [[ "$source_count" =~ ^[0-9]+$ && "$restored_count" =~ ^[0-9]+$ ]] || die "invalid row count for $table_name"
+  [[ "$source_count" == "$restored_count" ]] || die "$table_name row count differs after restore"
+  printf '%s: %s rows verified\n' "$table_name" "$restored_count"
+done
+
+printf 'Backup and isolated restore validation passed.\n'
