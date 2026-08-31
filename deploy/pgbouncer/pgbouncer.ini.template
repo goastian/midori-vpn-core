@@ -1,16 +1,15 @@
 [databases]
-midori_vpn = host=postgres port=5432 dbname=midori_vpn user=midori password=__POSTGRES_PASSWORD__
+__POSTGRES_DB__ = host=__POSTGRES_HOST__ port=__POSTGRES_PORT__ dbname=__POSTGRES_DB__
 
 [pgbouncer]
-listen_port = 6432
 listen_addr = 0.0.0.0
-auth_type = md5
-auth_file = /etc/pgbouncer/userlist.txt
-logfile = /var/log/pgbouncer/pgbouncer.log
-pidfile = /var/run/pgbouncer/pgbouncer.pid
-admin_users = midori
+listen_port = 6432
+unix_socket_dir = /run/pgbouncer/private
+auth_type = scram-sha-256
+auth_file = /run/pgbouncer/private/userlist.txt
+admin_users = __POSTGRES_USER__
+stats_users = __POSTGRES_USER__
 
-# Connection pooling settings
 pool_mode = transaction
 max_client_conn = 1000
 default_pool_size = 50
@@ -18,8 +17,15 @@ min_pool_size = 10
 reserve_pool_size = 5
 reserve_pool_timeout = 5
 max_db_connections = 100
+max_prepared_statements = 100
 
-# Timeouts
+server_reset_query = DISCARD ALL
+server_check_query = select 1
+server_check_delay = 30
 server_idle_timeout = 600
 client_idle_timeout = 0
 query_timeout = 30
+log_connections = 0
+log_disconnections = 0
+log_pooler_errors = 1
+pidfile = /run/pgbouncer/private/pgbouncer.pid

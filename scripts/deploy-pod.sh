@@ -51,7 +51,7 @@ require_value CORE_NODE_NAME
 [[ "${CORE_NODE_NAME}" =~ ^[a-z0-9][a-z0-9-]{0,30}$ ]] || die "CORE_NODE_NAME must be a lowercase DNS label"
 
 for required_var in \
-  CORE_IMAGE CONTROL_IMAGE POSTGRES_IMAGE REDIS_IMAGE \
+  CORE_IMAGE CONTROL_IMAGE POSTGRES_IMAGE PGBOUNCER_IMAGE REDIS_IMAGE \
   VPN_CORE_PORT VPN_CORE_HOST_PORT CONTROL_CONTAINER_PORT CONTROL_HOST_PORT \
   WG_PORT WG_INTERFACE WG_SUBNET WG_CONFIG_DIR WG_ENDPOINT VPN_DNS \
   POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB REDIS_PASSWORD \
@@ -147,6 +147,28 @@ echo "⏳ Esperando PostgreSQL y Redis..."
 wait_healthy midori-postgres
 wait_healthy midori-redis
 
+echo "🔗 Iniciando PgBouncer..."
+podman run -d \
+  --pod "${POD_NAME}" \
+  --name midori-pgbouncer \
+  --restart always \
+  --read-only \
+  --cap-drop=ALL \
+  --security-opt no-new-privileges \
+  --tmpfs /run/pgbouncer:rw,noexec,nosuid,nodev,size=4m,mode=1733 \
+  -e POSTGRES_HOST=127.0.0.1 \
+  -e POSTGRES_PORT=5432 \
+  -e POSTGRES_USER="${POSTGRES_USER}" \
+  -e POSTGRES_PASSWORD="${POSTGRES_PASSWORD}" \
+  -e POSTGRES_DB="${POSTGRES_DB}" \
+  --health-cmd 'PGPASSWORD="$POSTGRES_PASSWORD" pg_isready -h 127.0.0.1 -p 6432 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  --health-interval 2s \
+  --health-timeout 3s \
+  --health-retries 30 \
+  "${PGBOUNCER_IMAGE}"
+
+wait_healthy midori-pgbouncer
+
 echo "🛡️ Iniciando midori-vpn-core..."
 core_volume_args=(-v wg-config:/etc/wireguard:Z)
 if [ "${MASQUE_ENABLED}" = "true" ]; then
@@ -163,7 +185,9 @@ podman run -d \
   --cap-add=NET_ADMIN \
   --cap-add=NET_RAW \
   --env-file "${ENV_FILE}" \
+  -e DATABASE_URL= \
   -e POSTGRES_HOST=127.0.0.1 \
+  -e POSTGRES_PORT=6432 \
   -e REDIS_HOST=127.0.0.1 \
   "${core_volume_args[@]}" \
   --health-cmd 'wget -q -O /dev/null "http://127.0.0.1:$VPN_CORE_PORT/readyz"' \

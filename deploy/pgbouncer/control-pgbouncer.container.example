@@ -1,0 +1,29 @@
+[Unit]
+Description=MidoriVPN PgBouncer transaction pool
+Requires=control-postgres.service
+After=control-postgres.service
+
+[Container]
+ContainerName=control-pgbouncer
+Image=localhost/midorivpn-pgbouncer:2.0.0
+Pod=midori-control.pod
+EnvironmentFile=/home/midorivpn/.config/containers/systemd/midori-control/midori-control.env
+Environment=POSTGRES_HOST=127.0.0.1
+Environment=POSTGRES_PORT=5432
+ReadOnly=true
+ReadOnlyTmpfs=false
+DropCapability=all
+NoNewPrivileges=true
+Tmpfs=/run/pgbouncer:rw,noexec,nosuid,nodev,size=4m,mode=1733
+HealthCmd=pg_isready -h 127.0.0.1 -p 6432 -U midori -d midori_vpn
+HealthInterval=5s
+HealthTimeout=3s
+HealthRetries=6
+HealthOnFailure=kill
+Notify=healthy
+Pull=never
+
+[Service]
+Restart=always
+RestartSec=5s
+TimeoutStartSec=120

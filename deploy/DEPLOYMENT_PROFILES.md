@@ -19,14 +19,36 @@ always remain rootless.
 ## Principal profile: Control plus one local Core
 
 The principal server runs one rootless Podman pod containing PostgreSQL,
-Redis, the Control-enabled Core API and the Control SPA. The same Core process
+PgBouncer, Redis, the Control-enabled Core API and the Control SPA. PgBouncer
+uses transaction pooling and SCRAM-SHA-256 authentication; its generated
+configuration and credential file live only in a private tmpfs. Core connects
+to PostgreSQL exclusively through the pooler. The same Core process
 also owns the local WireGuard interface and therefore represents the first VPN
 exit node. Only loopback HTTP ports are published; host Nginx is the sole
 public TLS entry point.
 
 Set `DEPLOYMENT_PROFILE=principal`, choose a unique lowercase
 `CORE_NODE_NAME`, and run `scripts/deploy-pod.sh` as the dedicated unprivileged
-service account.
+service account. Build the pinned pooler image first with:
+
+```text
+podman build -f deploy/pgbouncer/Containerfile \
+  -t localhost/midorivpn-pgbouncer:2.0.0 .
+```
+
+Validate the pooler against an isolated PostgreSQL instance before deployment:
+
+```text
+PGBOUNCER_IMAGE=localhost/midorivpn-pgbouncer:2.0.0 \
+POSTGRES_IMAGE=<postgres-18-image-by-digest> \
+bash scripts/test-pgbouncer.sh
+```
+
+For an existing Quadlet deployment, adapt
+`deploy/pgbouncer/control-pgbouncer.container.example` to the service account
+and install `deploy/pgbouncer/control-api.container.d/30-pgbouncer.conf.example`
+as a drop-in for Core. The dependency and `Notify=healthy` gate prevent Core
+from starting before the pooler passes its local probe.
 
 The principal has the cluster signing identity:
 

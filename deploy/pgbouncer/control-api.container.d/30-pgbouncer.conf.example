@@ -1,0 +1,9 @@
+[Unit]
+Requires=control-pgbouncer.service
+After=control-pgbouncer.service
+
+[Container]
+Environment=DATABASE_URL=
+Environment=POSTGRES_HOST=127.0.0.1
+Environment=POSTGRES_PORT=6432
+Environment=POSTGRES_SSLMODE=disable

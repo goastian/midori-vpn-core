@@ -1,0 +1,15 @@
+FROM docker.io/library/alpine:3.24.1@sha256:79ff19e9084a00eece421b2523fb93e22d730e2c0e525905de047e848e56d95f
+
+RUN apk add --no-cache \
+      pgbouncer=1.25.2-r0 \
+      postgresql18-client=18.6-r0 && \
+    addgroup -S -g 71 pgbouncer && \
+    adduser -S -D -H -u 71 -G pgbouncer pgbouncer && \
+    install -d -o pgbouncer -g pgbouncer -m 0700 /run/pgbouncer
+
+COPY --chmod=0755 deploy/pgbouncer/entrypoint.sh /usr/local/bin/midorivpn-pgbouncer
+COPY --chmod=0444 deploy/pgbouncer/pgbouncer.ini.template /usr/share/midorivpn/pgbouncer.ini.template
+
+USER pgbouncer
+EXPOSE 6432
+ENTRYPOINT ["/usr/local/bin/midorivpn-pgbouncer"]
