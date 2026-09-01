@@ -18,6 +18,9 @@
 
 ### Operations
 
+- Defined the 2.0.0 release supply-chain contract for OCI images, the Linux
+  RPM and browser-store packages, including immutable build inputs, SPDX SBOMs,
+  provenance, existing RPM trust, keyless OCI identity and store-signing gates.
 - Added private, digest-pinned Prometheus 3.14 and Grafana 13.2 Quadlets with
   loopback-only administration, a dedicated in-network scrape path, seven
   operational alerts and rollback-protected deployment. The dashboard now

@@ -145,6 +145,11 @@ See `deploy/OBSERVABILITY.md` for rendering, deployment and rollback.
 
 Development is performed only on local branch `dev-wedc`. Nothing is pushed or made public from this workspace. Generated artifacts are signed and verified locally before transfer to the test client. Changelogs must be updated for every release change.
 
+The required artifact set, trust identities, SBOM/provenance evidence and
+store-signing gates are defined in `docs/RELEASE_SUPPLY_CHAIN.md`. Preparing a
+release does not authorize a tag, registry upload, store submission or public
+GitHub release.
+
 ## License
 
 AGPL-3.0-or-later. See `LICENSE`.
