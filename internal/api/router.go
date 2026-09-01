@@ -30,6 +30,12 @@ func NewRouter(cfg *config.Config, mgr *wg.Manager, verifier *nodeauth.Verifier)
 }
 
 func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *auth.JWKSProvider, verifier *nodeauth.Verifier, clientCertificateAuthority *clientpki.Authority) *chi.Mux {
+	return newRouter(cfg, mgr, pool, jwks, verifier, clientCertificateAuthority, true)
+}
+
+// newRouter keeps route registration independently testable without starting
+// long-lived workers. Production constructors always enable the workers.
+func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *auth.JWKSProvider, verifier *nodeauth.Verifier, clientCertificateAuthority *clientpki.Authority, startWorkers bool) *chi.Mux {
 	r := chi.NewRouter()
 	var trustedExtRepo *repo.TrustedExtensionRepo
 	var trustedExtensionOrigin ExtensionOriginChecker
@@ -102,7 +108,9 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 
 		// Create WS hub early so mesh handler can broadcast to connected clients.
 		wsHub := control.NewWSHub(cfg)
-		go wsHub.Run()
+		if startWorkers {
+			go wsHub.Run()
+		}
 		ch := control.NewHandlerWithMesh(pool, cfg, mgr, wsHub)
 		ch.SetNodeVerifier(verifier)
 		ch.SetClientCertificateAuthority(clientCertificateAuthority)
@@ -213,13 +221,15 @@ func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jw
 			wsHub.HandleWS(w, req, cfg, jwks)
 		})
 
-		// Start background jobs with cancellation support
-		jobCtx, jobCancel := context.WithCancel(context.Background())
-		go control.StartStatsSync(jobCtx, pool, wsHub)
-		go control.StartTransportHealthSync(jobCtx, pool)
-		go control.StartPeerCleanup(jobCtx, pool)
-		go control.StartSessionMeshCleanup(jobCtx, pool)
-		SetJobCancel(jobCancel)
+		if startWorkers {
+			// Start background jobs with cancellation support.
+			jobCtx, jobCancel := context.WithCancel(context.Background())
+			go control.StartStatsSync(jobCtx, pool, wsHub)
+			go control.StartTransportHealthSync(jobCtx, pool)
+			go control.StartPeerCleanup(jobCtx, pool)
+			go control.StartSessionMeshCleanup(jobCtx, pool)
+			SetJobCancel(jobCancel)
+		}
 	}
 
 	return r
