@@ -139,6 +139,20 @@ These build jobs have read-only repository permissions and no registry login,
 GitHub Release, store upload or public deployment step. Publication, GitHub
 attestation and keyless OCI signing remain a separate approval-gated stage.
 
+## Approval-gated signing stage
+
+Core and Control provide a separate manual `publish.yml` bound to the annotated
+`v2.0.0` tag and the protected `release-production` environment. Each refuses
+to replace an existing version tag, pushes one immutable digest, creates GitHub
+SLSA and SPDX attestations, signs with the short-lived workflow OIDC identity
+through Cosign 3.1.2, and verifies all three records immediately. Desktop uses
+the protected `release-signing` environment and rejects any OpenPGP identity
+other than the established primary and signing-subkey fingerprints.
+
+Environment configuration and the operator sequence are documented in
+[`RELEASE_OPERATIONS.md`](RELEASE_OPERATIONS.md). Merely committing these
+workflows does not authorize running them.
+
 ## External references
 
 - [GitHub artifact attestations](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations)

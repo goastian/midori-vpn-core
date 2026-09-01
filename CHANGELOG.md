@@ -18,6 +18,9 @@
 
 ### Operations
 
+- Added approval-gated OCI publication workflows that require the annotated
+  2.0.0 tag, protected environments and explicit confirmation, then create and
+  verify GitHub attestations and a keyless Cosign signature by digest.
 - Added a non-publishing release evidence gate with immutable GitHub Actions,
   a four-repository commit manifest, reproducible OCI inputs, SPDX output and
   checksums. Registry upload and signing remain a separately approved stage.
