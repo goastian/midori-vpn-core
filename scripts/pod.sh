@@ -28,6 +28,7 @@ IMAGE_GO="localhost/midori-dev-go:latest"
 IMAGE_NODE="localhost/midori-dev-node:latest"
 IMAGE_TAURI="localhost/midori-dev-tauri:latest"
 IMAGE_PROMETHEUS="docker.io/prom/prometheus@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0"
+IMAGE_SYFT="ghcr.io/anchore/syft@sha256:41f8289664101d6ebab30a97ac8df6b6f86b92d8343285ca90f428e2bc353106"
 PODMAN_USERNS=(--userns=keep-id:uid=0,gid=0)
 
 build_image_if_missing() {
@@ -97,6 +98,14 @@ cmd_promtool() {
         -w "${WORKDIR_IN_CONTAINER}" \
         --entrypoint /bin/promtool \
         "${IMAGE_PROMETHEUS}" "$@"
+}
+
+cmd_syft() {
+    podman run --rm "${PODMAN_USERNS[@]}" \
+        -v "${ROOT_DIR}:/workspace:z" \
+        -e SYFT_CACHE_DIR=/tmp/syft-cache \
+        -w "${WORKDIR_IN_CONTAINER}" \
+        "${IMAGE_SYFT}" "$@"
 }
 
 cmd_tauri() {
@@ -246,6 +255,10 @@ case "$1" in
         shift
         cmd_promtool "$@"
         ;;
+    syft)
+        shift
+        cmd_syft "$@"
+        ;;
     tauri)
         shift
         cmd_tauri "$@"
@@ -264,7 +277,7 @@ case "$1" in
         cmd_build_images
         ;;
     *)
-        echo "Uso: $0 {go|gofmt|staticcheck|govulncheck|node|npm|npx|promtool|tauri|cargo|audit|debt|build-images} [argumentos...]"
+        echo "Uso: $0 {go|gofmt|staticcheck|govulncheck|node|npm|npx|promtool|syft|tauri|cargo|audit|debt|build-images} [argumentos...]"
         echo ""
         echo "Ejemplos:"
         echo "  $0 go test ./..."

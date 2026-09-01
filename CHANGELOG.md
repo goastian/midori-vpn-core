@@ -18,6 +18,9 @@
 
 ### Operations
 
+- Added a non-publishing release evidence gate with immutable GitHub Actions,
+  a four-repository commit manifest, reproducible OCI inputs, SPDX output and
+  checksums. Registry upload and signing remain a separately approved stage.
 - Defined the 2.0.0 release supply-chain contract for OCI images, the Linux
   RPM and browser-store packages, including immutable build inputs, SPDX SBOMs,
   provenance, existing RPM trust, keyless OCI identity and store-signing gates.

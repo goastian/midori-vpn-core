@@ -1,3 +1,5 @@
+ARG SOURCE_DATE_EPOCH=0
+
 # ── Stage 1: Build ──
 FROM docker.io/library/golang:1.27.0-alpine3.24@sha256:c0ef102fd47cc7cfb3db3e93c4830f500307e37dad1dca44a3795e783cb0bf58 AS builder
 

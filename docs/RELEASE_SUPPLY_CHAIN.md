@@ -125,6 +125,20 @@ the permanent-install gate.
 - AMO/CWS account identifiers, protected environments and store credentials
   still require operator configuration before submission can be tested.
 
+## Build-only evidence gate
+
+The first release stage is intentionally non-publishing. Core and Control
+produce OCI archives with embedded BuildKit SBOM/provenance plus an independent
+Syft SPDX document. Desktop verifies its existing OpenPGP identity in an
+isolated RPM database before producing SPDX and local provenance. The extension
+creates distinct, normalized Firefox and Chromium ZIPs, a reviewer source ZIP,
+SPDX documents and local provenance. Every set carries `SHA256SUMS` and is kept
+only as a short-lived CI artifact for human review.
+
+These build jobs have read-only repository permissions and no registry login,
+GitHub Release, store upload or public deployment step. Publication, GitHub
+attestation and keyless OCI signing remain a separate approval-gated stage.
+
 ## External references
 
 - [GitHub artifact attestations](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations)
