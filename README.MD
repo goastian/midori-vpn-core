@@ -2,6 +2,10 @@
 
 Midori VPN is a Linux-first VPN platform built around WireGuard. The workspace contains the Go Core/Control API, the Vue Control panel, a native Go Linux agent with a browser-served Vue UI, and Firefox/Chromium proxy extensions.
 
+The versioned HTTP contract is [docs/openapi.yaml](docs/openapi.yaml). Router
+coverage is checked bidirectionally so documented and implemented operations
+cannot drift silently.
+
 Version 2.0.0 is an active rework. Linux x86_64 RPM is the only production client target. Windows and macOS source is preserved, but their build and release jobs remain blocked until each native path is certified.
 
 ## Verified transports

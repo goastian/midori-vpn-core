@@ -63,6 +63,9 @@
 - Connection listings can no longer serialize WireGuard preshared keys.
   Authorized one-time configuration, text and QR responses are explicitly
   marked sensitive and sent with `Cache-Control: no-store`.
+- Control, Desktop and browser-extension consumers now preserve stable API
+  error codes instead of reducing failures to prose. Their connection-list
+  types also match the secret-free OpenAPI summary contract.
 
 ### Transport contracts
 

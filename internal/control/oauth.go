@@ -253,7 +253,6 @@ func (h *OAuthHandler) exchangeAuthentikToken(operation string, form url.Values)
 		slog.Error("[AUTH] "+operation+" failed to read Authentik response",
 			"error", err,
 			"status", resp.StatusCode,
-			"authentik_request_id", resp.Header.Get("X-Authentik-Id"),
 			"duration_ms", time.Since(start).Milliseconds(),
 		)
 		return TokenResponse{}, resp.StatusCode, nil, newTokenExchangeError(
@@ -267,7 +266,6 @@ func (h *OAuthHandler) exchangeAuthentikToken(operation string, form url.Values)
 	slog.Info("[AUTH] "+operation+" Authentik response",
 		"status", resp.StatusCode,
 		"body_length", len(body),
-		"authentik_request_id", resp.Header.Get("X-Authentik-Id"),
 		"duration_ms", time.Since(start).Milliseconds(),
 	)
 

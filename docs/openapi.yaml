@@ -199,9 +199,7 @@ paths:
         '429': {$ref: '#/components/responses/TooManyRequests'}
         '502': {$ref: '#/components/responses/BadGateway'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
-        default:
-          description: Authentik may return its JSON OAuth error body unchanged.
-          content: {application/json: {schema: {type: object, additionalProperties: true}}}
+        default: {$ref: '#/components/responses/InternalError'}
   /api/v1/auth/logout:
     post:
       operationId: logoutOIDCSession
