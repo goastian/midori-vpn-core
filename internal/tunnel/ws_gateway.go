@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/goastian/midori-vpn-core/internal/proxytoken"
+	"github.com/goastian/midori-vpn-core/internal/respond"
 	"github.com/google/uuid"
 )
 
@@ -36,18 +37,18 @@ func NewWSGateway(wgPort int, secret string, serverID uuid.UUID, maxClients int)
 func (g *WSGateway) Handler(w http.ResponseWriter, r *http.Request) {
 	if g.maxClients > 0 && g.active.Add(1) > g.maxClients {
 		g.active.Add(-1)
-		http.Error(w, "tunnel capacity reached", http.StatusTooManyRequests)
+		respond.JsonError(w, "tunnel capacity reached", http.StatusTooManyRequests)
 		return
 	}
 	defer g.active.Add(-1)
 	header := r.Header.Get("Authorization")
 	if !strings.HasPrefix(header, "Bearer ") {
-		http.Error(w, "tunnel authentication required", http.StatusUnauthorized)
+		respond.JsonError(w, "tunnel authentication required", http.StatusUnauthorized)
 		return
 	}
 	claims, ok := proxytoken.ValidateTunnel(strings.TrimSpace(strings.TrimPrefix(header, "Bearer ")), g.secret)
 	if !ok || claims.ServerID != g.serverID {
-		http.Error(w, "invalid tunnel credential", http.StatusUnauthorized)
+		respond.JsonError(w, "invalid tunnel credential", http.StatusUnauthorized)
 		return
 	}
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{})

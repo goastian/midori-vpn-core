@@ -46,6 +46,24 @@
 - Auto-Mesh treats Geo-IP as optional discovery metadata: trusted client-origin parsing remains strict, but an unavailable provider now creates a neutral `[Global]` session (`ZZ`) instead of blocking encrypted Mesh activation. A later activation refreshes the real country when lookup recovers.
 - Added the forward-and-backward-tested migration for `proxy_scheme`, TCP and UDP capabilities in Mesh members and user exit-node selections, eliminating registration failures on upgraded databases.
 
+### API contract
+
+- Added a versioned OpenAPI 3.1 contract and a bidirectional router coverage
+  test so method or path drift fails the Go test suite.
+- Standardized JSON failures with stable machine-readable codes, including JWT,
+  WSS and OAuth provider failures. Arbitrary Authentik error bodies and request
+  identifiers are no longer forwarded to clients or written to application
+  logs.
+- Made `/api/v1/control/mesh` the exact canonical list/create path and changed
+  exit-node deregistration to identify the mesh in the URL instead of requiring
+  a body on `DELETE`.
+- Removed the permanently unimplemented Apple mobileconfig route. Native IKEv2
+  remains available through per-device certificate enrollment and the Desktop
+  client, without publishing a plausible but unusable profile.
+- Connection listings can no longer serialize WireGuard preshared keys.
+  Authorized one-time configuration, text and QR responses are explicitly
+  marked sensitive and sent with `Cache-Control: no-store`.
+
 ### Transport contracts
 
 - Added the normalized `vpn_server_transports` schema. Server capabilities carry enabled state, priority, health state, check timestamp and protocol metadata; the retired proxy/WSS server columns are removed after a guarded migration.

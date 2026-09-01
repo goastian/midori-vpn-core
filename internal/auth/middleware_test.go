@@ -255,6 +255,19 @@ func TestJWTMiddleware_MissingAuthHeader(t *testing.T) {
 	if rr.Code != http.StatusUnauthorized {
 		t.Errorf("expected 401, got %d", rr.Code)
 	}
+	var response struct {
+		OK   bool   `json:"ok"`
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.OK || response.Code != "unauthorized" {
+		t.Fatalf("unexpected error envelope: %#v", response)
+	}
+	if got := rr.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q", got)
+	}
 }
 
 func TestJWTMiddleware_InvalidAuthFormat(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -75,8 +76,7 @@ func (h *ExitNodeHandler) RegisterExitNode(w http.ResponseWriter, r *http.Reques
 }
 
 // DeregisterExitNode removes the calling user's exit-node status.
-// DELETE /api/v1/control/mesh/exit-node/register
-// Body: { "mesh_id": "..." }
+// DELETE /api/v1/control/mesh/exit-node/register/{meshID}
 func (h *ExitNodeHandler) DeregisterExitNode(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r)
 	if user == nil {
@@ -85,19 +85,13 @@ func (h *ExitNodeHandler) DeregisterExitNode(w http.ResponseWriter, r *http.Requ
 	}
 	userID := user.ID
 
-	var req struct {
-		MeshID uuid.UUID `json:"mesh_id"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respond.JsonError(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	if req.MeshID == uuid.Nil {
-		respond.JsonError(w, "mesh_id required", http.StatusBadRequest)
+	meshID, err := uuid.Parse(chi.URLParam(r, "meshID"))
+	if err != nil {
+		respond.JsonError(w, "invalid mesh id", http.StatusBadRequest)
 		return
 	}
 
-	if err := h.repo.DeregisterExitNode(r.Context(), userID, req.MeshID); err != nil {
+	if err := h.repo.DeregisterExitNode(r.Context(), userID, meshID); err != nil {
 		slog.Error("DeregisterExitNode", "err", err)
 		respond.JsonError(w, "failed to deregister exit node", http.StatusInternalServerError)
 		return

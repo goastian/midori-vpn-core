@@ -13,6 +13,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/models"
 	"github.com/goastian/midori-vpn-core/internal/repo"
+	"github.com/goastian/midori-vpn-core/internal/respond"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -39,13 +40,13 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("Authorization")
 			if authHeader == "" {
-				http.Error(w, `{"ok":false,"error":"missing Authorization header"}`, http.StatusUnauthorized)
+				respond.JsonError(w, "missing Authorization header", http.StatusUnauthorized)
 				return
 			}
 
 			scheme, tokenStr, found := strings.Cut(authHeader, " ")
 			if !found || !strings.EqualFold(scheme, "bearer") || strings.TrimSpace(tokenStr) == "" {
-				http.Error(w, `{"ok":false,"error":"invalid Authorization format"}`, http.StatusUnauthorized)
+				respond.JsonError(w, "invalid Authorization format", http.StatusUnauthorized)
 				return
 			}
 			tokenStr = strings.TrimSpace(tokenStr)
@@ -76,7 +77,7 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 						"remote", r.RemoteAddr,
 						"error", intErr,
 					)
-					http.Error(w, `{"ok":false,"error":"invalid token"}`, http.StatusUnauthorized)
+					respond.JsonError(w, "invalid token", http.StatusUnauthorized)
 					return
 				}
 				if claims.Iss != "" && !sameIssuer(claims.Iss, cfg.AuthentikTokenIssuer()) {
@@ -84,7 +85,7 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 						"got", claims.Iss,
 						"expected", cfg.AuthentikTokenIssuer(),
 					)
-					http.Error(w, `{"ok":false,"error":"invalid token issuer"}`, http.StatusUnauthorized)
+					respond.JsonError(w, "invalid token issuer", http.StatusUnauthorized)
 					return
 				}
 				sub = claims.Sub
@@ -114,11 +115,11 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 							"remote", r.RemoteAddr,
 							"error", intErr,
 						)
-						http.Error(w, `{"ok":false,"error":"invalid token"}`, http.StatusUnauthorized)
+						respond.JsonError(w, "invalid token", http.StatusUnauthorized)
 						return
 					}
 					if claims.Iss != "" && !sameIssuer(claims.Iss, cfg.AuthentikTokenIssuer()) {
-						http.Error(w, `{"ok":false,"error":"invalid token issuer"}`, http.StatusUnauthorized)
+						respond.JsonError(w, "invalid token issuer", http.StatusUnauthorized)
 						return
 					}
 					sub = claims.Sub
@@ -127,7 +128,7 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 				} else {
 					iss, _ := token.Issuer()
 					if !sameIssuer(iss, cfg.AuthentikTokenIssuer()) {
-						http.Error(w, `{"ok":false,"error":"invalid token issuer"}`, http.StatusUnauthorized)
+						respond.JsonError(w, "invalid token issuer", http.StatusUnauthorized)
 						return
 					}
 					sub, _ = token.Subject()
@@ -137,14 +138,14 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 			}
 
 			if sub == "" {
-				http.Error(w, `{"ok":false,"error":"missing sub claim"}`, http.StatusUnauthorized)
+				respond.JsonError(w, "missing sub claim", http.StatusUnauthorized)
 				return
 			}
 
 			user, err := userRepo.UpsertByAuthentikUID(r.Context(), sub, email, groups)
 			if err != nil {
 				slog.Error("JIT provisioning error", "sub", sub, "error", err)
-				http.Error(w, `{"ok":false,"error":"user provisioning failed"}`, http.StatusInternalServerError)
+				respond.JsonError(w, "user provisioning failed", http.StatusInternalServerError)
 				return
 			}
 

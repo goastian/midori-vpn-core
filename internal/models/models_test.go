@@ -1,6 +1,24 @@
 package models
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestPeerJSONNeverContainsPresharedKey(t *testing.T) {
+	encoded, err := json.Marshal(Peer{PresharedKey: "secret-psk"})
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), "preshared_key")
+	require.NotContains(t, string(encoded), "secret-psk")
+}
+
+func TestConnectionConfigCanReturnPresharedKeyOnce(t *testing.T) {
+	encoded, err := json.Marshal(ConnectionConfig{PresharedKey: "one-time-psk"})
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"preshared_key":"one-time-psk"`)
+}
 
 func TestVPNServerApplyCapabilitiesRequiresExplicitTransports(t *testing.T) {
 	server := VPNServer{IsActive: true, WGPort: 51820, PublicKey: "server-key"}

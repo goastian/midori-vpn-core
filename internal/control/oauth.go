@@ -289,13 +289,37 @@ func writeTokenExchangeError(w http.ResponseWriter, publicFallback string, err e
 		if exchangeErr.retryAfter > 0 {
 			w.Header().Set("Retry-After", strings.TrimSuffix(exchangeErr.retryAfter.String(), "s"))
 		}
-		respond.JsonError(w, exchangeErr.publicMessage, exchangeErr.statusCode)
+		respond.JsonErrorCode(w, exchangeErr.publicMessage, "auth_provider_unavailable", exchangeErr.statusCode)
 		return
 	}
-	respond.JsonError(w, publicFallback, http.StatusBadGateway)
+	respond.JsonErrorCode(w, publicFallback, "auth_provider_unavailable", http.StatusBadGateway)
+}
+
+func writeAuthProviderRejection(w http.ResponseWriter, status int, body []byte) {
+	if status == http.StatusTooManyRequests {
+		respond.JsonErrorCode(w, "auth provider rate limit exceeded", "auth_provider_rate_limited", status)
+		return
+	}
+	if status < http.StatusBadRequest || status >= http.StatusInternalServerError {
+		respond.JsonErrorCode(w, "auth provider temporarily unavailable; retry later", "auth_provider_unavailable", http.StatusBadGateway)
+		return
+	}
+
+	code := "auth_provider_rejected"
+	var oauthError struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &oauthError) == nil {
+		switch oauthError.Error {
+		case "invalid_grant", "invalid_request", "unauthorized_client", "unsupported_grant_type":
+			code = "oauth_" + oauthError.Error
+		}
+	}
+	respond.JsonErrorCode(w, "auth provider rejected the request", code, status)
 }
 
 func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	slog.Info("[AUTH] Refresh hit", "remote", r.RemoteAddr)
 
 	var req RefreshRequest
@@ -333,10 +357,8 @@ func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if authStatus != http.StatusOK {
-		slog.Warn("[AUTH] Refresh Authentik returned error", "status", authStatus, "body", string(body))
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(authStatus)
-		w.Write(body)
+		slog.Warn("[AUTH] Refresh Authentik returned error", "status", authStatus)
+		writeAuthProviderRejection(w, authStatus, body)
 		return
 	}
 
@@ -345,6 +367,7 @@ func (h *OAuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	slog.Info("[AUTH] Callback hit", "method", r.Method, "path", r.URL.Path)
 
 	// Read and parse the body first so we can inspect code_verifier before
@@ -414,11 +437,8 @@ func (h *OAuthHandler) Callback(w http.ResponseWriter, r *http.Request) {
 	if authStatus != http.StatusOK {
 		slog.Warn("[AUTH] Callback Authentik returned error",
 			"status", authStatus,
-			"body", string(body),
 		)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(authStatus)
-		w.Write(body)
+		writeAuthProviderRejection(w, authStatus, body)
 		return
 	}
 
@@ -493,6 +513,7 @@ func (h *OAuthHandler) isAllowedRedirectURI(redirectURI string) bool {
 // user authenticates; the extension's background script detects the navigation
 // via webNavigation.onCommitted and exchanges the code for tokens.
 func (h *OAuthHandler) ExtensionCallback(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	slog.Info("[AUTH] ExtensionCallback hit",
 		"remote", r.RemoteAddr,
 		"has_code", r.URL.Query().Get("code") != "",
@@ -552,6 +573,7 @@ type LogoutRequest struct {
 // also revokes the refresh token at the Authentik token revocation endpoint.
 // The endpoint is idempotent: unknown or already-invalidated tokens return 200.
 func (h *OAuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	slog.Info("[AUTH] Logout hit", "remote", r.RemoteAddr)
 
 	if !h.csrfCheck(w, r) {

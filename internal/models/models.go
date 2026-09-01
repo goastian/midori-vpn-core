@@ -92,7 +92,7 @@ type Peer struct {
 	UserEmail     string     `json:"user_email,omitempty"`
 	ServerID      uuid.UUID  `json:"server_id"`
 	PublicKey     string     `json:"public_key"`
-	PresharedKey  string     `json:"preshared_key,omitempty"`
+	PresharedKey  string     `json:"-"`
 	AssignedIP    string     `json:"assigned_ip"`
 	IsActive      bool       `json:"is_active"`
 	DeviceName    string     `json:"device_name"`

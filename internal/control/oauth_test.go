@@ -146,7 +146,7 @@ func TestOAuthRefreshSuccess(t *testing.T) {
 	}
 }
 
-func TestOAuthRefreshAuthentikErrorPassThrough(t *testing.T) {
+func TestOAuthRefreshAuthentikErrorIsNormalized(t *testing.T) {
 	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Authentik-Id", "req-refresh-400")
@@ -166,11 +166,18 @@ func TestOAuthRefreshAuthentikErrorPassThrough(t *testing.T) {
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
 	}
-	if got := rr.Body.String(); got != `{"error":"invalid_grant","request_id":"req-refresh-400"}` {
-		t.Fatalf("body = %q", got)
+	got := decodeJSONMap(t, rr)
+	if got["ok"] != false || got["code"] != "oauth_invalid_grant" || got["error"] != "auth provider rejected the request" {
+		t.Fatalf("unexpected envelope: %#v", got)
+	}
+	if _, exposed := got["request_id"]; exposed {
+		t.Fatalf("upstream request_id was exposed: %#v", got)
 	}
 	if got := rr.Header().Get("Retry-After"); got != "" {
 		t.Fatalf("Retry-After = %q, want empty", got)
+	}
+	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
 	}
 }
 
@@ -262,6 +269,9 @@ func TestOAuthCallbackUpstreamTimeoutReturnsRetryAfter(t *testing.T) {
 	}
 	if got["error"] != "auth provider temporarily unavailable; retry later" {
 		t.Fatalf("error = %v", got["error"])
+	}
+	if got["code"] != "auth_provider_unavailable" {
+		t.Fatalf("code = %v", got["code"])
 	}
 }
 

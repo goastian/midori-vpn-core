@@ -481,6 +481,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 			if idx := strings.Index(peerIPAddr, "/"); idx != -1 {
 				peerIPAddr = peerIPAddr[:idx]
 			}
+			w.Header().Set("Cache-Control", "no-store")
 			respond.JsonOK(w, models.ConnectionConfig{
 				PeerID:          existingPeer.ID,
 				PeerIP:          peerIPAddr,
@@ -500,7 +501,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	// 2. Enforce global user device limit based on plan/quota
 	userQuota := h.getUserQuota(r.Context(), user)
 	if userQuota.ConnectedDevices >= userQuota.MaxDevices {
-		respond.JsonError(w, fmt.Sprintf("device limit reached (%d/%d devices in use on your %s)", userQuota.ConnectedDevices, userQuota.MaxDevices, userQuota.PlanName), http.StatusConflict)
+		respond.JsonErrorCode(w, fmt.Sprintf("device limit reached (%d/%d devices in use on your %s)", userQuota.ConnectedDevices, userQuota.MaxDevices, userQuota.PlanName), "device_limit_reached", http.StatusConflict)
 		return
 	}
 
@@ -657,6 +658,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		AllowedIPs:      "0.0.0.0/0, ::/0",
 	}
 
+	w.Header().Set("Cache-Control", "no-store")
 	respond.JsonOK(w, config, http.StatusCreated)
 }
 
@@ -765,6 +767,7 @@ func (h *Handler) ExportConfig(w http.ResponseWriter, r *http.Request) {
 	conf := h.buildWGConfig(peer, server)
 
 	safeName := sanitizeDeviceName(peer.DeviceName)
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="wg-%s.conf"`, safeName))
 	w.WriteHeader(http.StatusOK)
@@ -807,6 +810,7 @@ func (h *Handler) ExportQR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="wg-%s.png"`, sanitizeDeviceName(peer.DeviceName)))
 	w.WriteHeader(http.StatusOK)

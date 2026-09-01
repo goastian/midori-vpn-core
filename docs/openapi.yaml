@@ -156,6 +156,8 @@ paths:
       responses:
         '200':
           description: Human-readable completion page that attempts to close itself.
+          headers:
+            Cache-Control: {schema: {type: string, const: no-store}}
           content: {text/html: {schema: {type: string}}}
   /api/v1/auth/config:
     get:
@@ -284,17 +286,6 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '500': {$ref: '#/components/responses/InternalError'}
-  /api/v1/control/servers/{id}/ikev2.mobileconfig:
-    parameters:
-      - {$ref: '#/components/parameters/ID'}
-    get:
-      operationId: exportIKEv2MobileConfiguration
-      tags: [Servers, PKI]
-      deprecated: true
-      description: Registered but intentionally returns 501 until API-01D decides implementation or removal.
-      responses:
-        '501': {$ref: '#/components/responses/NotImplemented'}
-
   /api/v1/control/certificates:
     get:
       operationId: listDeviceCertificates
@@ -329,15 +320,15 @@ paths:
       operationId: listCurrentUserConnections
       tags: [Connections]
       responses:
-        '200': {$ref: '#/components/responses/OK'}
+        '200': {$ref: '#/components/responses/ConnectionList'}
         '500': {$ref: '#/components/responses/InternalError'}
     post:
       operationId: createConnection
       tags: [Connections]
       requestBody: {$ref: '#/components/requestBodies/Connection'}
       responses:
-        '200': {$ref: '#/components/responses/OK'}
-        '201': {$ref: '#/components/responses/Created'}
+        '200': {$ref: '#/components/responses/ConnectionConfiguration'}
+        '201': {$ref: '#/components/responses/ConnectionConfiguration'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
@@ -374,6 +365,8 @@ paths:
       responses:
         '200':
           description: WireGuard configuration text.
+          headers:
+            Cache-Control: {schema: {type: string, const: no-store}}
           content: {text/plain: {schema: {type: string}}}
         '400': {$ref: '#/components/responses/BadRequest'}
         '403': {$ref: '#/components/responses/Forbidden'}
@@ -387,6 +380,8 @@ paths:
       responses:
         '200':
           description: PNG QR code for the WireGuard configuration.
+          headers:
+            Cache-Control: {schema: {type: string, const: no-store}}
           content: {image/png: {schema: {type: string, contentEncoding: base64}}}
         '400': {$ref: '#/components/responses/BadRequest'}
         '403': {$ref: '#/components/responses/Forbidden'}
@@ -400,7 +395,7 @@ paths:
         '200': {$ref: '#/components/responses/OK'}
         '500': {$ref: '#/components/responses/InternalError'}
 
-  /api/v1/control/mesh/:
+  /api/v1/control/mesh:
     get:
       operationId: listCurrentUserMeshes
       tags: [Mesh]
@@ -478,11 +473,13 @@ paths:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '500': {$ref: '#/components/responses/InternalError'}
+  /api/v1/control/mesh/exit-node/register/{meshID}:
+    parameters:
+      - {$ref: '#/components/parameters/MeshID'}
     delete:
       operationId: deregisterMeshExitNode
       tags: [Mesh]
-      description: Current implementation requires a JSON body on DELETE.
-      requestBody: {$ref: '#/components/requestBodies/MeshID'}
+      description: Idempotently removes the caller's exit-node capability from the named mesh without a request body.
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
@@ -775,6 +772,11 @@ components:
       in: path
       required: true
       schema: {type: string, minLength: 1}
+    MeshID:
+      name: meshID
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
     PublicKey:
       name: pubkey
       in: path
@@ -797,23 +799,57 @@ components:
         data: {}
     ErrorEnvelope:
       type: object
-      required: [ok, error]
+      required: [ok, error, code]
       properties:
         ok: {const: false}
         error: {type: string}
         code:
           type: string
-          enum: [client_pki_unavailable, device_limit_reached, origin_country_unavailable]
-      additionalProperties: true
+          description: Stable machine-readable identifier; clients must not branch on error prose.
+          enum:
+            - bad_request
+            - unauthorized
+            - forbidden
+            - not_found
+            - method_not_allowed
+            - conflict
+            - gone
+            - request_too_large
+            - unsupported_media_type
+            - unprocessable_entity
+            - rate_limited
+            - internal_error
+            - not_implemented
+            - bad_gateway
+            - service_unavailable
+            - gateway_timeout
+            - request_failed
+            - auth_provider_rejected
+            - auth_provider_rate_limited
+            - auth_provider_unavailable
+            - oauth_invalid_grant
+            - oauth_invalid_request
+            - oauth_unauthorized_client
+            - oauth_unsupported_grant_type
+            - client_pki_unavailable
+            - device_limit_reached
+            - origin_country_unavailable
+      additionalProperties: false
     TokenResponse:
       type: object
       required: [access_token, token_type, expires_in]
       properties:
-        access_token: {type: string, writeOnly: true}
+        access_token:
+          type: string
+          x-midorivpn-sensitive: true
         token_type: {type: string}
         expires_in: {type: integer}
-        refresh_token: {type: string, writeOnly: true}
-        id_token: {type: string, writeOnly: true}
+        refresh_token:
+          type: string
+          x-midorivpn-sensitive: true
+        id_token:
+          type: string
+          x-midorivpn-sensitive: true
     OIDCConfigurationEnvelope:
       type: object
       required: [ok, data]
@@ -867,6 +903,58 @@ components:
         public_key: {type: string}
         device_name: {type: string}
         pq_kem_public_key: {type: string, writeOnly: true}
+    ConnectionSummary:
+      type: object
+      description: A persisted connection summary. It never includes a preshared key.
+      required: [id, user_id, server_id, public_key, assigned_ip, is_active, device_name]
+      properties:
+        id: {type: string, format: uuid}
+        user_id: {type: string, format: uuid}
+        user_email: {type: string, format: email}
+        server_id: {type: string, format: uuid}
+        public_key: {type: string}
+        assigned_ip: {type: string}
+        is_active: {type: boolean}
+        device_name: {type: string}
+        last_handshake: {type: string, format: date-time}
+        bytes_sent: {type: integer, format: int64}
+        bytes_received: {type: integer, format: int64}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+      additionalProperties: false
+    ConnectionConfiguration:
+      type: object
+      description: Sensitive WireGuard material returned only while creating or recovering the authorized connection.
+      required: [peer_id, peer_ip, server_public_key, server_endpoint, dns, allowed_ips]
+      properties:
+        peer_id: {type: string, format: uuid}
+        peer_ip: {type: string}
+        server_public_key: {type: string}
+        server_endpoint: {type: string}
+        preshared_key:
+          type: string
+          x-midorivpn-sensitive: true
+          description: Returned only in this authorized configuration response and never in connection listings.
+        pq_kem_ciphertext:
+          type: string
+          x-midorivpn-sensitive: true
+        dns: {type: string}
+        allowed_ips: {type: string}
+      additionalProperties: false
+    ConnectionListEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {const: true}
+        data: {type: array, items: {$ref: '#/components/schemas/ConnectionSummary'}}
+      additionalProperties: false
+    ConnectionConfigurationEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {const: true}
+        data: {$ref: '#/components/schemas/ConnectionConfiguration'}
+      additionalProperties: false
     TunnelCredentialRequest:
       type: object
       required: [peer_id]
@@ -993,7 +1081,6 @@ components:
     MeshCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MeshCreateRequest'}}}}
     MeshJoin: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MeshJoinRequest'}}}}
     MeshInvite: {required: false, content: {application/json: {schema: {$ref: '#/components/schemas/MeshInviteRequest'}}}}
-    MeshID: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MeshIDRequest'}}}}
     ExitNodeRegistration: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ExitNodeRegistrationRequest'}}}}
     ExitNodeSelection: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ExitNodeSelectionRequest'}}}}
     AdminUserCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AdminUserCreateRequest'}}}}
@@ -1024,6 +1111,9 @@ components:
       content: {application/json: {schema: {$ref: '#/components/schemas/SuccessEnvelope'}}}
     TokenResponse:
       description: OIDC tokens in a success envelope.
+      headers:
+        Cache-Control:
+          schema: {type: string, const: no-store}
       content:
         application/json:
           schema:
@@ -1032,6 +1122,19 @@ components:
             properties:
               ok: {const: true}
               data: {$ref: '#/components/schemas/TokenResponse'}
+    ConnectionList:
+      description: Connection summaries without preshared keys.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ConnectionListEnvelope'}
+    ConnectionConfiguration:
+      description: Sensitive connection configuration; clients must not persist it beyond tunnel setup.
+      headers:
+        Cache-Control:
+          schema: {type: string, const: no-store}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ConnectionConfigurationEnvelope'}
     BadRequest: {description: Invalid request., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
     Unauthorized: {description: Missing or invalid authentication., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
     Forbidden: {description: Authenticated but not allowed., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}

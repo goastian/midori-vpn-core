@@ -72,11 +72,3 @@ type AstianPlanPayload struct {
 	MaxUsers  *int     `json:"max_users,omitempty"`
 	StorageGB *int     `json:"storage_gb,omitempty"`
 }
-
-// DeviceLimitConflictResponse is returned with HTTP 409 when max_devices is reached
-type DeviceLimitConflictResponse struct {
-	Error       string `json:"error"`
-	Code        string `json:"code"`
-	MaxDevices  int    `json:"max_devices"`
-	ActivePeers []Peer `json:"active_peers"`
-}

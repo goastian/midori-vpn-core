@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -20,6 +21,15 @@ func TestWSGatewayRejectsMissingOrWrongServerCredential(t *testing.T) {
 	gateway.Handler(missingRecorder, missing)
 	if missingRecorder.Code != http.StatusUnauthorized {
 		t.Fatalf("missing credential status = %d, want %d", missingRecorder.Code, http.StatusUnauthorized)
+	}
+	var missingEnvelope struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(missingRecorder.Body.Bytes(), &missingEnvelope); err != nil {
+		t.Fatalf("decode missing credential response: %v", err)
+	}
+	if missingEnvelope.Code != "unauthorized" {
+		t.Fatalf("missing credential code = %q, want unauthorized", missingEnvelope.Code)
 	}
 
 	wrongServer := proxytoken.GenerateTunnel(proxytoken.TunnelClaims{UserID: uuid.New(), DeviceID: uuid.New(), ServerID: uuid.New()}, "test-secret", time.Minute)

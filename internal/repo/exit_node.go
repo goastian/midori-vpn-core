@@ -59,7 +59,8 @@ func (r *ExitNodeRepo) RegisterExitNode(ctx context.Context, userID, meshID uuid
 func (r *ExitNodeRepo) DeregisterExitNode(ctx context.Context, userID, meshID uuid.UUID) error {
 	_, err := r.pool.Exec(ctx, `
 		UPDATE mesh_members
-		SET is_exit_node = FALSE, proxy_port = 0, supports_tcp = TRUE, supports_udp = FALSE
+		SET is_exit_node = FALSE, proxy_scheme = '', proxy_port = 0,
+		    supports_tcp = TRUE, supports_udp = FALSE
 		WHERE user_id = $1 AND mesh_id = $2`,
 		userID, meshID)
 	return err
