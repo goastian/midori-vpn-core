@@ -1,0 +1,1046 @@
+openapi: 3.1.0
+info:
+  title: MidoriVPN Core and Control API
+  version: 2.0.0
+  summary: Executable HTTP contract for the MidoriVPN 2.0 Core service.
+  description: |
+    Contract for the Core node plane, OAuth exchange, user Control API,
+    administration API, PKI resources, tunnel upgrade, and Control WebSocket.
+    Some operations are enabled only in the principal deployment profile or
+    when their transport/PKI capability is configured.
+servers:
+  - url: /
+    description: Same-origin API behind the deployment TLS reverse proxy.
+security:
+  - BearerAuth: []
+tags:
+  - {name: Health}
+  - {name: Infrastructure}
+  - {name: Node plane}
+  - {name: OAuth}
+  - {name: PKI}
+  - {name: Profile}
+  - {name: Credentials}
+  - {name: Servers}
+  - {name: Connections}
+  - {name: Mesh}
+  - {name: Administration}
+  - {name: Realtime}
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      tags: [Health]
+      security: []
+      responses:
+        '200': {$ref: '#/components/responses/HealthOK'}
+  /livez:
+    get:
+      operationId: getLiveness
+      tags: [Health]
+      security: []
+      responses:
+        '200': {$ref: '#/components/responses/LivenessOK'}
+  /readyz:
+    get:
+      operationId: getReadiness
+      tags: [Health]
+      security: []
+      responses:
+        '200': {$ref: '#/components/responses/ReadinessOK'}
+        '503': {$ref: '#/components/responses/ReadinessDegraded'}
+  /metrics:
+    get:
+      operationId: getPrometheusMetrics
+      tags: [Infrastructure]
+      security: []
+      description: Registered by Core but exposed only to the private scraper; public Nginx returns 404.
+      responses:
+        '200':
+          description: Prometheus exposition format.
+          content:
+            text/plain:
+              schema: {type: string}
+
+  /api/v1/tunnel/ws:
+    get:
+      operationId: openTunnelWebSocket
+      tags: [Connections, Realtime]
+      security: [{TunnelBearer: []}]
+      x-midorivpn-availability: WSSTunnelEnabled
+      description: WebSocket upgrade carrying tunnel datagrams with a short-lived scoped credential.
+      responses:
+        '101': {description: WebSocket protocol switch.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+
+  /api/v1/peers:
+    parameters: []
+    get:
+      operationId: listNodePeers
+      tags: [Node plane]
+      security: &nodeSignatureSecurity
+        - NodeID: []
+          NodeTimestamp: []
+          NodeNonce: []
+          NodeSignature: []
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+    post:
+      operationId: addNodePeer
+      tags: [Node plane]
+      security: *nodeSignatureSecurity
+      requestBody: {$ref: '#/components/requestBodies/AddPeer'}
+      responses:
+        '201': {$ref: '#/components/responses/Created'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/v1/peers/{pubkey}:
+    parameters:
+      - {$ref: '#/components/parameters/PublicKey'}
+    put:
+      operationId: updateNodePeer
+      tags: [Node plane]
+      security: *nodeSignatureSecurity
+      requestBody: {$ref: '#/components/requestBodies/UpdatePeer'}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: removeNodePeer
+      tags: [Node plane]
+      security: *nodeSignatureSecurity
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/v1/peers/{pubkey}/stats:
+    parameters:
+      - {$ref: '#/components/parameters/PublicKey'}
+    get:
+      operationId: getNodePeerStats
+      tags: [Node plane]
+      security: *nodeSignatureSecurity
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/stats:
+    get:
+      operationId: getNodeStats
+      tags: [Node plane]
+      security: *nodeSignatureSecurity
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /extension/callback:
+    get:
+      operationId: completeExtensionOAuth
+      tags: [OAuth]
+      security: []
+      x-midorivpn-config-key: EXTENSION_CALLBACK_PATH
+      x-midorivpn-availability: principal profile with DB and JWKS
+      parameters:
+        - {name: code, in: query, required: false, schema: {type: string}}
+        - {name: state, in: query, required: false, schema: {type: string}}
+        - {name: error, in: query, required: false, schema: {type: string}}
+      responses:
+        '200':
+          description: Human-readable completion page that attempts to close itself.
+          content: {text/html: {schema: {type: string}}}
+  /api/v1/auth/config:
+    get:
+      operationId: getOIDCConfiguration
+      tags: [OAuth]
+      security: []
+      x-midorivpn-availability: principal profile with DB and JWKS
+      responses:
+        '200':
+          description: Public OIDC client discovery.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/OIDCConfigurationEnvelope'}
+  /api/v1/auth/callback:
+    post:
+      operationId: exchangeAuthorizationCode
+      tags: [OAuth]
+      security: []
+      x-midorivpn-availability: principal profile with DB and JWKS
+      requestBody: {$ref: '#/components/requestBodies/OAuthCallback'}
+      responses:
+        '200': {$ref: '#/components/responses/TokenResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '502': {$ref: '#/components/responses/BadGateway'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/auth/refresh:
+    post:
+      operationId: refreshOIDCTokens
+      tags: [OAuth]
+      security: []
+      x-midorivpn-availability: principal profile with DB and JWKS
+      requestBody: {$ref: '#/components/requestBodies/OAuthRefresh'}
+      responses:
+        '200': {$ref: '#/components/responses/TokenResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '502': {$ref: '#/components/responses/BadGateway'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+        default:
+          description: Authentik may return its JSON OAuth error body unchanged.
+          content: {application/json: {schema: {type: object, additionalProperties: true}}}
+  /api/v1/auth/logout:
+    post:
+      operationId: logoutOIDCSession
+      tags: [OAuth]
+      security: []
+      x-midorivpn-availability: principal profile with DB and JWKS
+      requestBody: {$ref: '#/components/requestBodies/OAuthLogout'}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+
+  /pki/client-ca.pem:
+    get:
+      operationId: getClientCertificateAuthority
+      tags: [PKI]
+      security: []
+      x-midorivpn-availability: configured client PKI
+      responses:
+        '200':
+          description: Public client CA certificate.
+          content: {application/x-pem-file: {schema: {type: string}}}
+  /pki/client.crl:
+    get:
+      operationId: getClientCertificateRevocationList
+      tags: [PKI]
+      security: []
+      x-midorivpn-availability: configured client PKI
+      responses:
+        '200':
+          description: Signed DER certificate revocation list.
+          content:
+            application/pkix-crl:
+              schema: {type: string, contentEncoding: base64}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/control/me:
+    get:
+      operationId: getCurrentUser
+      tags: [Profile]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/control/quota:
+    get:
+      operationId: getCurrentUserQuota
+      tags: [Profile]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/control/proxy-credentials:
+    post:
+      operationId: createProxyCredential
+      tags: [Credentials]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/v1/control/tunnel-credentials:
+    post:
+      operationId: createTunnelCredential
+      tags: [Credentials]
+      requestBody: {$ref: '#/components/requestBodies/TunnelCredential'}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /api/v1/control/servers:
+    get:
+      operationId: listAvailableServers
+      tags: [Servers]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/v1/control/servers/ping:
+    get:
+      operationId: pingAvailableServers
+      tags: [Servers]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/v1/control/servers/{id}/ikev2.mobileconfig:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    get:
+      operationId: exportIKEv2MobileConfiguration
+      tags: [Servers, PKI]
+      deprecated: true
+      description: Registered but intentionally returns 501 until API-01D decides implementation or removal.
+      responses:
+        '501': {$ref: '#/components/responses/NotImplemented'}
+
+  /api/v1/control/certificates:
+    get:
+      operationId: listDeviceCertificates
+      tags: [PKI]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    post:
+      operationId: enrollDeviceCertificate
+      tags: [PKI]
+      requestBody: {$ref: '#/components/requestBodies/CertificateEnrollment'}
+      responses:
+        '201': {$ref: '#/components/responses/Created'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/control/certificates/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    delete:
+      operationId: revokeDeviceCertificate
+      tags: [PKI]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/control/connections:
+    get:
+      operationId: listCurrentUserConnections
+      tags: [Connections]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    post:
+      operationId: createConnection
+      tags: [Connections]
+      requestBody: {$ref: '#/components/requestBodies/Connection'}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '201': {$ref: '#/components/responses/Created'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+        '502': {$ref: '#/components/responses/BadGateway'}
+  /api/v1/control/connections/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    delete:
+      operationId: disconnectConnection
+      tags: [Connections]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/control/connections/{id}/device:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    delete:
+      operationId: deleteConnectionDevice
+      tags: [Connections]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/control/connections/{id}/config:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    get:
+      operationId: exportWireGuardConfiguration
+      tags: [Connections]
+      responses:
+        '200':
+          description: WireGuard configuration text.
+          content: {text/plain: {schema: {type: string}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/control/connections/{id}/qr:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    get:
+      operationId: exportWireGuardQRCode
+      tags: [Connections]
+      responses:
+        '200':
+          description: PNG QR code for the WireGuard configuration.
+          content: {image/png: {schema: {type: string, contentEncoding: base64}}}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/v1/control/audit-logs:
+    get:
+      operationId: listCurrentUserAuditLogs
+      tags: [Profile]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/control/mesh/:
+    get:
+      operationId: listCurrentUserMeshes
+      tags: [Mesh]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    post:
+      operationId: createMesh
+      tags: [Mesh]
+      requestBody: {$ref: '#/components/requestBodies/MeshCreate'}
+      responses:
+        '201': {$ref: '#/components/responses/Created'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/control/mesh/join:
+    post:
+      operationId: joinMesh
+      tags: [Mesh]
+      requestBody: {$ref: '#/components/requestBodies/MeshJoin'}
+      responses:
+        '201': {$ref: '#/components/responses/Created'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '410': {$ref: '#/components/responses/Gone'}
+  /api/v1/control/mesh/auto:
+    post:
+      operationId: enableAutomaticMesh
+      tags: [Mesh]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '201': {$ref: '#/components/responses/Created'}
+        '422': {$ref: '#/components/responses/UnprocessableEntity'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+    delete:
+      operationId: deleteAutomaticMesh
+      tags: [Mesh]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/v1/control/mesh/node:
+    get:
+      operationId: getMeshNodeStatus
+      tags: [Mesh]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+    post:
+      operationId: activateMeshNode
+      tags: [Mesh]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '201': {$ref: '#/components/responses/Created'}
+        '422': {$ref: '#/components/responses/UnprocessableEntity'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+    delete:
+      operationId: deactivateMeshNode
+      tags: [Mesh]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/v1/control/mesh/exit-nodes:
+    get:
+      operationId: listMeshExitNodes
+      tags: [Mesh]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/v1/control/mesh/exit-node/register:
+    post:
+      operationId: registerMeshExitNode
+      tags: [Mesh]
+      requestBody: {$ref: '#/components/requestBodies/ExitNodeRegistration'}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: deregisterMeshExitNode
+      tags: [Mesh]
+      description: Current implementation requires a JSON body on DELETE.
+      requestBody: {$ref: '#/components/requestBodies/MeshID'}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/v1/control/mesh/exit-node:
+    put:
+      operationId: selectMeshExitNode
+      tags: [Mesh]
+      requestBody: {$ref: '#/components/requestBodies/ExitNodeSelection'}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: clearMeshExitNode
+      tags: [Mesh]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/v1/control/mesh/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    get:
+      operationId: getMesh
+      tags: [Mesh]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    delete:
+      operationId: leaveMesh
+      tags: [Mesh]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/v1/control/mesh/{id}/invite:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    post:
+      operationId: regenerateMeshInvite
+      tags: [Mesh]
+      requestBody: {$ref: '#/components/requestBodies/MeshInvite'}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /api/v1/admin/dashboard/stats:
+    get:
+      operationId: getAdminDashboardStats
+      tags: [Administration]
+      responses: {'200': {$ref: '#/components/responses/OK'}}
+  /api/v1/admin/health:
+    get:
+      operationId: getAdminDetailedHealth
+      tags: [Administration, Health]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/admin/users:
+    get:
+      operationId: listAdminUsers
+      tags: [Administration]
+      parameters:
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses: {'200': {$ref: '#/components/responses/OK'}}
+    post:
+      operationId: createAdminUser
+      tags: [Administration]
+      requestBody: {$ref: '#/components/requestBodies/AdminUserCreate'}
+      responses:
+        '201': {$ref: '#/components/responses/Created'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/v1/admin/users/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    get:
+      operationId: getAdminUser
+      tags: [Administration]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    put:
+      operationId: updateAdminUser
+      tags: [Administration]
+      requestBody: {$ref: '#/components/requestBodies/AdminUserUpdate'}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    delete:
+      operationId: deleteAdminUser
+      tags: [Administration]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/v1/admin/users/{id}/ban:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    post:
+      operationId: banAdminUser
+      tags: [Administration]
+      requestBody: {$ref: '#/components/requestBodies/BanUser'}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+    delete:
+      operationId: unbanAdminUser
+      tags: [Administration]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/admin/servers:
+    get:
+      operationId: listAdminServers
+      tags: [Administration, Servers]
+      responses: {'200': {$ref: '#/components/responses/OK'}}
+    post:
+      operationId: createAdminServer
+      tags: [Administration, Servers]
+      requestBody: {$ref: '#/components/requestBodies/ServerCreate'}
+      responses:
+        '201': {$ref: '#/components/responses/Created'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/v1/admin/servers/ping:
+    get:
+      operationId: pingAdminServers
+      tags: [Administration, Servers]
+      responses: {'200': {$ref: '#/components/responses/OK'}}
+  /api/v1/admin/servers/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    put:
+      operationId: updateAdminServer
+      tags: [Administration, Servers]
+      requestBody: {$ref: '#/components/requestBodies/ServerUpdate'}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+    delete:
+      operationId: deleteAdminServer
+      tags: [Administration, Servers]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/v1/admin/node-identities:
+    get:
+      operationId: listAdminNodeIdentities
+      tags: [Administration, Node plane]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+    post:
+      operationId: registerAdminNodeIdentity
+      tags: [Administration, Node plane]
+      requestBody: {$ref: '#/components/requestBodies/NodeIdentity'}
+      responses:
+        '201': {$ref: '#/components/responses/Created'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/admin/node-identities/{nodeID}:
+    parameters:
+      - {$ref: '#/components/parameters/NodeID'}
+    delete:
+      operationId: revokeAdminNodeIdentity
+      tags: [Administration, Node plane]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/admin/node-identities/{nodeID}/restore:
+    parameters:
+      - {$ref: '#/components/parameters/NodeID'}
+    post:
+      operationId: restoreAdminNodeIdentity
+      tags: [Administration, Node plane]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/admin/peers:
+    get:
+      operationId: listAdminPeers
+      tags: [Administration, Connections]
+      responses: {'200': {$ref: '#/components/responses/OK'}}
+  /api/v1/admin/peers/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    delete:
+      operationId: disconnectAdminPeer
+      tags: [Administration, Connections]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+  /api/v1/admin/mesh:
+    get:
+      operationId: listAdminMeshes
+      tags: [Administration, Mesh]
+      responses: {'200': {$ref: '#/components/responses/OK'}}
+  /api/v1/admin/audit-logs:
+    get:
+      operationId: listAdminAuditLogs
+      tags: [Administration]
+      parameters:
+        - {name: action, in: query, schema: {type: string}}
+        - {$ref: '#/components/parameters/Limit'}
+        - {$ref: '#/components/parameters/Offset'}
+      responses: {'200': {$ref: '#/components/responses/OK'}}
+  /api/v1/admin/trusted-extension-origins:
+    get:
+      operationId: listAdminTrustedExtensionOrigins
+      tags: [Administration, OAuth]
+      responses: {'200': {$ref: '#/components/responses/OK'}}
+  /api/v1/admin/trusted-extension-origins/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    put:
+      operationId: updateAdminTrustedExtensionOrigin
+      tags: [Administration, OAuth]
+      requestBody: {$ref: '#/components/requestBodies/ExtensionOriginUpdate'}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
+  /ws:
+    get:
+      operationId: openControlWebSocket
+      tags: [Realtime]
+      security: []
+      x-midorivpn-authentication: OIDC token in the first WebSocket message
+      description: Control WebSocket; authentication occurs in the first message, never in the query string.
+      responses:
+        '101': {description: WebSocket protocol switch.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Authentik JWT or JWE
+    TunnelBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: short-lived vpn-tunnel credential
+    NodeID:
+      type: apiKey
+      in: header
+      name: X-Node-ID
+    NodeTimestamp:
+      type: apiKey
+      in: header
+      name: X-Node-Timestamp
+    NodeNonce:
+      type: apiKey
+      in: header
+      name: X-Node-Nonce
+    NodeSignature:
+      type: apiKey
+      in: header
+      name: X-Node-Signature
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    NodeID:
+      name: nodeID
+      in: path
+      required: true
+      schema: {type: string, minLength: 1}
+    PublicKey:
+      name: pubkey
+      in: path
+      required: true
+      schema: {type: string}
+    Limit:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 200}
+    Offset:
+      name: offset
+      in: query
+      schema: {type: integer, minimum: 0}
+  schemas:
+    SuccessEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {const: true}
+        data: {}
+    ErrorEnvelope:
+      type: object
+      required: [ok, error]
+      properties:
+        ok: {const: false}
+        error: {type: string}
+        code:
+          type: string
+          enum: [client_pki_unavailable, device_limit_reached, origin_country_unavailable]
+      additionalProperties: true
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token: {type: string, writeOnly: true}
+        token_type: {type: string}
+        expires_in: {type: integer}
+        refresh_token: {type: string, writeOnly: true}
+        id_token: {type: string, writeOnly: true}
+    OIDCConfigurationEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {const: true}
+        data:
+          type: object
+          required: [issuer, authorization_endpoint, token_endpoint, client_id, redirect_uri]
+          properties:
+            issuer: {type: string, format: uri}
+            authorization_endpoint: {type: string, format: uri}
+            token_endpoint: {type: string, format: uri}
+            userinfo_endpoint: {type: string, format: uri}
+            end_session_endpoint: {type: string, format: uri}
+            jwks_uri: {type: string, format: uri}
+            client_id: {type: string}
+            redirect_uri: {type: string, format: uri}
+    AddPeerRequest:
+      type: object
+      required: [public_key]
+      properties:
+        public_key: {type: string}
+        preshared_key: {type: string, writeOnly: true}
+        keepalive: {type: integer, default: 25}
+    UpdatePeerRequest:
+      type: object
+      properties:
+        keepalive: {type: integer}
+    OAuthCallbackRequest:
+      type: object
+      required: [code, redirect_uri]
+      properties:
+        code: {type: string, writeOnly: true}
+        redirect_uri: {type: string, format: uri}
+        code_verifier: {type: string, writeOnly: true}
+    OAuthRefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token: {type: string, writeOnly: true}
+    OAuthLogoutRequest:
+      type: object
+      properties:
+        access_token: {type: string, writeOnly: true}
+        refresh_token: {type: string, writeOnly: true}
+    ConnectionRequest:
+      type: object
+      required: [public_key]
+      properties:
+        server_id: {type: string, format: uuid}
+        public_key: {type: string}
+        device_name: {type: string}
+        pq_kem_public_key: {type: string, writeOnly: true}
+    TunnelCredentialRequest:
+      type: object
+      required: [peer_id]
+      properties: {peer_id: {type: string, format: uuid}}
+    CertificateEnrollmentRequest:
+      type: object
+      additionalProperties: false
+      required: [server_id, device_name, csr_pem]
+      properties:
+        server_id: {type: string, format: uuid}
+        device_name: {type: string}
+        csr_pem: {type: string, writeOnly: true}
+    MeshCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string, maxLength: 80}
+        description: {type: string}
+        max_members: {type: integer, minimum: 1, maximum: 250, default: 10}
+        invite_expires_in_hours: {type: integer}
+    MeshJoinRequest:
+      type: object
+      required: [invite_code]
+      properties: {invite_code: {type: string, format: uuid, writeOnly: true}}
+    MeshInviteRequest:
+      type: object
+      properties: {invite_expires_in_hours: {type: integer}}
+    MeshIDRequest:
+      type: object
+      required: [mesh_id]
+      properties: {mesh_id: {type: string, format: uuid}}
+    ExitNodeRegistrationRequest:
+      allOf:
+        - {$ref: '#/components/schemas/MeshIDRequest'}
+        - type: object
+          required: [proxy_port, supports_tcp]
+          properties:
+            proxy_scheme: {type: string, enum: [http-connect, socks5], default: http-connect}
+            proxy_port: {type: integer, minimum: 1, maximum: 65535}
+            supports_tcp: {type: boolean, const: true}
+            supports_udp: {type: boolean}
+    ExitNodeSelectionRequest:
+      type: object
+      required: [mesh_ip, proxy_port]
+      properties:
+        mesh_ip: {type: string}
+        proxy_scheme: {type: string, enum: [http-connect, socks5], default: http-connect}
+        proxy_port: {type: integer, minimum: 1, maximum: 65535}
+    AdminUserCreateRequest:
+      type: object
+      required: [authentik_uid, email]
+      properties:
+        authentik_uid: {type: string}
+        email: {type: string, format: email}
+        display_name: {type: string}
+        groups: {type: array, items: {type: string}}
+    AdminUserUpdateRequest:
+      type: object
+      properties:
+        email: {type: string, format: email}
+        display_name: {type: string}
+        groups: {type: array, items: {type: string}}
+    BanUserRequest:
+      type: object
+      properties: {reason: {type: string}}
+    TransportRequest:
+      type: object
+      required: [protocol, host, port]
+      properties:
+        protocol: {type: string}
+        host: {type: string}
+        port: {type: integer, minimum: 1, maximum: 65535}
+        enabled: {type: boolean}
+        priority: {type: integer}
+        metadata: {type: object, additionalProperties: true}
+    ServerCreateRequest:
+      type: object
+      required: [name, host, public_key, transports]
+      properties:
+        name: {type: string}
+        host: {type: string}
+        endpoint: {type: string}
+        port: {type: integer}
+        wg_port: {type: integer}
+        public_key: {type: string}
+        location: {type: string}
+        country_code: {type: string, minLength: 2, maxLength: 2}
+        max_peers: {type: integer}
+        transports: {type: array, minItems: 1, items: {$ref: '#/components/schemas/TransportRequest'}}
+    ServerUpdateRequest:
+      type: object
+      properties:
+        name: {type: string}
+        host: {type: string}
+        endpoint: {type: string}
+        port: {type: integer}
+        wg_port: {type: integer}
+        public_key: {type: string}
+        location: {type: string}
+        country_code: {type: string, minLength: 2, maxLength: 2}
+        max_peers: {type: integer}
+        transports: {type: array, minItems: 1, items: {$ref: '#/components/schemas/TransportRequest'}}
+        is_active: {type: boolean}
+    NodeIdentityRequest:
+      type: object
+      required: [node_id, public_key]
+      properties:
+        node_id: {type: string}
+        public_key: {type: string, writeOnly: true}
+    ExtensionOriginUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [revoked]
+      properties: {revoked: {type: boolean}}
+  requestBodies:
+    AddPeer: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AddPeerRequest'}}}}
+    UpdatePeer: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/UpdatePeerRequest'}}}}
+    OAuthCallback: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/OAuthCallbackRequest'}}}}
+    OAuthRefresh: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/OAuthRefreshRequest'}}}}
+    OAuthLogout: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/OAuthLogoutRequest'}}}}
+    Connection: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ConnectionRequest'}}}}
+    TunnelCredential: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TunnelCredentialRequest'}}}}
+    CertificateEnrollment: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CertificateEnrollmentRequest'}}}}
+    MeshCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MeshCreateRequest'}}}}
+    MeshJoin: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MeshJoinRequest'}}}}
+    MeshInvite: {required: false, content: {application/json: {schema: {$ref: '#/components/schemas/MeshInviteRequest'}}}}
+    MeshID: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MeshIDRequest'}}}}
+    ExitNodeRegistration: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ExitNodeRegistrationRequest'}}}}
+    ExitNodeSelection: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ExitNodeSelectionRequest'}}}}
+    AdminUserCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AdminUserCreateRequest'}}}}
+    AdminUserUpdate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/AdminUserUpdateRequest'}}}}
+    BanUser: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/BanUserRequest'}}}}
+    ServerCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ServerCreateRequest'}}}}
+    ServerUpdate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ServerUpdateRequest'}}}}
+    NodeIdentity: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/NodeIdentityRequest'}}}}
+    ExtensionOriginUpdate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ExtensionOriginUpdateRequest'}}}}
+  responses:
+    OK:
+      description: Successful JSON envelope.
+      content: {application/json: {schema: {$ref: '#/components/schemas/SuccessEnvelope'}}}
+    Created:
+      description: Created JSON envelope.
+      content: {application/json: {schema: {$ref: '#/components/schemas/SuccessEnvelope'}}}
+    HealthOK:
+      description: Core process health.
+      content: {application/json: {schema: {$ref: '#/components/schemas/SuccessEnvelope'}}}
+    LivenessOK:
+      description: Process liveness and uptime.
+      content: {application/json: {schema: {$ref: '#/components/schemas/SuccessEnvelope'}}}
+    ReadinessOK:
+      description: Public aggregate readiness without dependency details.
+      content: {application/json: {schema: {$ref: '#/components/schemas/SuccessEnvelope'}}}
+    ReadinessDegraded:
+      description: Public aggregate degraded status; implementation still uses a success envelope with HTTP 503.
+      content: {application/json: {schema: {$ref: '#/components/schemas/SuccessEnvelope'}}}
+    TokenResponse:
+      description: OIDC tokens in a success envelope.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ok, data]
+            properties:
+              ok: {const: true}
+              data: {$ref: '#/components/schemas/TokenResponse'}
+    BadRequest: {description: Invalid request., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
+    Unauthorized: {description: Missing or invalid authentication., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
+    Forbidden: {description: Authenticated but not allowed., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
+    NotFound: {description: Resource not found., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
+    Conflict: {description: Current state or quota conflicts with the request., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
+    Gone: {description: Resource is no longer active., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
+    UnprocessableEntity: {description: Semantically invalid operation., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
+    TooManyRequests: {description: Rate limit exceeded., headers: {Retry-After: {schema: {type: integer}}}, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
+    InternalError: {description: Safe production error., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
+    BadGateway: {description: Upstream or node operation failed., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
+    ServiceUnavailable: {description: Required capability or dependency is unavailable., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
+    NotImplemented: {description: Registered operation is not implemented., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
