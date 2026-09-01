@@ -1,0 +1,27 @@
+[Unit]
+Description=MidoriVPN private Prometheus
+After=network-online.target control-api.service
+Wants=network-online.target
+
+[Container]
+Image=__PROMETHEUS_IMAGE__
+Pull=never
+ContainerName=midorivpn-prometheus
+Network=__OBSERVABILITY_NETWORK__
+PublishPort=127.0.0.1:__PROMETHEUS_HOST_PORT__:9090
+Volume=__OBSERVABILITY_CONFIG_DIR__/prometheus.yml:/etc/prometheus/prometheus.yml:ro,Z
+Volume=__OBSERVABILITY_CONFIG_DIR__/alerts.yml:/etc/prometheus/rules/midorivpn.yml:ro,Z
+Volume=midorivpn-prometheus-data.volume:/prometheus:Z
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=all
+Tmpfs=/tmp:rw,noexec,nosuid,nodev,size=16m
+Exec=--config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus --storage.tsdb.retention.time=15d --web.listen-address=0.0.0.0:9090
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=90
+
+[Install]
+WantedBy=default.target

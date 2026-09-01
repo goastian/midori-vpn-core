@@ -54,9 +54,10 @@ func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *au
 	// Limit request body size to 1 MiB to prevent resource exhaustion attacks.
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			started := time.Now()
 			ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 			defer func() {
-				RecordRequest(ww.Status())
+				RecordRequest(ww.Status(), time.Since(started), r.Method, r.URL.Path)
 			}()
 			r.Body = http.MaxBytesReader(ww, r.Body, 1<<20)
 			next.ServeHTTP(ww, r)
@@ -65,7 +66,7 @@ func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *au
 
 	h := core.NewHandler(cfg, mgr)
 	healthChecker := NewHealthChecker(cfg, mgr, pool)
-	metricsExporter := NewMetricsExporter(mgr)
+	metricsExporter := NewMetricsExporter(mgr, pool)
 
 	// Public Health Probes & Telemetry
 	r.Get("/health", h.Health)

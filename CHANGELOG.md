@@ -18,6 +18,12 @@
 
 ### Operations
 
+- Added private, digest-pinned Prometheus 3.14 and Grafana 13.2 Quadlets with
+  loopback-only administration, a dedicated in-network scrape path, seven
+  operational alerts and rollback-protected deployment. The dashboard now
+  covers HTTP and provisioning percentiles, database state, transport health,
+  peer capacity and aggregate traffic without user, address or destination
+  labels.
 - Added a pinned PgBouncer 1.25.2 rootless image and wired principal script and Quadlet deployments through transaction pooling with SCRAM-SHA-256, a read-only container, runtime-only credentials and a health-gated Core dependency.
 - Replaced the legacy backup and chaos helpers with fail-fast, environment-neutral staging tests. Backup validation restores into an isolated database and compares critical tables; network chaos applies bounded netem loss, verifies private metrics and probes, and always restores the original qdisc.
 - Pinned the Core builder, Alpine runtime and rootless analysis tools to exact supported versions and image digests. Staticcheck and govulncheck no longer resolve mutable `latest` releases during a rebuild.

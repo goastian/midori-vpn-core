@@ -1,0 +1,36 @@
+[Unit]
+Description=MidoriVPN private Grafana
+After=network-online.target midorivpn-prometheus.service
+Requires=midorivpn-prometheus.service
+
+[Container]
+Image=__GRAFANA_IMAGE__
+Pull=never
+ContainerName=midorivpn-grafana
+Network=__OBSERVABILITY_NETWORK__
+PublishPort=127.0.0.1:__GRAFANA_HOST_PORT__:3000
+EnvironmentFile=__OBSERVABILITY_CONFIG_DIR__/grafana.env
+Environment=GF_AUTH_ANONYMOUS_ENABLED=false
+Environment=GF_USERS_ALLOW_SIGN_UP=false
+Environment=GF_ANALYTICS_REPORTING_ENABLED=false
+Environment=GF_ANALYTICS_CHECK_FOR_UPDATES=false
+Environment=GF_SECURITY_DISABLE_GRAVATAR=true
+Environment=GF_SERVER_HTTP_ADDR=0.0.0.0
+Environment=GF_DATABASE_WAL=true
+Volume=__OBSERVABILITY_CONFIG_DIR__/grafana-datasource.yml:/etc/grafana/provisioning/datasources/midorivpn.yml:ro,Z
+Volume=__OBSERVABILITY_CONFIG_DIR__/grafana-dashboard-provider.yml:/etc/grafana/provisioning/dashboards/midorivpn.yml:ro,Z
+Volume=__OBSERVABILITY_CONFIG_DIR__/midori-vpn-dashboard.json:/var/lib/grafana/dashboards/midori-vpn-dashboard.json:ro,Z
+Volume=midorivpn-grafana-data.volume:/var/lib/grafana:Z
+ReadOnly=true
+NoNewPrivileges=true
+DropCapability=all
+Tmpfs=/tmp:rw,noexec,nosuid,nodev,size=32m
+Tmpfs=/var/log/grafana:rw,noexec,nosuid,nodev,size=16m
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=90
+
+[Install]
+WantedBy=default.target

@@ -27,6 +27,7 @@ fi
 IMAGE_GO="localhost/midori-dev-go:latest"
 IMAGE_NODE="localhost/midori-dev-node:latest"
 IMAGE_TAURI="localhost/midori-dev-tauri:latest"
+IMAGE_PROMETHEUS="docker.io/prom/prometheus@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0"
 PODMAN_USERNS=(--userns=keep-id:uid=0,gid=0)
 
 build_image_if_missing() {
@@ -88,6 +89,14 @@ cmd_npm() {
 
 cmd_npx() {
     cmd_node npx "$@"
+}
+
+cmd_promtool() {
+    podman run --rm "${PODMAN_USERNS[@]}" \
+        -v "${ROOT_DIR}:/workspace:z" \
+        -w "${WORKDIR_IN_CONTAINER}" \
+        --entrypoint /bin/promtool \
+        "${IMAGE_PROMETHEUS}" "$@"
 }
 
 cmd_tauri() {
@@ -233,6 +242,10 @@ case "$1" in
         shift
         cmd_npx "$@"
         ;;
+    promtool)
+        shift
+        cmd_promtool "$@"
+        ;;
     tauri)
         shift
         cmd_tauri "$@"
@@ -251,7 +264,7 @@ case "$1" in
         cmd_build_images
         ;;
     *)
-        echo "Uso: $0 {go|gofmt|staticcheck|govulncheck|node|npm|npx|tauri|cargo|audit|debt|build-images} [argumentos...]"
+        echo "Uso: $0 {go|gofmt|staticcheck|govulncheck|node|npm|npx|promtool|tauri|cargo|audit|debt|build-images} [argumentos...]"
         echo ""
         echo "Ejemplos:"
         echo "  $0 go test ./..."

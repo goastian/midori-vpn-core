@@ -1,0 +1,20 @@
+apiVersion: 1
+
+deleteDatasources:
+  - name: MidoriVPN Prometheus
+    orgId: 1
+
+datasources:
+  - name: MidoriVPN Prometheus
+    uid: midorivpn-prometheus
+    type: prometheus
+    access: proxy
+    url: http://midorivpn-prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      manageAlerts: true
+      prometheusType: Prometheus
+      prometheusVersion: 3.14.0
+      timeInterval: 15s

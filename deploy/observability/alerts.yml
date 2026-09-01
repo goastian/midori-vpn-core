@@ -1,0 +1,65 @@
+groups:
+  - name: midorivpn-core
+    rules:
+      - alert: MidoriVPNCoreDown
+        expr: up{job="midorivpn-core"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: MidoriVPN Core is not being scraped
+          description: The private Prometheus target has been unavailable for two minutes.
+
+      - alert: MidoriVPNControlDatabaseUnavailable
+        expr: midori_vpn_control_database_up{role="principal"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Control database metrics are unavailable
+          description: Core could not read aggregate transport and capacity state from PostgreSQL.
+
+      - alert: MidoriVPNElevatedServerErrors
+        expr: rate(midori_vpn_http_5xx_total[5m]) / clamp_min(rate(midori_vpn_http_requests_total[5m]), 0.01) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: MidoriVPN HTTP 5xx ratio is elevated
+          description: More than five percent of API requests have failed with 5xx responses for ten minutes.
+
+      - alert: MidoriVPNProvisioningFailures
+        expr: increase(midori_vpn_connection_provision_failures_total[10m]) >= 3
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Repeated VPN peer provisioning failures
+          description: At least three connection provisioning requests failed in the last ten minutes.
+
+      - alert: MidoriVPNProvisioningLatencyHigh
+        expr: histogram_quantile(0.95, sum by (le, cluster) (rate(midori_vpn_connection_provision_duration_seconds_bucket[10m]))) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: VPN peer provisioning p95 is above two seconds
+          description: Server-side peer provisioning has remained slow for ten minutes.
+
+      - alert: MidoriVPNServerCapacityHigh
+        expr: midori_vpn_server_peer_capacity > 0 and midori_vpn_server_current_peers / midori_vpn_server_peer_capacity > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: MidoriVPN peer capacity is above ninety percent
+          description: Active configured servers are close to their aggregate peer limit.
+
+      - alert: MidoriVPNTransportUnavailable
+        expr: sum by (cluster, protocol) (midori_vpn_transport_status) > 0 unless on (cluster, protocol) sum by (cluster, protocol) (midori_vpn_transport_status{status="healthy"}) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: An enabled VPN transport has no healthy server
+          description: Protocol {{ $labels.protocol }} is enabled but no active server reports it healthy.

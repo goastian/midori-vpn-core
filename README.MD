@@ -115,7 +115,14 @@ Operational helpers:
 scripts/configure-quadlet-masque.sh  # backup, configure and restart with rollback
 scripts/upgrade-quadlet-redis.sh     # SAVE, volume export and Redis major upgrade
 scripts/setup-core-host.sh           # validate/install host Nginx and Certbot inputs
+scripts/render-observability.sh      # render private Prometheus/Grafana Quadlets
+scripts/check-observability.sh       # validate rules, dashboard and private binds
 ```
+
+Prometheus and Grafana share the existing private Core Podman network but
+publish their administrative ports only on `127.0.0.1`. Public Nginx continues
+to return `404` for `/metrics`; operators reach Grafana through an SSH tunnel.
+See `deploy/OBSERVABILITY.md` for rendering, deployment and rollback.
 
 ## Authentication and capability model
 

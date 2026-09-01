@@ -1,105 +1,137 @@
 {
-  "annotations": {
-    "list": []
-  },
-  "editable": true,
+  "annotations": {"list": []},
+  "editable": false,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
   "id": null,
   "links": [],
-  "liveNow": true,
   "panels": [
     {
-      "collapsed": false,
-      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "datasource": {"type": "prometheus", "uid": "midorivpn-prometheus"},
+      "fieldConfig": {"defaults": {"mappings": [{"options": {"0": {"color": "red", "text": "Down"}, "1": {"color": "green", "text": "Up"}}, "type": "value"}], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
       "id": 1,
-      "title": "Peers WireGuard Activos",
-      "type": "stat",
-      "targets": [
-        {
-          "expr": "midori_vpn_active_peers",
-          "legendFormat": "Peers"
-        }
-      ]
+      "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "up{job=\"midorivpn-core\"}", "legendFormat": "{{node}}", "refId": "A"}],
+      "title": "Core scrape status",
+      "type": "stat"
     },
     {
-      "collapsed": false,
-      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "datasource": {"type": "prometheus", "uid": "midorivpn-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
       "id": 2,
-      "title": "Solicitudes HTTP Totales",
-      "type": "stat",
-      "targets": [
-        {
-          "expr": "rate(midori_vpn_http_requests_total[5m])",
-          "legendFormat": "Req/s"
-        }
-      ]
+      "options": {"colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "midori_vpn_active_peers", "legendFormat": "{{node}}", "refId": "A"}],
+      "title": "Active WireGuard peers",
+      "type": "stat"
     },
     {
-      "collapsed": false,
-      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
+      "datasource": {"type": "prometheus", "uid": "midorivpn-prometheus"},
+      "fieldConfig": {"defaults": {"max": 100, "min": 0, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 75}, {"color": "red", "value": 90}]}, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
       "id": 3,
-      "title": "Memoria Asignada (MB)",
-      "type": "stat",
-      "targets": [
-        {
-          "expr": "midori_vpn_memory_alloc_bytes / 1024 / 1024",
-          "legendFormat": "MB"
-        }
-      ]
+      "options": {"minVizHeight": 75, "minVizWidth": 75, "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "showThresholdLabels": false, "showThresholdMarkers": true, "sizing": "auto"},
+      "targets": [{"expr": "100 * midori_vpn_server_current_peers / clamp_min(midori_vpn_server_peer_capacity, 1)", "legendFormat": "{{cluster}}", "refId": "A"}],
+      "title": "Server peer capacity",
+      "type": "gauge"
     },
     {
-      "collapsed": false,
-      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
+      "datasource": {"type": "prometheus", "uid": "midorivpn-prometheus"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 0},
       "id": 4,
-      "title": "Goroutines Activas",
-      "type": "stat",
-      "targets": [
-        {
-          "expr": "midori_vpn_goroutines",
-          "legendFormat": "Goroutines"
-        }
-      ]
+      "options": {"colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
+      "targets": [{"expr": "midori_vpn_control_database_up", "legendFormat": "{{cluster}}", "refId": "A"}],
+      "title": "Control database metrics",
+      "type": "stat"
     },
     {
-      "collapsed": false,
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "datasource": {"type": "prometheus", "uid": "midorivpn-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 5},
       "id": 5,
-      "title": "Tasa de Errores HTTP (4xx / 5xx)",
-      "type": "timeseries",
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "targets": [
-        {
-          "expr": "rate(midori_vpn_http_4xx_total[5m])",
-          "legendFormat": "4xx Client Errors"
-        },
-        {
-          "expr": "rate(midori_vpn_http_5xx_total[5m])",
-          "legendFormat": "5xx Server Errors"
-        }
-      ]
+        {"expr": "rate(midori_vpn_http_requests_total[5m])", "legendFormat": "requests {{node}}", "refId": "A"},
+        {"expr": "rate(midori_vpn_http_4xx_total[5m])", "legendFormat": "4xx {{node}}", "refId": "B"},
+        {"expr": "rate(midori_vpn_http_5xx_total[5m])", "legendFormat": "5xx {{node}}", "refId": "C"}
+      ],
+      "title": "HTTP request and error rate",
+      "type": "timeseries"
     },
     {
-      "collapsed": false,
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "datasource": {"type": "prometheus", "uid": "midorivpn-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 5},
       "id": 6,
-      "title": "Tiempo de Actividad (Uptime)",
-      "type": "stat",
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "targets": [
-        {
-          "expr": "midori_vpn_uptime_seconds",
-          "legendFormat": "Segundos"
-        }
-      ]
+        {"expr": "histogram_quantile(0.50, sum by (le, cluster) (rate(midori_vpn_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p50 {{cluster}}", "refId": "A"},
+        {"expr": "histogram_quantile(0.90, sum by (le, cluster) (rate(midori_vpn_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p90 {{cluster}}", "refId": "B"},
+        {"expr": "histogram_quantile(0.95, sum by (le, cluster) (rate(midori_vpn_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p95 {{cluster}}", "refId": "C"},
+        {"expr": "histogram_quantile(0.99, sum by (le, cluster) (rate(midori_vpn_http_request_duration_seconds_bucket[5m])))", "legendFormat": "p99 {{cluster}}", "refId": "D"}
+      ],
+      "title": "HTTP latency percentiles",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "midorivpn-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 13},
+      "id": 7,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, sum by (le, cluster) (rate(midori_vpn_connection_provision_duration_seconds_bucket[10m])))", "legendFormat": "p50 {{cluster}}", "refId": "A"},
+        {"expr": "histogram_quantile(0.90, sum by (le, cluster) (rate(midori_vpn_connection_provision_duration_seconds_bucket[10m])))", "legendFormat": "p90 {{cluster}}", "refId": "B"},
+        {"expr": "histogram_quantile(0.95, sum by (le, cluster) (rate(midori_vpn_connection_provision_duration_seconds_bucket[10m])))", "legendFormat": "p95 {{cluster}}", "refId": "C"},
+        {"expr": "histogram_quantile(0.99, sum by (le, cluster) (rate(midori_vpn_connection_provision_duration_seconds_bucket[10m])))", "legendFormat": "p99 {{cluster}}", "refId": "D"}
+      ],
+      "title": "Peer provisioning latency percentiles",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "midorivpn-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "Bps"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 13},
+      "id": 8,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "rate(midori_vpn_bytes_sent_total[5m])", "legendFormat": "sent {{node}}", "refId": "A"},
+        {"expr": "rate(midori_vpn_bytes_received_total[5m])", "legendFormat": "received {{node}}", "refId": "B"}
+      ],
+      "title": "WireGuard traffic rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "midorivpn-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 21},
+      "id": 9,
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "midori_vpn_transport_status", "legendFormat": "{{protocol}} / {{status}}", "refId": "A"}],
+      "title": "Enabled transports by health state",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "midorivpn-prometheus"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 21},
+      "id": 10,
+      "options": {"alertInstanceLabelFilter": "", "alertName": "", "dashboardAlerts": false, "folder": "", "groupBy": [], "groupMode": "default", "maxItems": 20, "sortOrder": 1, "stateFilter": {"error": true, "firing": true, "noData": true, "normal": false, "pending": true}},
+      "title": "Active alerts",
+      "type": "alertlist"
     }
   ],
-  "refresh": "5s",
-  "schemaVersion": 39,
-  "style": "dark",
-  "tags": ["midori-vpn", "wireguard", "telemetry"],
-  "time": {
-    "from": "now-1h",
-    "to": "now"
-  },
-  "title": "Midori VPN — Telemetría del Clúster",
-  "version": 1
+  "refresh": "15s",
+  "schemaVersion": 41,
+  "tags": ["midorivpn", "prometheus", "private-observability"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "MidoriVPN — Private operations",
+  "uid": "midorivpn-private-operations",
+  "version": 2,
+  "weekStart": ""
 }
