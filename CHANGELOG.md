@@ -18,6 +18,9 @@
 
 ### Operations
 
+- Removed the abandoned Tauri/Rust and non-Linux Desktop targets, their
+  toolchain runner and audit exceptions. The Linux RPM now consumes its icons
+  and PolicyKit files exclusively from neutral packaging paths.
 - Defined the central Control and independent regional Core architecture,
   including trust and secret boundaries, signed desired-state requirements,
   failure isolation, observability, rollout/rollback and the regional

@@ -12,7 +12,8 @@ clusters is defined in
 It distinguishes the implemented single-principal baseline from the remaining
 regional production gates.
 
-Version 2.0.0 is an active rework. Linux x86_64 RPM is the only production client target. Windows and macOS source is preserved, but their build and release jobs remain blocked until each native path is certified.
+Version 2.0.0 is an active rework. Linux x86_64 RPM is the only Desktop target;
+the abandoned Tauri/Rust and non-Linux client sources have been removed.
 
 ## Verified transports
 

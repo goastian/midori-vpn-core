@@ -26,7 +26,6 @@ fi
 # Image Names
 IMAGE_GO="localhost/midori-dev-go:latest"
 IMAGE_NODE="localhost/midori-dev-node:latest"
-IMAGE_TAURI="localhost/midori-dev-tauri:latest"
 IMAGE_PROMETHEUS="docker.io/prom/prometheus@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0"
 IMAGE_SYFT="ghcr.io/anchore/syft@sha256:41f8289664101d6ebab30a97ac8df6b6f86b92d8343285ca90f428e2bc353106"
 PODMAN_USERNS=(--userns=keep-id:uid=0,gid=0)
@@ -45,7 +44,6 @@ cmd_build_images() {
     echo "🔨 Construyendo todas las imágenes de desarrollo Podman Rootless..."
     podman build -t "${IMAGE_GO}" -f "${ROOT_DIR}/.container/Containerfile" "${ROOT_DIR}"
     podman build -t "${IMAGE_NODE}" -f "${ROOT_DIR}/midori-vpn-control/.container/Containerfile" "${ROOT_DIR}/midori-vpn-control"
-    podman build -t "${IMAGE_TAURI}" -f "${ROOT_DIR}/midori-vpn-desktop/.container/Containerfile" "${ROOT_DIR}/midori-vpn-desktop"
     echo "✅ Todas las imágenes construidas exitosamente."
 }
 
@@ -108,27 +106,8 @@ cmd_syft() {
         "${IMAGE_SYFT}" "$@"
 }
 
-cmd_tauri() {
-    build_image_if_missing "${IMAGE_TAURI}" "${ROOT_DIR}/midori-vpn-desktop/.container/Containerfile" "${ROOT_DIR}/midori-vpn-desktop"
-    podman run --rm "${PODMAN_USERNS[@]}" \
-        -v "${ROOT_DIR}:/workspace:z" \
-        -v midori_cargo_registry:/usr/local/cargo/registry:z \
-        -v midori_cargo_git:/usr/local/cargo/git:z \
-        -v midori_cargo_target:/tmp/cargo-target:z \
-        -v midori_npm_cache:/tmp/npm-cache:z \
-        -v "${NODE_MODULES_VOLUME}:${WORKDIR_IN_CONTAINER}/node_modules:z" \
-        -e CARGO_TARGET_DIR=/tmp/cargo-target \
-        -e npm_config_cache=/tmp/npm-cache \
-        -w "${WORKDIR_IN_CONTAINER}" \
-        "${IMAGE_TAURI}" "$@"
-}
-
-cmd_cargo() {
-    cmd_tauri cargo "$@"
-}
-
 cmd_audit() {
-    echo "🛡️ [1/4] Ejecutando govulncheck en Core y Agente..."
+    echo "🛡️ [1/2] Ejecutando govulncheck en Core y Agente..."
     build_image_if_missing "${IMAGE_GO}" "${ROOT_DIR}/.container/Containerfile" "${ROOT_DIR}"
     podman run --rm "${PODMAN_USERNS[@]}" \
         -v "${ROOT_DIR}:/workspace:z" \
@@ -140,7 +119,7 @@ cmd_audit() {
         -w "/workspace/midori-vpn-desktop/agent" \
         "${IMAGE_GO}" govulncheck ./...
 
-    echo "🛡️ [2/4] Ejecutando npm audit en Frontends..."
+    echo "🛡️ [2/2] Ejecutando npm audit en Frontends..."
     build_image_if_missing "${IMAGE_NODE}" "${ROOT_DIR}/midori-vpn-control/.container/Containerfile" "${ROOT_DIR}/midori-vpn-control"
     for d in midori-vpn-control midorivpn-extension midori-vpn-desktop; do
         if [ -d "${ROOT_DIR}/${d}" ]; then
@@ -151,19 +130,6 @@ cmd_audit() {
                 "${IMAGE_NODE}" npm audit --audit-level=high
         fi
     done
-
-    echo "🛡️ [3/4] Ejecutando cargo-audit en Tauri..."
-    build_image_if_missing "${IMAGE_TAURI}" "${ROOT_DIR}/midori-vpn-desktop/.container/Containerfile" "${ROOT_DIR}/midori-vpn-desktop"
-    podman run --rm "${PODMAN_USERNS[@]}" \
-        -v "${ROOT_DIR}:/workspace:z" \
-        -w "/workspace/midori-vpn-desktop/src-tauri" \
-        "${IMAGE_TAURI}" cargo audit --deny warnings
-
-    echo "🛡️ [4/4] Validando los lockfiles de Rust..."
-    podman run --rm "${PODMAN_USERNS[@]}" \
-        -v "${ROOT_DIR}:/workspace:z" \
-        -w "/workspace/midori-vpn-desktop/src-tauri" \
-        "${IMAGE_TAURI}" cargo check --locked
     
     echo "✅ Auditoría de seguridad completada."
 }
@@ -174,7 +140,7 @@ cmd_debt() {
 
     echo "🧹 [1/3] Buscando marcadores obsoletos en código vivo..."
     if rg -n -e "${markers}" \
-        --glob '*.{go,rs,ts,tsx,vue,js,mjs,cjs,sh,sql}' \
+        --glob '*.{go,ts,tsx,vue,js,mjs,cjs,sh,sql}' \
         --glob '!node_modules/**' --glob '!dist/**' --glob '!.git/**' \
         --glob '!scripts/pod.sh' \
         "${ROOT_DIR}/cmd" "${ROOT_DIR}/internal" \
@@ -259,14 +225,6 @@ case "$1" in
         shift
         cmd_syft "$@"
         ;;
-    tauri)
-        shift
-        cmd_tauri "$@"
-        ;;
-    cargo)
-        shift
-        cmd_cargo "$@"
-        ;;
     audit)
         cmd_audit
         ;;
@@ -277,7 +235,7 @@ case "$1" in
         cmd_build_images
         ;;
     *)
-        echo "Uso: $0 {go|gofmt|staticcheck|govulncheck|node|npm|npx|promtool|syft|tauri|cargo|audit|debt|build-images} [argumentos...]"
+        echo "Uso: $0 {go|gofmt|staticcheck|govulncheck|node|npm|npx|promtool|syft|audit|debt|build-images} [argumentos...]"
         echo ""
         echo "Ejemplos:"
         echo "  $0 go test ./..."
@@ -285,7 +243,6 @@ case "$1" in
         echo "  $0 staticcheck ./..."
         echo "  $0 govulncheck ./..."
         echo "  $0 npm run check"
-        echo "  $0 tauri cargo test"
         echo "  $0 audit"
 
         echo "  $0 debt"
