@@ -23,7 +23,8 @@ RUN apk add --no-cache \
     iptables \
     ip6tables \
     ca-certificates \
-    tzdata
+    tzdata && \
+    : > /var/log/apk.log
 
 COPY --from=builder /vpn-core /usr/local/bin/vpn-core
 
