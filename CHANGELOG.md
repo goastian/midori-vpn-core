@@ -26,6 +26,9 @@
   Nested and sibling checkouts now produce the same canonical evidence, while
   missing repositories, mixed branch states, version drift and dirty trees
   remain fail-closed.
+- Removed the one-time pre-Ed25519 environment migration, which could overwrite
+  the current OAuth redirect set and depended on a mutable remote builder. The
+  debt gate now rejects any return of the retired shared Core token contract.
 - Removed the abandoned Tauri/Rust and non-Linux Desktop targets, their
   toolchain runner and audit exceptions. The Linux RPM now consumes its icons
   and PolicyKit files exclusively from neutral packaging paths.

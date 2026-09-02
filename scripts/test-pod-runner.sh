@@ -94,6 +94,18 @@ rg -F -- "-w /external/midori-vpn-desktop/agent" "${PODMAN_LOG}" >/dev/null || f
 rg -F -- "-w /external/midori-vpn-control" "${PODMAN_LOG}" >/dev/null || fail "sibling Control audit workdir is incorrect"
 rg -F -- "-w /external/midorivpn-extension" "${PODMAN_LOG}" >/dev/null || fail "sibling extension audit workdir is incorrect"
 
+retired_core_token='VPN_CORE''_TOKEN'
+printf 'package retired\nconst name = "%s"\n' "${retired_core_token}" >"${SIBLING}/midori-vpn-core/internal/retired.go"
+if (
+    cd "${SIBLING}/midori-vpn-core"
+    PATH="${FAKE_BIN}:${PATH}" bash scripts/pod.sh debt
+) >"${TEST_DIR}/retired.out" 2>"${TEST_DIR}/retired.err"; then
+    fail "debt gate accepted a retired authentication contract"
+fi
+rg -F "se encontró el contrato retirado ${retired_core_token} en código vivo" "${TEST_DIR}/retired.err" >/dev/null || \
+    fail "retired-contract error is not actionable"
+rm -f "${SIBLING}/midori-vpn-core/internal/retired.go"
+
 mkdir -p "${TEST_DIR}/unrelated"
 : >"${PODMAN_LOG}"
 if (

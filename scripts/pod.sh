@@ -201,7 +201,7 @@ cmd_debt() {
     local markers='\b(TODO|FIXME|HACK|XXX|DEPRECATED|OBSOLETE|LEGACY)\b'
     local failed=0
 
-    echo "🧹 [1/3] Buscando marcadores obsoletos en código vivo..."
+    echo "🧹 [1/4] Buscando marcadores obsoletos en código vivo..."
     if rg -n -e "${markers}" \
         --glob '*.{go,ts,tsx,vue,js,mjs,cjs,sh,sql}' \
         --glob '!node_modules/**' --glob '!dist/**' --glob '!.git/**' \
@@ -213,7 +213,7 @@ cmd_debt() {
         failed=1
     fi
 
-    echo "🧹 [2/3] Verificando pares de migración..."
+    echo "🧹 [2/4] Verificando pares de migración..."
     local up down base
     for up in "${ROOT_DIR}"/internal/db/migrations/*.up.sql; do
         [ -e "${up}" ] || continue
@@ -234,7 +234,20 @@ cmd_debt() {
         fi
     done
 
-    echo "🧹 [3/3] Confirmando que openpgp no está en el grafo ejecutable..."
+    echo "🧹 [3/4] Buscando contratos de autenticación retirados..."
+    local retired_core_token='VPN_CORE_TOKEN'
+    if rg -n -F "${retired_core_token}" \
+        --glob '*.{go,ts,tsx,vue,js,mjs,cjs,sh,sql}' \
+        --glob '!node_modules/**' --glob '!dist/**' --glob '!.git/**' \
+        --glob '!scripts/pod.sh' \
+        "${ROOT_DIR}/cmd" "${ROOT_DIR}/internal" \
+        "${ROOT_DIR}/scripts" "${CONTROL_DIR}/src" \
+        "${DESKTOP_DIR}" "${EXTENSION_DIR}/src"; then
+        echo "error: se encontró el contrato retirado VPN_CORE_TOKEN en código vivo" >&2
+        failed=1
+    fi
+
+    echo "🧹 [4/4] Confirmando que openpgp no está en el grafo ejecutable..."
     local dependency_graph
     if ! dependency_graph="$(cmd_go list -deps ./cmd/... ./internal/...)"; then
         echo "error: no se pudo construir el grafo de dependencias Go" >&2
