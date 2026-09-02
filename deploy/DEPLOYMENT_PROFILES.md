@@ -1,5 +1,10 @@
 # Deployment profiles and privilege boundary
 
+This is the executable deployment baseline for the topology defined in
+[`docs/CENTRAL_CONTROL_ARCHITECTURE.md`](../docs/CENTRAL_CONTROL_ARCHITECTURE.md).
+The regional script does not by itself certify a node or implement the future
+signed desired-state, heartbeat and fleet revocation contracts described there.
+
 MidoriVPN uses two explicit server profiles. A service is never promoted to a
 more privileged execution level merely because deployment is easier there.
 The required order is:
@@ -94,6 +99,11 @@ single-use nonce. “Connecting a Core to Control” therefore consists of:
 No database credential, Authentik secret or Control private signing key is
 copied to a regional node. Node management ports are reachable only through
 TLS and an ingress allowlist restricted to the principal server.
+
+The current admin identity registry is local to the Redis instance used by its
+Core process. It does not yet propagate revocation into independent regional
+Redis instances. Until signed trust revisions are implemented, key rotation or
+revocation is an explicit coordinated configuration update on every node.
 
 ## Gateway placement on both profiles
 

@@ -63,7 +63,9 @@ and must be configured in Grafana, not committed to this repository.
 
 ## Multi-cluster extension
 
-The principal deployment is the only target in 2.0.0. Phase `ARC-01` will add
-regional Core targets over an authenticated private management network. Never
-publish a regional `/metrics` listener to the Internet merely to make central
-scraping possible.
+The principal deployment is the only currently deployed target. The regional
+contract is defined in
+[`docs/CENTRAL_CONTROL_ARCHITECTURE.md`](../docs/CENTRAL_CONTROL_ARCHITECTURE.md):
+central Prometheus scrapes regional Core targets over an authenticated private
+management network. Never publish a regional `/metrics` listener to the
+Internet merely to make central scraping possible.

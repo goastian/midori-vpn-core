@@ -6,6 +6,12 @@ The versioned HTTP contract is [docs/openapi.yaml](docs/openapi.yaml). Router
 coverage is checked bidirectionally so documented and implemented operations
 cannot drift silently.
 
+The target topology for one central Control and independent regional Core
+clusters is defined in
+[docs/CENTRAL_CONTROL_ARCHITECTURE.md](docs/CENTRAL_CONTROL_ARCHITECTURE.md).
+It distinguishes the implemented single-principal baseline from the remaining
+regional production gates.
+
 Version 2.0.0 is an active rework. Linux x86_64 RPM is the only production client target. Windows and macOS source is preserved, but their build and release jobs remain blocked until each native path is certified.
 
 ## Verified transports
@@ -98,6 +104,9 @@ All npm projects also run `npm audit --audit-level=high`. Linux release packagin
 ## Deployment
 
 `scripts/deploy-pod.sh` consumes a complete environment and creates a rootless Podman pod. The staging installation uses systemd Quadlets so database, Redis, API and web services are independently supervised.
+
+Principal and regional profiles, their privilege boundaries and their
+acceptance gate are described in `deploy/DEPLOYMENT_PROFILES.md`.
 
 Host-facing topology:
 

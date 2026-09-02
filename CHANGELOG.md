@@ -18,6 +18,11 @@
 
 ### Operations
 
+- Defined the central Control and independent regional Core architecture,
+  including trust and secret boundaries, signed desired-state requirements,
+  failure isolation, observability, rollout/rollback and the regional
+  production acceptance gate. The document distinguishes deployed behavior
+  from cluster lifecycle, heartbeat and fleet-revocation work that remains.
 - Added approval-gated OCI publication workflows that require the annotated
   2.0.0 tag, protected environments and explicit confirmation, then create and
   verify GitHub attestations and a keyless Cosign signature by digest.
