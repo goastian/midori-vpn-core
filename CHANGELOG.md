@@ -18,6 +18,10 @@
 
 ### Operations
 
+- Made the unified Podman runner resolve nested or sibling component checkouts,
+  preserve their container workdirs and caches, and reject unrelated working
+  directories before invoking a toolchain. A container-free shell test covers
+  both layouts and aggregate audit paths.
 - Removed the abandoned Tauri/Rust and non-Linux Desktop targets, their
   toolchain runner and audit exceptions. The Linux RPM now consumes its icons
   and PolicyKit files exclusively from neutral packaging paths.

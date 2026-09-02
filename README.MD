@@ -90,6 +90,10 @@ Do not place secrets in image build arguments, Git, logs or release artifacts.
 
 ## Rootless development and validation
 
+The unified runner discovers the Control, Desktop and extension repositories
+when they are nested under Core or cloned beside it. It rejects invocation from
+an unrelated directory instead of silently running a command at the Core root.
+
 ```bash
 # Build pinned development images
 bash scripts/pod.sh build-images
@@ -106,6 +110,8 @@ bash scripts/test-migrations.sh
 # Prohibited debt markers, migration pairs and dependency graph
 bash scripts/pod.sh debt
 
+# Runner path/layout contract without starting containers
+bash scripts/test-pod-runner.sh
 ```
 
 Each frontend repository documents its own check command and also runs

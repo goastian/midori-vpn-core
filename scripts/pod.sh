@@ -7,21 +7,119 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-CURRENT_DIR="$(pwd)"
+CURRENT_DIR="$(pwd -P)"
 
-# Calculate relative path from ROOT_DIR to current directory
-if [[ "${CURRENT_DIR}" == "${ROOT_DIR}"* ]]; then
-    REL_PATH="${CURRENT_DIR#$ROOT_DIR}"
-    REL_PATH="${REL_PATH#/}"
+die() {
+    echo "error: $*" >&2
+    exit 1
+}
+
+path_is_within() {
+    local path="$1"
+    local root="$2"
+    [[ "${path}" == "${root}" || "${path}" == "${root}/"* ]]
+}
+
+resolve_related_repo() {
+    local name="$1"
+    local candidate
+    for candidate in "${ROOT_DIR}/${name}" "$(dirname "${ROOT_DIR}")/${name}"; do
+        if [[ -d "${candidate}" ]] && related_repo_has_markers "${name}" "${candidate}"; then
+            (cd "${candidate}" && pwd -P)
+            return
+        fi
+    done
+    return 1
+}
+
+related_repo_has_markers() {
+    local name="$1"
+    local candidate="$2"
+    case "${name}" in
+        midori-vpn-control)
+            [[ -f "${candidate}/package.json" && -f "${candidate}/.container/Containerfile" ]]
+            ;;
+        midori-vpn-desktop)
+            [[ -f "${candidate}/package.json" && -f "${candidate}/agent/go.mod" ]]
+            ;;
+        midorivpn-extension)
+            [[ -f "${candidate}/package.json" && -f "${candidate}/manifest/main.json" ]]
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+container_repo_root() {
+    local host_dir="$1"
+    local name="$2"
+    local relative
+    if path_is_within "${host_dir}" "${ROOT_DIR}"; then
+        relative="${host_dir#${ROOT_DIR}}"
+        relative="${relative#/}"
+        if [[ -z "${relative}" ]]; then
+            echo "/workspace"
+        else
+            echo "/workspace/${relative}"
+        fi
+    else
+        echo "/external/${name}"
+    fi
+}
+
+CONTROL_DIR="$(resolve_related_repo midori-vpn-control || true)"
+DESKTOP_DIR="$(resolve_related_repo midori-vpn-desktop || true)"
+EXTENSION_DIR="$(resolve_related_repo midorivpn-extension || true)"
+
+CONTROL_CONTAINER_DIR=""
+DESKTOP_CONTAINER_DIR=""
+EXTENSION_CONTAINER_DIR=""
+[[ -z "${CONTROL_DIR}" ]] || CONTROL_CONTAINER_DIR="$(container_repo_root "${CONTROL_DIR}" midori-vpn-control)"
+[[ -z "${DESKTOP_DIR}" ]] || DESKTOP_CONTAINER_DIR="$(container_repo_root "${DESKTOP_DIR}" midori-vpn-desktop)"
+[[ -z "${EXTENSION_DIR}" ]] || EXTENSION_CONTAINER_DIR="$(container_repo_root "${EXTENSION_DIR}" midorivpn-extension)"
+
+CURRENT_REPO_DIR=""
+CURRENT_CONTAINER_DIR=""
+for repo_spec in \
+    "${CONTROL_DIR}|${CONTROL_CONTAINER_DIR}" \
+    "${DESKTOP_DIR}|${DESKTOP_CONTAINER_DIR}" \
+    "${EXTENSION_DIR}|${EXTENSION_CONTAINER_DIR}" \
+    "${ROOT_DIR}|/workspace"; do
+    repo_dir="${repo_spec%%|*}"
+    container_dir="${repo_spec#*|}"
+    if [[ -n "${repo_dir}" ]] && path_is_within "${CURRENT_DIR}" "${repo_dir}"; then
+        CURRENT_REPO_DIR="${repo_dir}"
+        CURRENT_CONTAINER_DIR="${container_dir}"
+        break
+    fi
+done
+
+[[ -n "${CURRENT_REPO_DIR}" ]] || die "current directory is not inside a resolved MidoriVPN repository: ${CURRENT_DIR}"
+
+REL_PATH="${CURRENT_DIR#${CURRENT_REPO_DIR}}"
+REL_PATH="${REL_PATH#/}"
+WORKDIR_IN_CONTAINER="${CURRENT_CONTAINER_DIR}${REL_PATH:+/${REL_PATH}}"
+if path_is_within "${WORKDIR_IN_CONTAINER}" "/workspace"; then
+    CACHE_KEY="${WORKDIR_IN_CONTAINER#/workspace}"
+    CACHE_KEY="${CACHE_KEY#/}"
 else
-    REL_PATH=""
+    CACHE_KEY="${WORKDIR_IN_CONTAINER#/}"
 fi
+CACHE_KEY="${CACHE_KEY//\//_}"
+NODE_MODULES_VOLUME="midori_npm_modules_${CACHE_KEY:-root}"
 
-WORKDIR_IN_CONTAINER="/workspace/${REL_PATH}"
-NODE_MODULES_VOLUME="midori_npm_modules_${REL_PATH//\//_}"
-if [[ -z "${REL_PATH}" ]]; then
-    NODE_MODULES_VOLUME="midori_npm_modules_root"
-fi
+PODMAN_WORKSPACE_MOUNTS=(-v "${ROOT_DIR}:/workspace:z")
+for repo_spec in \
+    "${CONTROL_DIR}|${CONTROL_CONTAINER_DIR}" \
+    "${DESKTOP_DIR}|${DESKTOP_CONTAINER_DIR}" \
+    "${EXTENSION_DIR}|${EXTENSION_CONTAINER_DIR}"; do
+    repo_dir="${repo_spec%%|*}"
+    container_dir="${repo_spec#*|}"
+    if [[ -n "${repo_dir}" ]] && ! path_is_within "${repo_dir}" "${ROOT_DIR}"; then
+        PODMAN_WORKSPACE_MOUNTS+=(-v "${repo_dir}:${container_dir}:z")
+    fi
+done
 
 # Image Names
 IMAGE_GO="localhost/midori-dev-go:latest"
@@ -29,6 +127,12 @@ IMAGE_NODE="localhost/midori-dev-node:latest"
 IMAGE_PROMETHEUS="docker.io/prom/prometheus@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0"
 IMAGE_SYFT="ghcr.io/anchore/syft@sha256:41f8289664101d6ebab30a97ac8df6b6f86b92d8343285ca90f428e2bc353106"
 PODMAN_USERNS=(--userns=keep-id:uid=0,gid=0)
+
+require_repo() {
+    local path="$1"
+    local label="$2"
+    [[ -n "${path}" ]] || die "${label} repository was not found nested under Core or beside it"
+}
 
 build_image_if_missing() {
     local img="$1"
@@ -41,16 +145,17 @@ build_image_if_missing() {
 }
 
 cmd_build_images() {
+    require_repo "${CONTROL_DIR}" "Control"
     echo "🔨 Construyendo todas las imágenes de desarrollo Podman Rootless..."
     podman build -t "${IMAGE_GO}" -f "${ROOT_DIR}/.container/Containerfile" "${ROOT_DIR}"
-    podman build -t "${IMAGE_NODE}" -f "${ROOT_DIR}/midori-vpn-control/.container/Containerfile" "${ROOT_DIR}/midori-vpn-control"
+    podman build -t "${IMAGE_NODE}" -f "${CONTROL_DIR}/.container/Containerfile" "${CONTROL_DIR}"
     echo "✅ Todas las imágenes construidas exitosamente."
 }
 
 cmd_go() {
     build_image_if_missing "${IMAGE_GO}" "${ROOT_DIR}/.container/Containerfile" "${ROOT_DIR}"
     podman run --rm "${PODMAN_USERNS[@]}" \
-        -v "${ROOT_DIR}:/workspace:z" \
+        "${PODMAN_WORKSPACE_MOUNTS[@]}" \
         -v midori_go_pkg:/go/pkg:z \
         -v midori_go_cache:/tmp/go-cache:z \
         -e GOCACHE=/tmp/go-cache \
@@ -63,7 +168,7 @@ cmd_go_tool() {
     shift
     build_image_if_missing "${IMAGE_GO}" "${ROOT_DIR}/.container/Containerfile" "${ROOT_DIR}"
     podman run --rm "${PODMAN_USERNS[@]}" \
-        -v "${ROOT_DIR}:/workspace:z" \
+        "${PODMAN_WORKSPACE_MOUNTS[@]}" \
         -v midori_go_pkg:/go/pkg:z \
         -v midori_go_cache:/tmp/go-cache:z \
         -e GOCACHE=/tmp/go-cache \
@@ -72,9 +177,10 @@ cmd_go_tool() {
 }
 
 cmd_node() {
-    build_image_if_missing "${IMAGE_NODE}" "${ROOT_DIR}/midori-vpn-control/.container/Containerfile" "${ROOT_DIR}/midori-vpn-control"
+    require_repo "${CONTROL_DIR}" "Control"
+    build_image_if_missing "${IMAGE_NODE}" "${CONTROL_DIR}/.container/Containerfile" "${CONTROL_DIR}"
     podman run --rm "${PODMAN_USERNS[@]}" \
-        -v "${ROOT_DIR}:/workspace:z" \
+        "${PODMAN_WORKSPACE_MOUNTS[@]}" \
         -v midori_npm_cache:/tmp/npm-cache:z \
         -v "${NODE_MODULES_VOLUME}:${WORKDIR_IN_CONTAINER}/node_modules:z" \
         -e npm_config_cache=/tmp/npm-cache \
@@ -92,7 +198,7 @@ cmd_npx() {
 
 cmd_promtool() {
     podman run --rm "${PODMAN_USERNS[@]}" \
-        -v "${ROOT_DIR}:/workspace:z" \
+        "${PODMAN_WORKSPACE_MOUNTS[@]}" \
         -w "${WORKDIR_IN_CONTAINER}" \
         --entrypoint /bin/promtool \
         "${IMAGE_PROMETHEUS}" "$@"
@@ -100,41 +206,50 @@ cmd_promtool() {
 
 cmd_syft() {
     podman run --rm "${PODMAN_USERNS[@]}" \
-        -v "${ROOT_DIR}:/workspace:z" \
+        "${PODMAN_WORKSPACE_MOUNTS[@]}" \
         -e SYFT_CACHE_DIR=/tmp/syft-cache \
         -w "${WORKDIR_IN_CONTAINER}" \
         "${IMAGE_SYFT}" "$@"
 }
 
 cmd_audit() {
+    require_repo "${CONTROL_DIR}" "Control"
+    require_repo "${DESKTOP_DIR}" "Desktop"
+    require_repo "${EXTENSION_DIR}" "Extension"
     echo "🛡️ [1/2] Ejecutando govulncheck en Core y Agente..."
     build_image_if_missing "${IMAGE_GO}" "${ROOT_DIR}/.container/Containerfile" "${ROOT_DIR}"
     podman run --rm "${PODMAN_USERNS[@]}" \
-        -v "${ROOT_DIR}:/workspace:z" \
+        "${PODMAN_WORKSPACE_MOUNTS[@]}" \
         -w "/workspace" \
         "${IMAGE_GO}" govulncheck ./cmd/... ./internal/...
 
     podman run --rm "${PODMAN_USERNS[@]}" \
-        -v "${ROOT_DIR}:/workspace:z" \
-        -w "/workspace/midori-vpn-desktop/agent" \
+        "${PODMAN_WORKSPACE_MOUNTS[@]}" \
+        -w "${DESKTOP_CONTAINER_DIR}/agent" \
         "${IMAGE_GO}" govulncheck ./...
 
     echo "🛡️ [2/2] Ejecutando npm audit en Frontends..."
-    build_image_if_missing "${IMAGE_NODE}" "${ROOT_DIR}/midori-vpn-control/.container/Containerfile" "${ROOT_DIR}/midori-vpn-control"
-    for d in midori-vpn-control midorivpn-extension midori-vpn-desktop; do
-        if [ -d "${ROOT_DIR}/${d}" ]; then
-            echo " → Auditando ${d}..."
-            podman run --rm "${PODMAN_USERNS[@]}" \
-                -v "${ROOT_DIR}:/workspace:z" \
-                -w "/workspace/${d}" \
-                "${IMAGE_NODE}" npm audit --audit-level=high
-        fi
+    build_image_if_missing "${IMAGE_NODE}" "${CONTROL_DIR}/.container/Containerfile" "${CONTROL_DIR}"
+    for repo_spec in \
+        "midori-vpn-control|${CONTROL_CONTAINER_DIR}" \
+        "midorivpn-extension|${EXTENSION_CONTAINER_DIR}" \
+        "midori-vpn-desktop|${DESKTOP_CONTAINER_DIR}"; do
+        repo_name="${repo_spec%%|*}"
+        container_dir="${repo_spec#*|}"
+        echo " → Auditando ${repo_name}..."
+        podman run --rm "${PODMAN_USERNS[@]}" \
+            "${PODMAN_WORKSPACE_MOUNTS[@]}" \
+            -w "${container_dir}" \
+            "${IMAGE_NODE}" npm audit --audit-level=high
     done
     
     echo "✅ Auditoría de seguridad completada."
 }
 
 cmd_debt() {
+    require_repo "${CONTROL_DIR}" "Control"
+    require_repo "${DESKTOP_DIR}" "Desktop"
+    require_repo "${EXTENSION_DIR}" "Extension"
     local markers='\b(TODO|FIXME|HACK|XXX|DEPRECATED|OBSOLETE|LEGACY)\b'
     local failed=0
 
@@ -144,8 +259,8 @@ cmd_debt() {
         --glob '!node_modules/**' --glob '!dist/**' --glob '!.git/**' \
         --glob '!scripts/pod.sh' \
         "${ROOT_DIR}/cmd" "${ROOT_DIR}/internal" \
-        "${ROOT_DIR}/scripts" "${ROOT_DIR}/midori-vpn-control/src" \
-        "${ROOT_DIR}/midori-vpn-desktop" "${ROOT_DIR}/midorivpn-extension/src"; then
+        "${ROOT_DIR}/scripts" "${CONTROL_DIR}/src" \
+        "${DESKTOP_DIR}" "${EXTENSION_DIR}/src"; then
         echo "error: se encontraron marcadores prohibidos de deuda técnica" >&2
         failed=1
     fi
@@ -188,7 +303,7 @@ cmd_debt() {
 }
 
 # Subcommand dispatch
-case "$1" in
+case "${1:-}" in
     go)
         shift
         cmd_go "$@"
