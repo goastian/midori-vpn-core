@@ -8,76 +8,24 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CURRENT_DIR="$(pwd -P)"
+# shellcheck source=scripts/lib/workspace-layout.sh
+source "${SCRIPT_DIR}/lib/workspace-layout.sh"
 
 die() {
     echo "error: $*" >&2
     exit 1
 }
 
-path_is_within() {
-    local path="$1"
-    local root="$2"
-    [[ "${path}" == "${root}" || "${path}" == "${root}/"* ]]
-}
-
-resolve_related_repo() {
-    local name="$1"
-    local candidate
-    for candidate in "${ROOT_DIR}/${name}" "$(dirname "${ROOT_DIR}")/${name}"; do
-        if [[ -d "${candidate}" ]] && related_repo_has_markers "${name}" "${candidate}"; then
-            (cd "${candidate}" && pwd -P)
-            return
-        fi
-    done
-    return 1
-}
-
-related_repo_has_markers() {
-    local name="$1"
-    local candidate="$2"
-    case "${name}" in
-        midori-vpn-control)
-            [[ -f "${candidate}/package.json" && -f "${candidate}/.container/Containerfile" ]]
-            ;;
-        midori-vpn-desktop)
-            [[ -f "${candidate}/package.json" && -f "${candidate}/agent/go.mod" ]]
-            ;;
-        midorivpn-extension)
-            [[ -f "${candidate}/package.json" && -f "${candidate}/manifest/main.json" ]]
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
-
-container_repo_root() {
-    local host_dir="$1"
-    local name="$2"
-    local relative
-    if path_is_within "${host_dir}" "${ROOT_DIR}"; then
-        relative="${host_dir#${ROOT_DIR}}"
-        relative="${relative#/}"
-        if [[ -z "${relative}" ]]; then
-            echo "/workspace"
-        else
-            echo "/workspace/${relative}"
-        fi
-    else
-        echo "/external/${name}"
-    fi
-}
-
-CONTROL_DIR="$(resolve_related_repo midori-vpn-control || true)"
-DESKTOP_DIR="$(resolve_related_repo midori-vpn-desktop || true)"
-EXTENSION_DIR="$(resolve_related_repo midorivpn-extension || true)"
+CONTROL_DIR="$(midorivpn_resolve_related_repo "${ROOT_DIR}" midori-vpn-control || true)"
+DESKTOP_DIR="$(midorivpn_resolve_related_repo "${ROOT_DIR}" midori-vpn-desktop || true)"
+EXTENSION_DIR="$(midorivpn_resolve_related_repo "${ROOT_DIR}" midorivpn-extension || true)"
 
 CONTROL_CONTAINER_DIR=""
 DESKTOP_CONTAINER_DIR=""
 EXTENSION_CONTAINER_DIR=""
-[[ -z "${CONTROL_DIR}" ]] || CONTROL_CONTAINER_DIR="$(container_repo_root "${CONTROL_DIR}" midori-vpn-control)"
-[[ -z "${DESKTOP_DIR}" ]] || DESKTOP_CONTAINER_DIR="$(container_repo_root "${DESKTOP_DIR}" midori-vpn-desktop)"
-[[ -z "${EXTENSION_DIR}" ]] || EXTENSION_CONTAINER_DIR="$(container_repo_root "${EXTENSION_DIR}" midorivpn-extension)"
+[[ -z "${CONTROL_DIR}" ]] || CONTROL_CONTAINER_DIR="$(midorivpn_container_repo_root "${ROOT_DIR}" "${CONTROL_DIR}" midori-vpn-control)"
+[[ -z "${DESKTOP_DIR}" ]] || DESKTOP_CONTAINER_DIR="$(midorivpn_container_repo_root "${ROOT_DIR}" "${DESKTOP_DIR}" midori-vpn-desktop)"
+[[ -z "${EXTENSION_DIR}" ]] || EXTENSION_CONTAINER_DIR="$(midorivpn_container_repo_root "${ROOT_DIR}" "${EXTENSION_DIR}" midorivpn-extension)"
 
 CURRENT_REPO_DIR=""
 CURRENT_CONTAINER_DIR=""
@@ -88,7 +36,7 @@ for repo_spec in \
     "${ROOT_DIR}|/workspace"; do
     repo_dir="${repo_spec%%|*}"
     container_dir="${repo_spec#*|}"
-    if [[ -n "${repo_dir}" ]] && path_is_within "${CURRENT_DIR}" "${repo_dir}"; then
+    if [[ -n "${repo_dir}" ]] && midorivpn_path_is_within "${CURRENT_DIR}" "${repo_dir}"; then
         CURRENT_REPO_DIR="${repo_dir}"
         CURRENT_CONTAINER_DIR="${container_dir}"
         break
@@ -100,7 +48,7 @@ done
 REL_PATH="${CURRENT_DIR#${CURRENT_REPO_DIR}}"
 REL_PATH="${REL_PATH#/}"
 WORKDIR_IN_CONTAINER="${CURRENT_CONTAINER_DIR}${REL_PATH:+/${REL_PATH}}"
-if path_is_within "${WORKDIR_IN_CONTAINER}" "/workspace"; then
+if midorivpn_path_is_within "${WORKDIR_IN_CONTAINER}" "/workspace"; then
     CACHE_KEY="${WORKDIR_IN_CONTAINER#/workspace}"
     CACHE_KEY="${CACHE_KEY#/}"
 else
@@ -116,7 +64,7 @@ for repo_spec in \
     "${EXTENSION_DIR}|${EXTENSION_CONTAINER_DIR}"; do
     repo_dir="${repo_spec%%|*}"
     container_dir="${repo_spec#*|}"
-    if [[ -n "${repo_dir}" ]] && ! path_is_within "${repo_dir}" "${ROOT_DIR}"; then
+    if [[ -n "${repo_dir}" ]] && ! midorivpn_path_is_within "${repo_dir}" "${ROOT_DIR}"; then
         PODMAN_WORKSPACE_MOUNTS+=(-v "${repo_dir}:${container_dir}:z")
     fi
 done

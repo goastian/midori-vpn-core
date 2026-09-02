@@ -22,6 +22,10 @@
   preserve their container workdirs and caches, and reject unrelated working
   directories before invoking a toolchain. A container-free shell test covers
   both layouts and aggregate audit paths.
+- Consolidated that layout resolver with the four-repository release manifest.
+  Nested and sibling checkouts now produce the same canonical evidence, while
+  missing repositories, mixed branch states, version drift and dirty trees
+  remain fail-closed.
 - Removed the abandoned Tauri/Rust and non-Linux Desktop targets, their
   toolchain runner and audit exceptions. The Linux RPM now consumes its icons
   and PolicyKit files exclusively from neutral packaging paths.

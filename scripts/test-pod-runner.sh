@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_RUNNER="${SOURCE_DIR}/pod.sh"
+SOURCE_LAYOUT="${SOURCE_DIR}/lib/workspace-layout.sh"
 TEST_DIR="$(mktemp -d /tmp/midorivpn-pod-runner.XXXXXX)"
 trap 'rm -rf "${TEST_DIR}"' EXIT
 
@@ -26,8 +27,9 @@ make_repo_set() {
     local base="$1"
     local layout="$2"
     local core="${base}/midori-vpn-core"
-    mkdir -p "${core}/scripts" "${core}/.container" "${core}/cmd" "${core}/internal/db/migrations"
+    mkdir -p "${core}/scripts/lib" "${core}/.container" "${core}/cmd" "${core}/internal/db/migrations"
     cp "${SOURCE_RUNNER}" "${core}/scripts/pod.sh"
+    cp "${SOURCE_LAYOUT}" "${core}/scripts/lib/workspace-layout.sh"
     : >"${core}/.container/Containerfile"
 
     if [[ "${layout}" == "nested" ]]; then

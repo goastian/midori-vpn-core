@@ -29,6 +29,21 @@ Desktop repository's
 [`scripts/check-rpm-signing-identity.sh`](https://github.com/goastian/midori-vpn-desktop/blob/main/scripts/check-rpm-signing-identity.sh)
 must pass before rebuilding.
 
+## Workspace manifest preflight
+
+Before creating the approved tags, generate the four-repository source
+manifest from a clean coordinated checkout. The repositories may be nested
+under Core or cloned beside it, but all four must use the same branch state,
+declare version 2.0.0 and have no uncommitted changes:
+
+```bash
+bash scripts/release/create-workspace-manifest.sh
+```
+
+The output records canonical component names and full commits. Review it before
+tagging; `ALLOW_DIRTY_RELEASE_BUILD=true` is only for local diagnostics and is
+not an acceptable release input.
+
 ## OCI publication gate
 
 Core and Control each expose a separate `publish.yml`. The workflow:
