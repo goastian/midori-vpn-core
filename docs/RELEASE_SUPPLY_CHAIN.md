@@ -3,7 +3,7 @@
 This document defines the artifacts and evidence required before MidoriVPN
 2.0.0 can be published. It does not authorize a push, tag, registry upload,
 store submission or public release. Release preparation must happen from clean
-trees whose exact commits are recorded; `dev-wedc` remains local-only.
+trees whose exact commits are recorded; working branches are not release refs.
 
 ## Release set
 
@@ -94,7 +94,7 @@ gh attestation verify oci://ghcr.io/goastian/midori-vpn-core@sha256:<digest> \
 # Public Sigstore signature. Keep the workflow identity exact.
 cosign verify \
   --certificate-identity \
-  'https://github.com/goastian/midori-vpn-core/.github/workflows/release.yml@refs/tags/v2.0.0' \
+  'https://github.com/goastian/midori-vpn-core/.github/workflows/publish.yml@refs/tags/v2.0.0' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   ghcr.io/goastian/midori-vpn-core@sha256:<digest>
 ```
@@ -105,25 +105,29 @@ browser-specific manifest checks, contain no Node `process` reference or
 development CSP origin, and be installed only from the signed store result for
 the permanent-install gate.
 
-## Current gaps at the start of SIG-01
+## Implementation status and remaining operator inputs
 
-- Core and Control release workflows push GHCR images but do not bind their
-  digests to an explicit SBOM, GitHub attestation or Cosign verification step.
-- Release actions use mutable action tags, and publication begins directly on
-  a tag without a protected approval/build-only split.
-- Desktop signs RPMs correctly, but verification uses `fedora:latest`; the
-  workflow checks out the Core license from a moving default branch and emits
-  no SBOM or provenance.
-- The extension release workflow omits required `ACCOUNT_URL`, builds both
-  browsers into the same `dist` directory, then packages only that final
-  directory. It does not consume the browser-specific ZIPs already generated
-  under `zip/`, normalize archives, lint with `web-ext`, create reviewer source
-  code, or produce store metadata/SBOM/provenance.
-- The current workstation has the public RPM trust anchor and a valid signed
-  RPM, but the matching secret key is not available in its default GnuPG home.
-  This is a hard gate for a future RPM rebuild, not a reason to replace the key.
-- AMO/CWS account identifiers, protected environments and store credentials
-  still require operator configuration before submission can be tested.
+The source-side SIG-01 gaps are closed. Core and Control separate read-only
+build evidence from protected publication, pin workflow dependencies, produce
+SBOM/provenance and verify GitHub attestations plus keyless Cosign signatures by
+digest. Desktop uses a pinned RPM builder, the established OpenPGP identity, an
+isolated verification database, SPDX, provenance and checksums. The extension
+produces separate deterministic browser packages, AMO reviewer source,
+store metadata, SPDX, provenance and checksums, and validates Firefox with the
+locked `web-ext` version.
+
+The remaining release gates are deliberately external to source control:
+
+- final approval and creation of the annotated `v2.0.0` tag;
+- protected GitHub environments, reviewers and enable switches;
+- the established RPM private identity in the protected signing environment;
+- AMO credentials and Chrome Web Store publisher/item IDs, OAuth credentials,
+  public privacy-policy URL and completed dashboard listing declarations;
+- store-signed packages and post-signing installation verification.
+
+None of those inputs may be inferred, committed or bypassed. No source-side
+completion is evidence that an external artifact has been uploaded or
+published.
 
 ## Build-only evidence gate
 

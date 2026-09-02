@@ -2,6 +2,11 @@
 
 IKEv2 is implemented with the same per-device P-256 certificate issued by Core for OpenVPN. The Desktop private key is generated locally, remains in Secret Service and is materialized only in its mode-0700 runtime directory while the tunnel exists.
 
+The reference staging deployment has passed native Desktop EAP-TLS, IKE_SA and
+CHILD_SA establishment, full-tunnel traffic, DNS/kill-switch enforcement and
+deterministic cleanup. Every new server must repeat the certification gate
+below before opening UDP `500`/`4500` or setting `certified=true`.
+
 ## Why this gateway is rootful
 
 The gateway must use the Linux XFRM IPsec stack. A rootless Podman smoke on the

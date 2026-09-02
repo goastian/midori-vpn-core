@@ -2,7 +2,7 @@
 
 This runbook prepares the approved signing path. It does not authorize running
 the signing workflows, creating a tag, pushing an image or publishing a
-release. The local `dev-wedc` branches must never be used as remote refs.
+release. Local working branches must never be used as release refs.
 
 ## Required protected environments
 
@@ -24,8 +24,10 @@ fingerprint `BE000EFBCD8F4CDA53FC1A9F13FC1FEEE3315359` and signing subkey
 Acceptable recovery paths are the original encrypted offline backup or the
 original hardware token. Import or attach it only in an operator-controlled
 GnuPG home or the protected GitHub environment. Never place private key
-material in the repository, `.projects`, an artifact, a command argument or a
-log. `scripts/check-rpm-signing-identity.sh` must pass before rebuilding.
+material in the repository, an artifact, a command argument or a log. The
+Desktop repository's
+[`scripts/check-rpm-signing-identity.sh`](https://github.com/goastian/midori-vpn-desktop/blob/main/scripts/check-rpm-signing-identity.sh)
+must pass before rebuilding.
 
 ## OCI publication gate
 

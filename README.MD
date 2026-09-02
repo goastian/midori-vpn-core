@@ -1,6 +1,8 @@
 # Midori VPN 2.0.0
 
-Midori VPN is a Linux-first VPN platform built around WireGuard. The workspace contains the Go Core/Control API, the Vue Control panel, a native Go Linux agent with a browser-served Vue UI, and Firefox/Chromium proxy extensions.
+Midori VPN is a Linux-first VPN platform built around WireGuard. The project
+includes the Go Core API, the Vue Control panel, a native Go Linux agent with a
+browser-served Vue UI, and Firefox/Chromium proxy extensions.
 
 The versioned HTTP contract is [docs/openapi.yaml](docs/openapi.yaml). Router
 coverage is checked bidirectionally so documented and implemented operations
@@ -23,8 +25,8 @@ the abandoned Tauri/Rust and non-Linux client sources have been removed.
 | WireGuard over WSS | `443/tcp` | Authenticated, health-gated |
 | WireGuard over MASQUE | `443/udp` | RFC 9298 CONNECT-UDP, TLS 1.3, authenticated, health-gated |
 | HTTPS CONNECT proxy | configured TLS endpoint | Browser extension only, scoped token |
-| OpenVPN DCO | `1194/udp` | Not advertised until a real gateway/client is deployed |
-| IKEv2 | `500/udp`, `4500/udp` | Not advertised until a real gateway/profile flow is deployed |
+| OpenVPN DCO | `1194/udp` | Native Linux client and rootful gateway certified; advertised only while healthy and explicitly certified |
+| IKEv2 | `500/udp`, `4500/udp` | Native EAP-TLS client and rootful gateway certified; advertised only while healthy and explicitly certified |
 
 OpenVPN and IKEv2 share a client-certificate authority. Devices generate an
 ECDSA P-256 private key locally and submit only a signed CSR to Core. Core
@@ -34,20 +36,30 @@ configure `VPN_CLIENT_CA_CERT` and `VPN_CLIENT_CA_KEY` before either transport
 can be enabled. The public CA and CRL are served from `/pki/client-ca.pem` and
 `/pki/client.crl`.
 
-Smart mode tries only healthy advertised transports and accepts a connection only after a WireGuard handshake. There are no simulated sessions or implicit transport ports.
+Smart mode orders the healthy WireGuard family (`wireguard`, `wss`, `masque`)
+by priority and accepts a connection only after a WireGuard handshake. OpenVPN
+and IKEv2 are explicit user selections when their server capability is healthy
+and certified. There are no simulated sessions or implicit transport ports.
 
-## Workspace
+## Source repositories
+
+- [Core](https://github.com/goastian/midori-vpn-core): API, gateways, database
+  and deployment operations.
+- [Control](https://github.com/goastian/midori-vpn-control): administration and
+  user SPA.
+- [Desktop](https://github.com/goastian/midori-vpn-desktop): Linux agent, tray,
+  Vue client and RPM packaging.
+- [Browser extension](https://github.com/goastian/midorivpn-extension): Firefox,
+  Midori and Chromium HTTPS proxy client.
+
+The primary Core tree is organized as follows:
 
 ```text
 cmd/vpn-core/                 Core and Control process
 internal/                     Auth, API, database, gateways, repositories, WireGuard
 internal/db/migrations/       Immutable PostgreSQL migrations and rollbacks
-midori-vpn-control/           Vue administration and user panel
-midori-vpn-desktop/           Linux agent, Vue client and RPM packaging
-midorivpn-extension/          Firefox and Chromium HTTPS proxy extension
 deploy/                       Nginx, sysctl and protocol operations
 scripts/                      Rootless Podman build, validation and deployment tools
-.projects/                    Permanent local plans, architecture, audits and incidents
 ```
 
 ## Supported toolchain
@@ -74,7 +86,7 @@ Important security groups:
 - `WSS_TUNNEL_*` and `MASQUE_*`: disabled explicitly unless their gateways are configured.
 - `CORE_ALLOWED_HOSTS`, `TRUSTED_PROXIES`, `CORS_ALLOWED_ORIGINS`: mandatory production boundaries.
 
-Do not place secrets in image build arguments, Git, `.projects`, logs or release artifacts.
+Do not place secrets in image build arguments, Git, logs or release artifacts.
 
 ## Rootless development and validation
 
@@ -94,13 +106,11 @@ bash scripts/test-migrations.sh
 # Prohibited debt markers, migration pairs and dependency graph
 bash scripts/pod.sh debt
 
-# Frontends
-(cd midori-vpn-control && bash ../scripts/pod.sh npm run check)
-(cd midori-vpn-desktop && bash ../scripts/pod.sh npm run check)
-(cd midorivpn-extension && bash ../scripts/pod.sh npm run check)
 ```
 
-All npm projects also run `npm audit --audit-level=high`. Linux release packaging performs Go and npm builds inside a rootless Podman RPM builder.
+Each frontend repository documents its own check command and also runs
+`npm audit --audit-level=high`. Linux release packaging performs Go and npm
+builds inside a rootless Podman RPM builder.
 
 ## Deployment
 
@@ -145,15 +155,20 @@ See `deploy/OBSERVABILITY.md` for rendering, deployment and rollback.
 
 ## Client and extension
 
-- Linux installation, signature verification and RPM build: `midori-vpn-desktop/README.md`.
-- Control development: `midori-vpn-control/README.md`.
-- Firefox/Chromium extension build: `midorivpn-extension/README.md`.
+- Linux installation, signature verification and RPM build:
+  [Desktop README](https://github.com/goastian/midori-vpn-desktop/blob/main/README.md).
+- Control development:
+  [Control README](https://github.com/goastian/midori-vpn-control/blob/main/README.md).
+- Firefox/Chromium extension build:
+  [extension README](https://github.com/goastian/midorivpn-extension/blob/main/README.md).
 - WSS operations: `deploy/WSS_TUNNEL.md`.
 - MASQUE operations: `deploy/MASQUE.md`.
 
 ## Branch and release policy
 
-Development is performed only on local branch `dev-wedc`. Nothing is pushed or made public from this workspace. Generated artifacts are signed and verified locally before transfer to the test client. Changelogs must be updated for every release change.
+Release artifacts are produced only from the approved annotated version tag and
+clean source revisions recorded in the release manifest. Working branches are
+not release inputs. Changelogs must be updated for every release change.
 
 The required artifact set, trust identities, SBOM/provenance evidence and
 store-signing gates are defined in `docs/RELEASE_SUPPLY_CHAIN.md`. Preparing a

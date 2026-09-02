@@ -1,6 +1,10 @@
 # OpenVPN 2.7/DCO gateway
 
-This gateway is intentionally not enabled or published by the generic deployment. Port `1194/udp` must remain closed until the gateway, device-certificate revocation and an authenticated end-to-end tunnel have all passed.
+This gateway is intentionally not enabled by the generic deployment. The
+reference staging deployment has passed native Desktop DCO, authenticated
+tunnel, traffic, DNS, kill-switch, revocation and cleanup checks. Every new
+server must repeat the certification gate below before opening `1194/udp` or
+setting `certified=true`.
 
 ## PKI
 
