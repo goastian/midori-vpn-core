@@ -248,6 +248,38 @@ type AdminStats struct {
 	TotalBytesRecv int64 `json:"total_bytes_received"`
 }
 
+type DashboardTraffic struct {
+	BytesSent     int64 `json:"bytes_sent"`
+	BytesReceived int64 `json:"bytes_received"`
+}
+
+type DashboardRecentSession struct {
+	ID            uuid.UUID  `json:"id"`
+	DeviceID      *uuid.UUID `json:"device_id"`
+	DeviceName    string     `json:"device_name"`
+	ServerID      uuid.UUID  `json:"server_id"`
+	ServerName    string     `json:"server_name"`
+	Protocol      string     `json:"protocol"`
+	AssignedIP    string     `json:"assigned_ip"`
+	IsActive      bool       `json:"is_active"`
+	BytesSent     int64      `json:"bytes_sent"`
+	BytesReceived int64      `json:"bytes_received"`
+	LastHandshake *time.Time `json:"last_handshake"`
+	CreatedAt     time.Time  `json:"created_at"`
+}
+
+type DashboardSummary struct {
+	RegisteredDevices int                      `json:"registered_devices"`
+	ConnectedDevices  int                      `json:"connected_devices"`
+	MaxDevices        int                      `json:"max_devices"`
+	AvailableDevices  int                      `json:"available_devices"`
+	PlanSlug          string                   `json:"plan_slug"`
+	PlanName          string                   `json:"plan_name"`
+	Traffic           DashboardTraffic         `json:"traffic"`
+	RecentSessions    []DashboardRecentSession `json:"recent_sessions"`
+	Infrastructure    *AdminStats              `json:"infrastructure,omitempty"`
+}
+
 type DeviceTypeBreakdown struct {
 	Desktop   int `json:"desktop"`
 	Extension int `json:"extension"`

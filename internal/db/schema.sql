@@ -361,6 +361,7 @@ CREATE INDEX IF NOT EXISTS idx_peers_created_at ON peers (created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_peers_active_device ON peers (device_id) WHERE is_active = TRUE AND device_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_peers_device_created ON peers (device_id, created_at DESC) WHERE device_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_peers_user_active ON peers (user_id) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_peers_user_created ON peers (user_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_peers_server_active ON peers (server_id) WHERE is_active = TRUE;
 
 -- ============================================================

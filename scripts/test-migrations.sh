@@ -71,6 +71,8 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000017_multicluster_model.up.sql >/dev/null
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000018_node_enrollment_identity.up.sql >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000019_dashboard_recent_sessions_index.up.sql >/dev/null
 
 multicluster_tables="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('clusters','core_nodes','node_enrollment_tokens','desired_revisions','node_observations')")"
@@ -90,6 +92,9 @@ node_identity_columns="$(podman exec "${container}" psql -U midori -d midori_vpn
 node_identity_index="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT to_regclass('public.uq_core_nodes_identity_public_key') IS NOT NULL")"
 [ "${node_identity_index}" = "t" ] || { printf 'error: migration 18 did not create the unique node identity index\n' >&2; exit 1; }
+dashboard_sessions_index="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT to_regclass('public.idx_peers_user_created') IS NOT NULL")"
+[ "${dashboard_sessions_index}" = "t" ] || { printf 'error: migration 19 did not create the dashboard recent-sessions index\n' >&2; exit 1; }
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c \
   "INSERT INTO clusters (id, name, region) VALUES ('80000000-0000-4000-8000-000000000019', 'DNS label guard', 'test')" >/dev/null
 if podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c \
@@ -255,6 +260,12 @@ cascade_rows="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT (SELECT COUNT(*) FROM devices WHERE user_id = '10000000-0000-4000-8000-000000000002') + (SELECT COUNT(*) FROM peers WHERE user_id = '10000000-0000-4000-8000-000000000002') + (SELECT COUNT(*) FROM device_certificates WHERE user_id = '10000000-0000-4000-8000-000000000002')")"
 [ "${cascade_rows}" = "0" ] || { printf 'error: user cascade left %s device-related rows\n' "${cascade_rows}" >&2; exit 1; }
 
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000019_dashboard_recent_sessions_index.down.sql >/dev/null
+dashboard_sessions_index="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT to_regclass('public.idx_peers_user_created') IS NOT NULL")"
+[ "${dashboard_sessions_index}" = "f" ] || { printf 'error: migration 19 rollback left the dashboard recent-sessions index\n' >&2; exit 1; }
+
 # Enrollment identity rollback must refuse to discard durable identity state.
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c "
   INSERT INTO clusters (id, name, region)
@@ -382,6 +393,8 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000017_multicluster_model.up.sql >/dev/null
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000018_node_enrollment_identity.up.sql >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000019_dashboard_recent_sessions_index.up.sql >/dev/null
 
 # The device-based certificate key permits equal hostnames on distinct
 # registered installations without merging either device.
@@ -426,5 +439,8 @@ schema_node_identity_columns="$(podman exec "${container}" psql -U midori -d mid
 schema_node_identity_index="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
   "SELECT to_regclass('public.uq_core_nodes_identity_public_key') IS NOT NULL")"
 [ "${schema_node_identity_index}" = "t" ] || { printf 'error: consolidated schema did not create the unique node identity index\n' >&2; exit 1; }
+schema_dashboard_sessions_index="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
+  "SELECT to_regclass('public.idx_peers_user_created') IS NOT NULL")"
+[ "${schema_dashboard_sessions_index}" = "t" ] || { printf 'error: consolidated schema did not create the dashboard recent-sessions index\n' >&2; exit 1; }
 
-printf 'Migration chain 1-18, migrations 9-18 rollback, and consolidated schema verified on PostgreSQL 18.\n'
+printf 'Migration chain 1-19, migrations 9-19 rollback, and consolidated schema verified on PostgreSQL 18.\n'

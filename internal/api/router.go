@@ -134,6 +134,7 @@ func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *au
 
 			r.Get("/me", ch.Me)
 			r.Get("/quota", ch.GetQuota)
+			r.Get("/dashboard/summary", ch.DashboardSummary)
 			r.Post("/proxy-credentials", ch.ProxyCredentials)
 			r.Post("/tunnel-credentials", ch.TunnelCredentials)
 			r.Get("/servers", ch.ListServers)

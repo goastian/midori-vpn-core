@@ -294,6 +294,16 @@ paths:
         '200': {$ref: '#/components/responses/OK'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
+  /api/v1/control/dashboard/summary:
+    get:
+      operationId: getCurrentUserDashboardSummary
+      tags: [Profile]
+      description: Returns device counts, quota, aggregate traffic, and recent sessions without deriving devices from peer history. Infrastructure is present only for administrators.
+      responses:
+        '200': {$ref: '#/components/responses/DashboardSummary'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/control/proxy-credentials:
     post:
       operationId: createProxyCredential
@@ -1283,6 +1293,66 @@ components:
         ok: {const: true}
         data: {type: array, items: {$ref: '#/components/schemas/ConnectionSummary'}}
       additionalProperties: false
+    DashboardTraffic:
+      type: object
+      additionalProperties: false
+      required: [bytes_sent, bytes_received]
+      properties:
+        bytes_sent: {type: integer, format: int64, minimum: 0}
+        bytes_received: {type: integer, format: int64, minimum: 0}
+    DashboardRecentSession:
+      type: object
+      additionalProperties: false
+      required: [id, device_id, device_name, server_id, server_name, protocol, assigned_ip, is_active, bytes_sent, bytes_received, last_handshake, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        device_id: {type: [string, 'null'], format: uuid}
+        device_name: {type: string, minLength: 1, maxLength: 64}
+        server_id: {type: string, format: uuid}
+        server_name: {type: string, minLength: 1}
+        protocol: {type: string, enum: [wireguard, openvpn, ikev2, wss, masque, proxy]}
+        assigned_ip: {type: string, minLength: 1}
+        is_active: {type: boolean}
+        bytes_sent: {type: integer, format: int64, minimum: 0}
+        bytes_received: {type: integer, format: int64, minimum: 0}
+        last_handshake: {type: [string, 'null'], format: date-time}
+        created_at: {type: string, format: date-time}
+    DashboardInfrastructure:
+      type: object
+      additionalProperties: false
+      required: [total_users, total_servers, active_servers, total_peers, active_peers, total_bytes_sent, total_bytes_received]
+      properties:
+        total_users: {type: integer, minimum: 0}
+        total_servers: {type: integer, minimum: 0}
+        active_servers: {type: integer, minimum: 0}
+        total_peers: {type: integer, minimum: 0}
+        active_peers: {type: integer, minimum: 0}
+        total_bytes_sent: {type: integer, format: int64, minimum: 0}
+        total_bytes_received: {type: integer, format: int64, minimum: 0}
+    DashboardSummary:
+      type: object
+      additionalProperties: false
+      required: [registered_devices, connected_devices, max_devices, available_devices, plan_slug, plan_name, traffic, recent_sessions]
+      properties:
+        registered_devices: {type: integer, minimum: 0}
+        connected_devices: {type: integer, minimum: 0}
+        max_devices: {type: integer, minimum: 1}
+        available_devices: {type: integer, minimum: 0}
+        plan_slug: {type: string, minLength: 1}
+        plan_name: {type: string, minLength: 1}
+        traffic: {$ref: '#/components/schemas/DashboardTraffic'}
+        recent_sessions:
+          type: array
+          maxItems: 6
+          items: {$ref: '#/components/schemas/DashboardRecentSession'}
+        infrastructure: {$ref: '#/components/schemas/DashboardInfrastructure'}
+    DashboardSummaryEnvelope:
+      type: object
+      additionalProperties: false
+      required: [ok, data]
+      properties:
+        ok: {const: true}
+        data: {$ref: '#/components/schemas/DashboardSummary'}
     ConnectionConfigurationEnvelope:
       type: object
       required: [ok, data]
@@ -1726,6 +1796,11 @@ components:
       content:
         application/json:
           schema: {$ref: '#/components/schemas/ConnectionListEnvelope'}
+    DashboardSummary:
+      description: Validated per-user Dashboard snapshot with optional administrator infrastructure totals.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/DashboardSummaryEnvelope'}
     Device:
       description: Registered device with at most one active session.
       content:

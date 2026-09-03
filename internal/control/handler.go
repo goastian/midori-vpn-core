@@ -106,6 +106,7 @@ type Handler struct {
 	peerRepo              *repo.PeerRepo
 	peerOperationRepo     *repo.PeerOperationRepo
 	deviceRepo            *repo.DeviceRepo
+	dashboardRepo         *repo.DashboardRepo
 	meshRepo              *repo.MeshRepo
 	auditRepo             *repo.AuditRepo
 	trustedExtensionRepo  *repo.TrustedExtensionRepo
@@ -154,6 +155,7 @@ func NewHandlerWithMeshAndDataEncryption(pool *pgxpool.Pool, cfg *config.Config,
 		peerRepo:              repo.NewPeerRepo(pool, dataCipher),
 		peerOperationRepo:     repo.NewPeerOperationRepo(pool, dataCipher),
 		deviceRepo:            repo.NewDeviceRepo(pool),
+		dashboardRepo:         repo.NewDashboardRepo(pool),
 		meshRepo:              repo.NewMeshRepo(pool),
 		auditRepo:             repo.NewAuditRepo(pool),
 		trustedExtensionRepo:  repo.NewTrustedExtensionRepo(pool),
@@ -348,6 +350,50 @@ func (h *Handler) GetQuota(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond.JsonOK(w, quota, http.StatusOK)
+}
+
+func (h *Handler) DashboardSummary(w http.ResponseWriter, r *http.Request) {
+	user := auth.GetUser(r)
+	if user == nil {
+		respond.JsonError(w, "not authenticated", http.StatusUnauthorized)
+		return
+	}
+
+	quota, err := h.getUserQuota(r.Context(), user)
+	if err != nil {
+		respond.SafeError(w, "failed to load dashboard quota", err, http.StatusInternalServerError)
+		return
+	}
+	snapshot, err := h.dashboardRepo.UserSnapshot(r.Context(), user.ID)
+	if err != nil {
+		respond.SafeError(w, "failed to load dashboard summary", err, http.StatusInternalServerError)
+		return
+	}
+
+	availableDevices := quota.MaxDevices - snapshot.ConnectedDevices
+	if availableDevices < 0 {
+		availableDevices = 0
+	}
+	summary := models.DashboardSummary{
+		RegisteredDevices: snapshot.RegisteredDevices,
+		ConnectedDevices:  snapshot.ConnectedDevices,
+		MaxDevices:        quota.MaxDevices,
+		AvailableDevices:  availableDevices,
+		PlanSlug:          quota.PlanSlug,
+		PlanName:          quota.PlanName,
+		Traffic:           snapshot.Traffic,
+		RecentSessions:    snapshot.RecentSessions,
+	}
+	if IsAdmin(user) {
+		infrastructure, err := h.dashboardRepo.Infrastructure(r.Context())
+		if err != nil {
+			respond.SafeError(w, "failed to load dashboard infrastructure", err, http.StatusInternalServerError)
+			return
+		}
+		summary.Infrastructure = &infrastructure
+	}
+
+	respond.JsonOK(w, summary, http.StatusOK)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1163,20 +1209,10 @@ func (h *Handler) MyAuditLogs(w http.ResponseWriter, r *http.Request) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 func (h *Handler) AdminDashboardStats(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	totalUsers, _ := h.userRepo.Count(ctx)
-	totalServers, activeServers, _ := h.serverRepo.Count(ctx)
-	totalPeers, activePeers, _ := h.peerRepo.CountAll(ctx)
-	bytesSent, bytesRecv, _ := h.peerRepo.TotalTraffic(ctx)
-
-	stats := models.AdminStats{
-		TotalUsers:     totalUsers,
-		TotalServers:   totalServers,
-		ActiveServers:  activeServers,
-		TotalPeers:     totalPeers,
-		ActivePeers:    activePeers,
-		TotalBytesSent: bytesSent,
-		TotalBytesRecv: bytesRecv,
+	stats, err := h.dashboardRepo.Infrastructure(r.Context())
+	if err != nil {
+		respond.SafeError(w, "failed to load dashboard statistics", err, http.StatusInternalServerError)
+		return
 	}
 	respond.JsonOK(w, stats, http.StatusOK)
 }

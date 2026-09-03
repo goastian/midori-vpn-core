@@ -45,6 +45,10 @@
 
 ### Operations
 
+- Added a per-user Dashboard summary endpoint backed by stable device identity,
+  preserved historical traffic and a bounded recent-session query. Optional
+  global infrastructure totals are returned only to administrators, and the
+  new user/session access path is covered by a PostgreSQL index migration.
 - Added bounded central HTTP discovery for operational regional nodes plus
   fleet metrics, alerts and dashboard panels for heartbeat, desired/observed
   drift, version compatibility, signature/replay failures, capacity and pending
