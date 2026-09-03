@@ -21,28 +21,18 @@ func NewPeerRepo(pool *pgxpool.Pool) *PeerRepo {
 
 func (r *PeerRepo) Create(ctx context.Context, p *models.Peer) error {
 	query := `
-		INSERT INTO peers (user_id, server_id, public_key, preshared_key, assigned_ip, device_name)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO peers (user_id, server_id, public_key, preshared_key, assigned_ip, device_name, device_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id, is_active, created_at
 	`
 	return r.pool.QueryRow(ctx, query,
-		p.UserID, p.ServerID, p.PublicKey, p.PresharedKey, p.AssignedIP, p.DeviceName,
+		p.UserID, p.ServerID, p.PublicKey, p.PresharedKey, p.AssignedIP, p.DeviceName, p.DeviceID,
 	).Scan(&p.ID, &p.IsActive, &p.CreatedAt)
 }
 
-func (r *PeerRepo) ExistsActiveDeviceName(ctx context.Context, userID uuid.UUID, deviceName string) (bool, error) {
-	query := `SELECT EXISTS (SELECT 1 FROM peers WHERE user_id = $1 AND LOWER(device_name) = LOWER($2) AND is_active = TRUE)`
-	var exists bool
-	err := r.pool.QueryRow(ctx, query, userID, deviceName).Scan(&exists)
-	if err != nil {
-		return false, fmt.Errorf("check device name exists: %w", err)
-	}
-	return exists, nil
-}
-
-func (r *PeerRepo) DeactivateByName(ctx context.Context, userID uuid.UUID, deviceName string) error {
-	query := `UPDATE peers SET is_active = FALSE WHERE user_id = $1 AND LOWER(device_name) = LOWER($2) AND is_active = TRUE`
-	_, err := r.pool.Exec(ctx, query, userID, deviceName)
+func (r *PeerRepo) DeactivateByDeviceID(ctx context.Context, userID, deviceID uuid.UUID) error {
+	query := `UPDATE peers SET is_active = FALSE WHERE user_id = $1 AND device_id = $2 AND is_active = TRUE`
+	_, err := r.pool.Exec(ctx, query, userID, deviceID)
 	return err
 }
 
@@ -60,13 +50,13 @@ func (r *PeerRepo) DeactivateByServerAndIP(ctx context.Context, serverID uuid.UU
 
 func (r *PeerRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.Peer, error) {
 	query := `
-		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name,
+		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
 		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
 		FROM peers WHERE id = $1
 	`
 	var p models.Peer
 	err := r.pool.QueryRow(ctx, query, id).Scan(
-		&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.PresharedKey, &p.AssignedIP, &p.IsActive, &p.DeviceName,
+		&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.PresharedKey, &p.AssignedIP, &p.IsActive, &p.DeviceName, &p.DeviceID,
 		&p.LastHandshake, &p.BytesSent, &p.BytesReceived, &p.CreatedAt, &p.ExpiresAt,
 	)
 	if err != nil {
@@ -77,7 +67,7 @@ func (r *PeerRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.Peer, err
 
 func (r *PeerRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]models.Peer, error) {
 	query := `
-		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name,
+		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
 		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
 		FROM peers WHERE user_id = $1 ORDER BY created_at DESC
 	`
@@ -91,7 +81,7 @@ func (r *PeerRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]models.P
 	for rows.Next() {
 		var p models.Peer
 		if err := rows.Scan(
-			&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.PresharedKey, &p.AssignedIP, &p.IsActive, &p.DeviceName,
+			&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.PresharedKey, &p.AssignedIP, &p.IsActive, &p.DeviceName, &p.DeviceID,
 			&p.LastHandshake, &p.BytesSent, &p.BytesReceived, &p.CreatedAt, &p.ExpiresAt,
 		); err != nil {
 			return nil, err
@@ -106,7 +96,7 @@ func (r *PeerRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]models.P
 
 func (r *PeerRepo) ListByServer(ctx context.Context, serverID uuid.UUID) ([]models.Peer, error) {
 	query := `
-		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name,
+		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
 		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
 		FROM peers WHERE server_id = $1 ORDER BY created_at DESC
 	`
@@ -120,7 +110,7 @@ func (r *PeerRepo) ListByServer(ctx context.Context, serverID uuid.UUID) ([]mode
 	for rows.Next() {
 		var p models.Peer
 		if err := rows.Scan(
-			&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.PresharedKey, &p.AssignedIP, &p.IsActive, &p.DeviceName,
+			&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.PresharedKey, &p.AssignedIP, &p.IsActive, &p.DeviceName, &p.DeviceID,
 			&p.LastHandshake, &p.BytesSent, &p.BytesReceived, &p.CreatedAt, &p.ExpiresAt,
 		); err != nil {
 			return nil, err
@@ -136,7 +126,7 @@ func (r *PeerRepo) ListByServer(ctx context.Context, serverID uuid.UUID) ([]mode
 func (r *PeerRepo) ListAll(ctx context.Context, limit, offset int) ([]models.Peer, error) {
 	query := `
 		SELECT p.id, p.user_id, COALESCE(u.email, ''), p.server_id, p.public_key, COALESCE(p.preshared_key, ''), p.assigned_ip,
-		       p.is_active, p.device_name, p.last_handshake, p.bytes_sent, p.bytes_received,
+		       p.is_active, p.device_name, p.device_id, p.last_handshake, p.bytes_sent, p.bytes_received,
 		       p.created_at, p.expires_at
 		FROM peers p
 		LEFT JOIN users u ON u.id = p.user_id
@@ -152,7 +142,7 @@ func (r *PeerRepo) ListAll(ctx context.Context, limit, offset int) ([]models.Pee
 	for rows.Next() {
 		var p models.Peer
 		if err := rows.Scan(
-			&p.ID, &p.UserID, &p.UserEmail, &p.ServerID, &p.PublicKey, &p.PresharedKey, &p.AssignedIP, &p.IsActive, &p.DeviceName,
+			&p.ID, &p.UserID, &p.UserEmail, &p.ServerID, &p.PublicKey, &p.PresharedKey, &p.AssignedIP, &p.IsActive, &p.DeviceName, &p.DeviceID,
 			&p.LastHandshake, &p.BytesSent, &p.BytesReceived, &p.CreatedAt, &p.ExpiresAt,
 		); err != nil {
 			return nil, err
@@ -167,7 +157,7 @@ func (r *PeerRepo) ListAll(ctx context.Context, limit, offset int) ([]models.Pee
 
 func (r *PeerRepo) ListActiveByServer(ctx context.Context, serverID uuid.UUID) ([]models.Peer, error) {
 	query := `
-		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name,
+		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
 		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
 		FROM peers WHERE server_id = $1 AND is_active = TRUE ORDER BY created_at DESC
 	`
@@ -181,7 +171,7 @@ func (r *PeerRepo) ListActiveByServer(ctx context.Context, serverID uuid.UUID) (
 	for rows.Next() {
 		var p models.Peer
 		if err := rows.Scan(
-			&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.PresharedKey, &p.AssignedIP, &p.IsActive, &p.DeviceName,
+			&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.PresharedKey, &p.AssignedIP, &p.IsActive, &p.DeviceName, &p.DeviceID,
 			&p.LastHandshake, &p.BytesSent, &p.BytesReceived, &p.CreatedAt, &p.ExpiresAt,
 		); err != nil {
 			return nil, err
@@ -196,7 +186,7 @@ func (r *PeerRepo) ListActiveByServer(ctx context.Context, serverID uuid.UUID) (
 
 func (r *PeerRepo) ListStale(ctx context.Context, noHandshakeSince time.Duration) ([]models.Peer, error) {
 	query := `
-		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name,
+		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
 		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
 		FROM peers
 		WHERE is_active = TRUE
@@ -216,7 +206,7 @@ func (r *PeerRepo) ListStale(ctx context.Context, noHandshakeSince time.Duration
 	for rows.Next() {
 		var p models.Peer
 		if err := rows.Scan(
-			&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.PresharedKey, &p.AssignedIP, &p.IsActive, &p.DeviceName,
+			&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.PresharedKey, &p.AssignedIP, &p.IsActive, &p.DeviceName, &p.DeviceID,
 			&p.LastHandshake, &p.BytesSent, &p.BytesReceived, &p.CreatedAt, &p.ExpiresAt,
 		); err != nil {
 			return nil, err
@@ -257,7 +247,7 @@ func (r *PeerRepo) CountByUser(ctx context.Context, userID uuid.UUID) (int, erro
 // we return the existing allocation instead of counting it as a new device.
 func (r *PeerRepo) GetActiveByUserAndPublicKey(ctx context.Context, userID uuid.UUID, publicKey string) (*models.Peer, error) {
 	query := `
-		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name,
+		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
 		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
 		FROM peers
 		WHERE user_id = $1 AND public_key = $2 AND is_active = TRUE
@@ -265,7 +255,7 @@ func (r *PeerRepo) GetActiveByUserAndPublicKey(ctx context.Context, userID uuid.
 	`
 	var p models.Peer
 	err := r.pool.QueryRow(ctx, query, userID, publicKey).Scan(
-		&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.PresharedKey, &p.AssignedIP, &p.IsActive, &p.DeviceName,
+		&p.ID, &p.UserID, &p.ServerID, &p.PublicKey, &p.PresharedKey, &p.AssignedIP, &p.IsActive, &p.DeviceName, &p.DeviceID,
 		&p.LastHandshake, &p.BytesSent, &p.BytesReceived, &p.CreatedAt, &p.ExpiresAt,
 	)
 	if err != nil {

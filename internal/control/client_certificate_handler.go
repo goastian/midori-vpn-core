@@ -2,6 +2,7 @@ package control
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -13,15 +14,17 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/clientpki"
 	"github.com/goastian/midori-vpn-core/internal/models"
+	"github.com/goastian/midori-vpn-core/internal/repo"
 	"github.com/goastian/midori-vpn-core/internal/respond"
 )
 
 const clientPKIUnavailableCode = "client_pki_unavailable"
 
 type enrollDeviceCertificateRequest struct {
-	ServerID   string `json:"server_id"`
-	DeviceName string `json:"device_name"`
-	CSRPEM     string `json:"csr_pem"`
+	ServerID   string         `json:"server_id"`
+	DeviceName string         `json:"device_name"`
+	Device     *DeviceRequest `json:"device,omitempty"`
+	CSRPEM     string         `json:"csr_pem"`
 }
 
 type enrollDeviceCertificateResponse struct {
@@ -59,7 +62,11 @@ func (h *Handler) EnrollDeviceCertificate(w http.ResponseWriter, r *http.Request
 		respond.JsonError(w, "invalid server_id", http.StatusBadRequest)
 		return
 	}
-	deviceName := sanitizeDeviceName(strings.TrimSpace(request.DeviceName))
+	deviceRequest, err := normalizeDeviceRequest(request.Device, request.DeviceName)
+	if err != nil {
+		respond.JsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	server, err := h.serverRepo.GetByID(r.Context(), serverID)
 	if err != nil || !server.IsActive {
 		respond.JsonError(w, "server not found or inactive", http.StatusNotFound)
@@ -72,35 +79,27 @@ func (h *Handler) EnrollDeviceCertificate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	hasExisting, err := h.clientCertificateRepo.HasActiveDevice(r.Context(), user.ID, serverID, deviceName)
-	if err != nil {
-		respond.SafeError(w, "failed to check device certificate", err, http.StatusInternalServerError)
-		return
-	}
-	if !hasExisting {
-		activeCount, err := h.clientCertificateRepo.CountActiveByUser(r.Context(), user.ID)
-		if err != nil {
-			respond.SafeError(w, "failed to check certificate quota", err, http.StatusInternalServerError)
-			return
-		}
-		quota := h.getUserQuota(r.Context(), user)
-		if activeCount >= quota.MaxDevices {
-			respond.JsonErrorCode(w, "device certificate limit reached", "device_limit_reached", http.StatusConflict)
-			return
-		}
-	}
-
 	certificateID := uuid.New()
 	issued, err := h.clientCertificateCA.Issue(request.CSRPEM, certificateID, time.Now())
 	if err != nil {
 		respond.SafeError(w, "invalid certificate request", err, http.StatusBadRequest)
 		return
 	}
+	device, err := h.resolveCertificateDevice(r.Context(), user.ID, serverID, deviceRequest)
+	if errors.Is(err, repo.ErrDeviceRevoked) {
+		respond.JsonErrorCode(w, "device is revoked", "device_revoked", http.StatusConflict)
+		return
+	}
+	if err != nil {
+		respond.SafeError(w, "failed to resolve certificate device", err, http.StatusInternalServerError)
+		return
+	}
 	certificate := models.DeviceCertificate{
 		ID:              certificateID,
 		UserID:          user.ID,
 		ServerID:        serverID,
-		DeviceName:      deviceName,
+		DeviceName:      device.ReportedName,
+		DeviceID:        &device.ID,
 		SerialNumber:    issued.SerialNumber,
 		CertificatePEM:  issued.CertificatePEM,
 		PublicKeySHA256: issued.PublicKeySHA256,
@@ -113,6 +112,7 @@ func (h *Handler) EnrollDeviceCertificate(w http.ResponseWriter, r *http.Request
 	}
 	h.auditRepo.Log(r.Context(), &user.ID, "certificate.enroll", map[string]interface{}{
 		"certificate_id": certificate.ID,
+		"device_id":      device.ID,
 		"server_id":      certificate.ServerID,
 		"device_name":    certificate.DeviceName,
 		"not_after":      certificate.NotAfter,

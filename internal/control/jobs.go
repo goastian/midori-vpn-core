@@ -26,6 +26,7 @@ const (
 func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub) {
 	serverRepo := repo.NewServerRepo(pool)
 	peerRepo := repo.NewPeerRepo(pool)
+	deviceRepo := repo.NewDeviceRepo(pool)
 
 	slog.Info("job started", "job", "stats-sync", "interval", statsSyncInterval.String())
 	ticker := time.NewTicker(statsSyncInterval)
@@ -84,6 +85,11 @@ func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub) {
 					}
 					if err := peerRepo.UpdateStats(ctx, dbPeer.ID, stats.BytesSent, stats.BytesReceived, hs); err != nil {
 						slog.Error("stats-sync update stats error", "peer_id", dbPeer.ID, "error", err)
+					}
+					if hs != nil && dbPeer.DeviceID != nil {
+						if err := deviceRepo.TouchLastSeen(ctx, *dbPeer.DeviceID, *hs); err != nil {
+							slog.Error("stats-sync update device last seen error", "device_id", *dbPeer.DeviceID, "error", err)
+						}
 					}
 				}
 			}

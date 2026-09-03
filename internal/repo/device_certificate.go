@@ -2,6 +2,7 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -20,13 +21,16 @@ func NewDeviceCertificateRepo(pool *pgxpool.Pool) *DeviceCertificateRepo {
 	return &DeviceCertificateRepo{pool: pool}
 }
 
-const deviceCertificateColumns = `id, user_id, server_id, device_name, serial_number,
+const deviceCertificateColumns = `id, user_id, server_id, device_name, device_id, serial_number,
 	certificate_pem, public_key_sha256, not_before, not_after, revoked_at,
 	revocation_reason, created_at`
 
 // ReplaceActive revokes the previous certificate for this device and inserts
 // the replacement atomically, so the partial unique index is never bypassed.
 func (r *DeviceCertificateRepo) ReplaceActive(ctx context.Context, certificate *models.DeviceCertificate) error {
+	if certificate.DeviceID == nil {
+		return errors.New("device certificate requires device_id")
+	}
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin certificate replacement: %w", err)
@@ -36,18 +40,18 @@ func (r *DeviceCertificateRepo) ReplaceActive(ctx context.Context, certificate *
 	if _, err := tx.Exec(ctx, `
 		UPDATE device_certificates
 		SET revoked_at = NOW(), revocation_reason = 'superseded'
-		WHERE user_id = $1 AND server_id = $2 AND lower(device_name) = lower($3)
-		  AND revoked_at IS NULL`, certificate.UserID, certificate.ServerID, certificate.DeviceName); err != nil {
+		WHERE user_id = $1 AND server_id = $2 AND device_id = $3
+		  AND revoked_at IS NULL`, certificate.UserID, certificate.ServerID, *certificate.DeviceID); err != nil {
 		return fmt.Errorf("revoke superseded certificate: %w", err)
 	}
 
 	err = tx.QueryRow(ctx, `
 		INSERT INTO device_certificates
-			(id, user_id, server_id, device_name, serial_number, certificate_pem,
+			(id, user_id, server_id, device_name, device_id, serial_number, certificate_pem,
 			 public_key_sha256, not_before, not_after)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING created_at`, certificate.ID, certificate.UserID, certificate.ServerID,
-		certificate.DeviceName, certificate.SerialNumber, certificate.CertificatePEM,
+		certificate.DeviceName, *certificate.DeviceID, certificate.SerialNumber, certificate.CertificatePEM,
 		certificate.PublicKeySHA256, certificate.NotBefore, certificate.NotAfter,
 	).Scan(&certificate.CreatedAt)
 	if err != nil {
@@ -87,23 +91,6 @@ func (r *DeviceCertificateRepo) GetByID(ctx context.Context, id uuid.UUID) (*mod
 		return nil, fmt.Errorf("get device certificate: %w", err)
 	}
 	return certificate, nil
-}
-
-func (r *DeviceCertificateRepo) HasActiveDevice(ctx context.Context, userID, serverID uuid.UUID, deviceName string) (bool, error) {
-	var exists bool
-	err := r.pool.QueryRow(ctx, `SELECT EXISTS (
-		SELECT 1 FROM device_certificates
-		WHERE user_id = $1 AND server_id = $2 AND lower(device_name) = lower($3)
-		  AND revoked_at IS NULL AND not_after > NOW()
-	)`, userID, serverID, deviceName).Scan(&exists)
-	return exists, err
-}
-
-func (r *DeviceCertificateRepo) CountActiveByUser(ctx context.Context, userID uuid.UUID) (int, error) {
-	var count int
-	err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM device_certificates
-		WHERE user_id = $1 AND revoked_at IS NULL AND not_after > NOW()`, userID).Scan(&count)
-	return count, err
 }
 
 func (r *DeviceCertificateRepo) Revoke(ctx context.Context, id, userID uuid.UUID, reason string) (bool, error) {
@@ -150,7 +137,7 @@ func scanDeviceCertificate(row interface{ Scan(...interface{}) error }) (*models
 	var certificate models.DeviceCertificate
 	err := row.Scan(
 		&certificate.ID, &certificate.UserID, &certificate.ServerID, &certificate.DeviceName,
-		&certificate.SerialNumber, &certificate.CertificatePEM, &certificate.PublicKeySHA256,
+		&certificate.DeviceID, &certificate.SerialNumber, &certificate.CertificatePEM, &certificate.PublicKeySHA256,
 		&certificate.NotBefore, &certificate.NotAfter, &certificate.RevokedAt,
 		&certificate.RevocationReason, &certificate.CreatedAt,
 	)

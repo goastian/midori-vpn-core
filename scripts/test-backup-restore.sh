@@ -50,7 +50,7 @@ podman exec -i "$POSTGRES_CONTAINER" pg_restore \
   --username "$POSTGRES_USER" --dbname "$restore_db" \
   --exit-on-error --no-owner --no-privileges <"$backup_file"
 
-for table_name in users peers schema_migrations; do
+for table_name in users devices peers device_certificates schema_migrations; do
   require_identifier table_name "$table_name"
   source_count="$(podman exec "$POSTGRES_CONTAINER" psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --tuples-only --no-align --command "SELECT count(*) FROM $table_name")"
   restored_count="$(podman exec "$POSTGRES_CONTAINER" psql --username "$POSTGRES_USER" --dbname "$restore_db" --tuples-only --no-align --command "SELECT count(*) FROM $table_name")"

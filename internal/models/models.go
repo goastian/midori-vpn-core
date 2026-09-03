@@ -40,6 +40,40 @@ type VPNServer struct {
 	UpdatedAt         time.Time             `json:"updated_at"`
 }
 
+type DeviceType string
+
+const (
+	DeviceTypeDesktop   DeviceType = "desktop"
+	DeviceTypeExtension DeviceType = "extension"
+	DeviceTypeManual    DeviceType = "manual"
+	DeviceTypeMobile    DeviceType = "mobile"
+)
+
+func (t DeviceType) Valid() bool {
+	switch t {
+	case DeviceTypeDesktop, DeviceTypeExtension, DeviceTypeManual, DeviceTypeMobile:
+		return true
+	default:
+		return false
+	}
+}
+
+// Device represents one client installation. A nil ClientInstanceID is
+// reserved for historical clients that predate persistent installation IDs.
+type Device struct {
+	ID               uuid.UUID  `json:"id"`
+	UserID           uuid.UUID  `json:"user_id"`
+	ClientInstanceID *uuid.UUID `json:"client_instance_id"`
+	ReportedName     string     `json:"reported_name"`
+	Alias            string     `json:"alias"`
+	DisplayName      string     `json:"display_name"`
+	DeviceType       DeviceType `json:"device_type"`
+	AdapterReference string     `json:"adapter_reference"`
+	FirstSeenAt      time.Time  `json:"first_seen_at"`
+	LastSeenAt       time.Time  `json:"last_seen_at"`
+	RevokedAt        *time.Time `json:"revoked_at,omitempty"`
+}
+
 // TransportCapability is the server-advertised contract consumed by clients.
 // A transport is never advertised until its backend has passed health checks.
 type TransportCapability struct {
@@ -96,6 +130,7 @@ type Peer struct {
 	AssignedIP    string     `json:"assigned_ip"`
 	IsActive      bool       `json:"is_active"`
 	DeviceName    string     `json:"device_name"`
+	DeviceID      *uuid.UUID `json:"device_id,omitempty"`
 	LastHandshake *time.Time `json:"last_handshake,omitempty"`
 	BytesSent     int64      `json:"bytes_sent"`
 	BytesReceived int64      `json:"bytes_received"`
@@ -111,6 +146,7 @@ type DeviceCertificate struct {
 	UserID           uuid.UUID  `json:"user_id"`
 	ServerID         uuid.UUID  `json:"server_id"`
 	DeviceName       string     `json:"device_name"`
+	DeviceID         *uuid.UUID `json:"device_id,omitempty"`
 	SerialNumber     string     `json:"serial_number"`
 	CertificatePEM   string     `json:"certificate_pem,omitempty"`
 	PublicKeySHA256  string     `json:"public_key_sha256"`
@@ -133,6 +169,7 @@ type AuditLog struct {
 
 type ConnectionConfig struct {
 	PeerID          uuid.UUID `json:"peer_id"`
+	DeviceID        uuid.UUID `json:"device_id"`
 	PeerIP          string    `json:"peer_ip"`
 	ServerPublicKey string    `json:"server_public_key"`
 	ServerEndpoint  string    `json:"server_endpoint"`

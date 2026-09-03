@@ -44,7 +44,7 @@ midorivpn_container_repo_root() {
     local name="$3"
     local relative
     if midorivpn_path_is_within "${host_dir}" "${core_dir}"; then
-        relative="${host_dir#${core_dir}}"
+        relative="${host_dir#"${core_dir}"}"
         relative="${relative#/}"
         if [[ -z "${relative}" ]]; then
             echo "/workspace"

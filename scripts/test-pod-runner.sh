@@ -113,6 +113,18 @@ rg -F -- 'go test ./cmd/... ./internal/...' "${PODMAN_LOG}" >/dev/null || fail "
 
 : >"${PODMAN_LOG}"
 (
+    cd "${SIBLING}/midori-vpn-core"
+    TEST_DATABASE_URL='postgres://integration.invalid/test' TEST_PODMAN_NETWORK='integration-net' PATH="${FAKE_BIN}:${PATH}" \
+        bash scripts/pod.sh go test ./internal/repo
+)
+rg -F -- '-e TEST_DATABASE_URL' "${PODMAN_LOG}" >/dev/null || fail "Go integration database URL was not forwarded"
+rg -F -- '--network integration-net' "${PODMAN_LOG}" >/dev/null || fail "Go integration network was not forwarded"
+if rg -F -- 'postgres://integration.invalid/test' "${PODMAN_LOG}" >/dev/null; then
+    fail "Go integration database URL leaked into the Podman command"
+fi
+
+: >"${PODMAN_LOG}"
+(
     cd "${SIBLING}/midori-vpn-desktop/agent"
     PATH="${FAKE_BIN}:${PATH}" bash ../../midori-vpn-core/scripts/pod.sh go test ./...
 )
@@ -134,7 +146,7 @@ rg -F 'ambiguous ./... from the Core root includes nested repositories and tmp/s
     PATH="${FAKE_BIN}:${PATH}" bash scripts/pod.sh shellcheck scripts/pod.sh
 )
 rg -F -- '-w /workspace' "${PODMAN_LOG}" >/dev/null || fail "ShellCheck root workdir is incorrect"
-rg -F -- 'shellcheck-alpine@sha256:c82fe42504fbc9fc68f15d36638e5ee2324ebb8b94e96a3c4e395bf361c49183 shellcheck scripts/pod.sh' \
+rg -F -- 'shellcheck-alpine@sha256:c82fe42504fbc9fc68f15d36638e5ee2324ebb8b94e96a3c4e395bf361c49183 shellcheck -x scripts/pod.sh' \
     "${PODMAN_LOG}" >/dev/null || fail "pinned ShellCheck command was not forwarded"
 
 retired_core_token='VPN_CORE''_TOKEN'

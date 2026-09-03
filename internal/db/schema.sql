@@ -1,5 +1,5 @@
 -- Midori VPN v2.0.0 Canonical Consolidated PostgreSQL Schema
--- Generated from migrations 000001 - 000009
+-- Generated from migrations 000001 - 000012
 
 BEGIN;
 
@@ -70,6 +70,36 @@ CREATE INDEX IF NOT EXISTS idx_vpn_server_transports_enabled
     WHERE enabled = TRUE;
 
 -- ============================================================
+-- Table: devices
+-- ============================================================
+CREATE TABLE IF NOT EXISTS devices (
+    id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id             UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    client_instance_id  UUID,
+    reported_name       TEXT        NOT NULL,
+    alias               TEXT,
+    device_type         TEXT        NOT NULL,
+    adapter_reference   TEXT,
+    first_seen_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    revoked_at          TIMESTAMPTZ,
+    CONSTRAINT uq_devices_user_client_instance UNIQUE (user_id, client_instance_id),
+    CONSTRAINT uq_devices_id_user UNIQUE (id, user_id),
+    CONSTRAINT chk_devices_reported_name CHECK (length(reported_name) BETWEEN 1 AND 64),
+    CONSTRAINT chk_devices_alias CHECK (alias IS NULL OR length(alias) BETWEEN 1 AND 64),
+    CONSTRAINT chk_devices_type CHECK (device_type IN ('desktop', 'extension', 'manual', 'mobile')),
+    CONSTRAINT chk_devices_adapter_reference CHECK (
+        adapter_reference IS NULL OR adapter_reference ~ '^net-v1:[A-Za-z0-9_-]{43}$'
+    ),
+    CONSTRAINT chk_devices_seen_order CHECK (last_seen_at >= first_seen_at),
+    CONSTRAINT chk_devices_revoked_order CHECK (revoked_at IS NULL OR revoked_at >= first_seen_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_devices_user_last_seen ON devices (user_id, last_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_devices_adapter_reference ON devices (adapter_reference) WHERE adapter_reference IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_devices_user_active ON devices (user_id, device_type) WHERE revoked_at IS NULL;
+
+-- ============================================================
 -- Table: peers
 -- ============================================================
 CREATE TABLE IF NOT EXISTS peers (
@@ -81,11 +111,16 @@ CREATE TABLE IF NOT EXISTS peers (
     assigned_ip    TEXT        NOT NULL,
     is_active      BOOLEAN     NOT NULL DEFAULT TRUE,
     device_name    TEXT        NOT NULL DEFAULT '',
+    device_id      UUID,
     last_handshake TIMESTAMPTZ,
     bytes_sent     BIGINT      NOT NULL DEFAULT 0,
     bytes_received BIGINT      NOT NULL DEFAULT 0,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    expires_at     TIMESTAMPTZ
+    expires_at     TIMESTAMPTZ,
+    CONSTRAINT fk_peers_device_owner
+        FOREIGN KEY (device_id, user_id) REFERENCES devices(id, user_id)
+        DEFERRABLE INITIALLY DEFERRED,
+    CONSTRAINT chk_peers_active_device CHECK (is_active = FALSE OR device_id IS NOT NULL)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_peers_active_server_assigned_ip ON peers (server_id, assigned_ip) WHERE is_active = TRUE;
@@ -93,6 +128,8 @@ CREATE INDEX IF NOT EXISTS idx_peers_public_key ON peers (public_key);
 CREATE INDEX IF NOT EXISTS idx_peers_is_active ON peers (is_active) WHERE is_active = TRUE;
 CREATE INDEX IF NOT EXISTS idx_peers_assigned_ip ON peers (assigned_ip);
 CREATE INDEX IF NOT EXISTS idx_peers_created_at ON peers (created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_peers_active_device ON peers (device_id) WHERE is_active = TRUE AND device_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_peers_device_created ON peers (device_id, created_at DESC) WHERE device_id IS NOT NULL;
 
 -- ============================================================
 -- Table: device_certificates
@@ -102,6 +139,7 @@ CREATE TABLE IF NOT EXISTS device_certificates (
     user_id             UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     server_id           UUID        NOT NULL REFERENCES vpn_servers(id) ON DELETE CASCADE,
     device_name         TEXT        NOT NULL,
+    device_id           UUID,
     serial_number       TEXT        NOT NULL UNIQUE,
     certificate_pem     TEXT        NOT NULL,
     public_key_sha256   TEXT        NOT NULL,
@@ -113,12 +151,17 @@ CREATE TABLE IF NOT EXISTS device_certificates (
     CHECK (length(device_name) BETWEEN 1 AND 64),
     CHECK (length(serial_number) BETWEEN 2 AND 64),
     CHECK (length(public_key_sha256) = 64),
-    CHECK (not_after > not_before)
+    CHECK (not_after > not_before),
+    CONSTRAINT fk_device_certificates_device_owner
+        FOREIGN KEY (device_id, user_id) REFERENCES devices(id, user_id)
+        DEFERRABLE INITIALLY DEFERRED,
+    CONSTRAINT chk_device_certificates_current_device
+        CHECK (revoked_at IS NOT NULL OR device_id IS NOT NULL)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_device_certificates_active_device
-    ON device_certificates (user_id, server_id, lower(device_name))
-    WHERE revoked_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_device_certificates_active_device_id
+    ON device_certificates (device_id, server_id)
+    WHERE revoked_at IS NULL AND device_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_device_certificates_user_created
     ON device_certificates (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_device_certificates_active_expiry
@@ -127,6 +170,9 @@ CREATE INDEX IF NOT EXISTS idx_device_certificates_active_expiry
 CREATE INDEX IF NOT EXISTS idx_device_certificates_revoked
     ON device_certificates (revoked_at)
     WHERE revoked_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_device_certificates_device_created
+    ON device_certificates (device_id, created_at DESC)
+    WHERE device_id IS NOT NULL;
 
 -- ============================================================
 -- Table: mesh_networks

@@ -125,10 +125,25 @@ only a documented rollback fallback when rootful containment cannot operate.
 
 ## Sources of truth and consistency
 
-The central database is authoritative for users, policy, server inventory,
-transport declarations and intended peer placement. A Core node is
-authoritative for observed local tunnel state and counters. Neither regional
-Redis nor a gateway health file becomes a second Control database.
+The central database is authoritative for users, registered devices, policy,
+server inventory, transport declarations and intended peer placement. A Core
+node is authoritative for observed local tunnel state and counters. Neither
+regional Redis nor a gateway health file becomes a second Control database.
+
+Device identity and session identity are distinct. `devices` records one
+installation by `(user_id, client_instance_id)` and stores its reported name,
+optional user alias, explicit client type and optional private adapter HMAC
+reference. `peers` remains session history and references the device that
+created each current session. Quota counts distinct devices with an active
+session, never historical peer rows or certificates. The adapter reference is
+indexed only for diagnostics and must never be treated as unique.
+
+During the 2.0 migration, each active peer without a persistent installation
+ID receives its own legacy device; inactive peers remain history without
+creating visible devices. A registered client may adopt one active legacy
+record only when user and reported name produce exactly one candidate. Equal
+or otherwise ambiguous names remain separate for explicit cleanup. A raw MAC
+address is neither accepted by the contract nor persisted in PostgreSQL.
 
 A successful connection follows this order:
 

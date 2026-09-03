@@ -4,6 +4,9 @@
 
 ### Security
 
+- Added persistent per-installation device identities with UUID ownership,
+  explicit client types and non-unique HMAC adapter references. Raw MAC
+  addresses are rejected by the API contract and never stored.
 - HTTP access logs now record only the method and normalized path plus response metrics. OAuth callback query parameters, client addresses, headers and request bodies are never written to the access log.
 - Extension trust now distinguishes unknown, trusted and administratively revoked origins. Revoked installations are denied before an OAuth code is exchanged, and administrators can list, revoke and restore exact extension origins through protected endpoints.
 - CONNECT target validation now resolves once and dials only the validated public IP answers, rejects mixed public/private DNS results and reserved ranges, and omits browsing targets, users and client addresses from proxy logs.
@@ -56,7 +59,7 @@
 - Replaced the legacy backup and chaos helpers with fail-fast, environment-neutral staging tests. Backup validation restores into an isolated database and compares critical tables; network chaos applies bounded netem loss, verifies private metrics and probes, and always restores the original qdisc.
 - Pinned the Core builder, Alpine runtime and rootless analysis tools to exact supported versions and image digests. Staticcheck and govulncheck no longer resolve mutable `latest` releases during a rebuild.
 - Added rootless Podman development images for Go, Control and Desktop workflows.
-- Added immutable migrations through version 11, including billing/quotas, transport health, unique active peer addresses, Ed25519 identities, removal of retired transport columns, revocable per-device client certificates and the missing Mesh exit-node protocol/capability fields.
+- Added immutable migrations through version 12, including billing/quotas, transport health, unique active peer addresses, Ed25519 identities, removal of retired transport columns, revocable per-device client certificates, persistent device identity and the missing Mesh exit-node protocol/capability fields.
 - Deployment scripts reject default credentials and publish proxy upstream only on loopback.
 - Added reversible Quadlet configuration for MASQUE, Redis 8.10.1 migration with volume export, PostgreSQL 18 migration-chain tests, Certbot reload hook and Redis persistence sysctl.
 - Updated CI to Go 1.27, Node 24/npm 12 and current stable action majors; Linux releases are signed RPMs built entirely with rootless Podman.
@@ -82,6 +85,10 @@
 
 ### API contract
 
+- Connection and certificate enrollment now accept a structured device
+  identity while retaining deprecated `device_name` compatibility. Connection
+  responses, peers and certificates expose `device_id`; quotas count devices
+  with active sessions and no longer infer client type from names.
 - Added a versioned OpenAPI 3.1 contract and a bidirectional router coverage
   test so method or path drift fails the Go test suite.
 - Standardized JSON failures with stable machine-readable codes, including JWT,

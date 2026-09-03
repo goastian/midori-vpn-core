@@ -45,7 +45,7 @@ done
 
 [[ -n "${CURRENT_REPO_DIR}" ]] || die "current directory is not inside a resolved MidoriVPN repository: ${CURRENT_DIR}"
 
-REL_PATH="${CURRENT_DIR#${CURRENT_REPO_DIR}}"
+REL_PATH="${CURRENT_DIR#"${CURRENT_REPO_DIR}"}"
 REL_PATH="${REL_PATH#/}"
 WORKDIR_IN_CONTAINER="${CURRENT_CONTAINER_DIR}${REL_PATH:+/${REL_PATH}}"
 if midorivpn_path_is_within "${WORKDIR_IN_CONTAINER}" "/workspace"; then
@@ -76,6 +76,16 @@ IMAGE_PROMETHEUS="docker.io/prom/prometheus@sha256:5ce7540c3c00ef4ab0c9d2c995c6a
 IMAGE_SYFT="ghcr.io/anchore/syft@sha256:41f8289664101d6ebab30a97ac8df6b6f86b92d8343285ca90f428e2bc353106"
 IMAGE_SHELLCHECK="docker.io/koalaman/shellcheck-alpine@sha256:c82fe42504fbc9fc68f15d36638e5ee2324ebb8b94e96a3c4e395bf361c49183"
 PODMAN_USERNS=("--userns=keep-id:uid=0,gid=0")
+PODMAN_GO_ENV=()
+if [[ -n "${TEST_DATABASE_URL:-}" ]]; then
+    PODMAN_GO_ENV+=(-e TEST_DATABASE_URL)
+fi
+PODMAN_GO_NETWORK=()
+if [[ -n "${TEST_PODMAN_NETWORK:-}" ]]; then
+    [[ -n "${TEST_DATABASE_URL:-}" ]] || die "TEST_PODMAN_NETWORK requires TEST_DATABASE_URL"
+    [[ "${TEST_PODMAN_NETWORK}" =~ ^[a-zA-Z0-9_.-]+$ ]] || die "TEST_PODMAN_NETWORK contains invalid characters"
+    PODMAN_GO_NETWORK+=(--network "${TEST_PODMAN_NETWORK}")
+fi
 
 require_repo() {
     local path="$1"
@@ -116,10 +126,12 @@ cmd_go() {
     reject_ambiguous_core_scope "$@"
     build_image_if_missing "${IMAGE_GO}" "${ROOT_DIR}/.container/Containerfile" "${ROOT_DIR}"
     podman run --rm "${PODMAN_USERNS[@]}" \
+        "${PODMAN_GO_NETWORK[@]}" \
         "${PODMAN_WORKSPACE_MOUNTS[@]}" \
         -v midori_go_pkg:/go/pkg:z \
         -v midori_go_cache:/tmp/go-cache:z \
         -e GOCACHE=/tmp/go-cache \
+        "${PODMAN_GO_ENV[@]}" \
         -w "${WORKDIR_IN_CONTAINER}" \
         "${IMAGE_GO}" go "$@"
 }
@@ -130,10 +142,12 @@ cmd_go_tool() {
     reject_ambiguous_core_scope "$@"
     build_image_if_missing "${IMAGE_GO}" "${ROOT_DIR}/.container/Containerfile" "${ROOT_DIR}"
     podman run --rm "${PODMAN_USERNS[@]}" \
+        "${PODMAN_GO_NETWORK[@]}" \
         "${PODMAN_WORKSPACE_MOUNTS[@]}" \
         -v midori_go_pkg:/go/pkg:z \
         -v midori_go_cache:/tmp/go-cache:z \
         -e GOCACHE=/tmp/go-cache \
+        "${PODMAN_GO_ENV[@]}" \
         -w "${WORKDIR_IN_CONTAINER}" \
         "${IMAGE_GO}" "${tool}" "$@"
 }
@@ -178,7 +192,7 @@ cmd_shellcheck() {
     podman run --rm "${PODMAN_USERNS[@]}" \
         "${PODMAN_WORKSPACE_MOUNTS[@]}" \
         -w "${WORKDIR_IN_CONTAINER}" \
-        "${IMAGE_SHELLCHECK}" shellcheck "$@"
+        "${IMAGE_SHELLCHECK}" shellcheck -x "$@"
 }
 
 cmd_audit() {

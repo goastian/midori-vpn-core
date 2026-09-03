@@ -831,6 +831,8 @@ components:
             - oauth_unsupported_grant_type
             - client_pki_unavailable
             - device_limit_reached
+            - device_revoked
+            - peer_operation_conflict
             - origin_country_unavailable
       additionalProperties: false
     TokenResponse:
@@ -895,12 +897,54 @@ components:
         refresh_token: {type: string, writeOnly: true}
     ConnectionRequest:
       type: object
+      additionalProperties: false
       required: [public_key]
+      anyOf:
+        - required: [device]
+        - required: [device_name]
       properties:
         server_id: {type: string, format: uuid}
         public_key: {type: string}
-        device_name: {type: string}
+        device_name:
+          type: string
+          maxLength: 64
+          deprecated: true
+          description: Transitional identity for clients without a persistent installation UUID.
+        device: {$ref: '#/components/schemas/DeviceRegistration'}
         pq_kem_public_key: {type: string, writeOnly: true}
+    DeviceRegistration:
+      type: object
+      additionalProperties: false
+      required: [client_instance_id, reported_name, device_type]
+      properties:
+        client_instance_id: {type: string, format: uuid}
+        reported_name: {type: string, minLength: 1, maxLength: 64}
+        device_type: {type: string, enum: [desktop, extension, manual, mobile]}
+        adapter_reference:
+          type: string
+          pattern: '^net-v1:[A-Za-z0-9_-]{43}$'
+          description: Private secondary HMAC reference; never a raw MAC or unique identity key.
+    Device:
+      type: object
+      additionalProperties: false
+      required: [id, user_id, client_instance_id, reported_name, alias, display_name, device_type, adapter_reference, first_seen_at, last_seen_at]
+      properties:
+        id: {type: string, format: uuid}
+        user_id: {type: string, format: uuid}
+        client_instance_id:
+          type: [string, 'null']
+          format: uuid
+          description: Null only for safely isolated historical clients.
+        reported_name: {type: string, minLength: 1, maxLength: 64}
+        alias: {type: string, maxLength: 64}
+        display_name: {type: string, minLength: 1, maxLength: 64}
+        device_type: {type: string, enum: [desktop, extension, manual, mobile]}
+        adapter_reference:
+          type: string
+          pattern: '^(net-v1:[A-Za-z0-9_-]{43})?$'
+        first_seen_at: {type: string, format: date-time}
+        last_seen_at: {type: string, format: date-time}
+        revoked_at: {type: string, format: date-time}
     ConnectionSummary:
       type: object
       description: A persisted connection summary. It never includes a preshared key.
@@ -914,6 +958,7 @@ components:
         assigned_ip: {type: string}
         is_active: {type: boolean}
         device_name: {type: string}
+        device_id: {type: string, format: uuid}
         last_handshake: {type: string, format: date-time}
         bytes_sent: {type: integer, format: int64}
         bytes_received: {type: integer, format: int64}
@@ -923,9 +968,10 @@ components:
     ConnectionConfiguration:
       type: object
       description: Sensitive WireGuard material returned only while creating or recovering the authorized connection.
-      required: [peer_id, peer_ip, server_public_key, server_endpoint, dns, allowed_ips]
+      required: [peer_id, device_id, peer_ip, server_public_key, server_endpoint, dns, allowed_ips]
       properties:
         peer_id: {type: string, format: uuid}
+        device_id: {type: string, format: uuid}
         peer_ip: {type: string}
         server_public_key: {type: string}
         server_endpoint: {type: string}
@@ -960,10 +1006,17 @@ components:
     CertificateEnrollmentRequest:
       type: object
       additionalProperties: false
-      required: [server_id, device_name, csr_pem]
+      required: [server_id, csr_pem]
+      anyOf:
+        - required: [device]
+        - required: [device_name]
       properties:
         server_id: {type: string, format: uuid}
-        device_name: {type: string}
+        device_name:
+          type: string
+          maxLength: 64
+          deprecated: true
+        device: {$ref: '#/components/schemas/DeviceRegistration'}
         csr_pem: {type: string, writeOnly: true}
     MeshCreateRequest:
       type: object

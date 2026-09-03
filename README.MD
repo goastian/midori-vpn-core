@@ -36,6 +36,14 @@ configure `VPN_CLIENT_CA_CERT` and `VPN_CLIENT_CA_KEY` before either transport
 can be enabled. The public CA and CRL are served from `/pki/client-ca.pem` and
 `/pki/client.crl`.
 
+Control persists client installations separately from VPN sessions. A
+registered device is keyed by `(user_id, client_instance_id)`, while active
+peers and client certificates reference its internal `device_id`. Historical
+clients without an installation UUID remain isolated legacy records and are
+never merged solely because two hostnames match. Adapter references are
+non-unique, HMAC-derived secondary observations; raw MAC addresses are not API
+fields and are never stored.
+
 Smart mode orders the healthy WireGuard family (`wireguard`, `wss`, `masque`)
 by priority and accepts a connection only after a WireGuard handshake. OpenVPN
 and IKEv2 are explicit user selections when their server capability is healthy

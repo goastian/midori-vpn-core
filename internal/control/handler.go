@@ -102,6 +102,7 @@ type Handler struct {
 	userRepo                *repo.UserRepo
 	serverRepo              *repo.ServerRepo
 	peerRepo                *repo.PeerRepo
+	deviceRepo              *repo.DeviceRepo
 	meshRepo                *repo.MeshRepo
 	auditRepo               *repo.AuditRepo
 	trustedExtensionRepo    *repo.TrustedExtensionRepo
@@ -137,6 +138,7 @@ func NewHandlerWithMesh(pool *pgxpool.Pool, cfg *config.Config, wgMgr *wg.Manage
 		userRepo:                repo.NewUserRepo(pool),
 		serverRepo:              repo.NewServerRepo(pool),
 		peerRepo:                repo.NewPeerRepo(pool),
+		deviceRepo:              repo.NewDeviceRepo(pool),
 		meshRepo:                repo.NewMeshRepo(pool),
 		auditRepo:               repo.NewAuditRepo(pool),
 		trustedExtensionRepo:    repo.NewTrustedExtensionRepo(pool),
@@ -223,24 +225,26 @@ func (h *Handler) detachPeerFromMeshSessions(ctx context.Context, peer *models.P
 	}
 }
 
-func (h *Handler) getUserQuota(ctx context.Context, user *models.User) models.UserQuota {
+func (h *Handler) getUserQuota(ctx context.Context, user *models.User) (models.UserQuota, error) {
 	var breakdown models.DeviceTypeBreakdown
-	var activeCount int
-
-	if peers, err := h.peerRepo.ListByUser(ctx, user.ID); err == nil {
-		for _, p := range peers {
-			if !p.IsActive {
-				continue
-			}
-			activeCount++
-			devLower := strings.ToLower(p.DeviceName)
-			if strings.Contains(devLower, "desktop") || strings.Contains(devLower, "app") {
-				breakdown.Desktop++
-			} else if strings.Contains(devLower, "extension") || strings.Contains(devLower, "browser") || strings.Contains(devLower, "chrome") || strings.Contains(devLower, "firefox") {
-				breakdown.Extension++
-			} else {
-				breakdown.Wireguard++
-			}
+	usage, err := h.deviceRepo.ActiveUsageByUser(ctx, user.ID)
+	if err != nil {
+		return models.UserQuota{}, err
+	}
+	activeCount := 0
+	for deviceType, count := range usage {
+		activeCount += count
+		switch deviceType {
+		case models.DeviceTypeDesktop:
+			breakdown.Desktop += count
+		case models.DeviceTypeExtension:
+			breakdown.Extension += count
+		case models.DeviceTypeManual, models.DeviceTypeMobile:
+			// Preserve the existing quota response shape until the Control UI
+			// adopts the explicit device model in DEV-03.
+			breakdown.Wireguard += count
+		default:
+			return models.UserQuota{}, fmt.Errorf("unsupported persisted device type %q", deviceType)
 		}
 	}
 
@@ -278,7 +282,7 @@ func (h *Handler) getUserQuota(ctx context.Context, user *models.User) models.Us
 		PlanSlug:         planSlug,
 		PlanName:         planName,
 		DevicesByType:    breakdown,
-	}
+	}, nil
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -291,7 +295,11 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, "not authenticated", http.StatusUnauthorized)
 		return
 	}
-	quota := h.getUserQuota(r.Context(), user)
+	quota, err := h.getUserQuota(r.Context(), user)
+	if err != nil {
+		respond.SafeError(w, "failed to load device quota", err, http.StatusInternalServerError)
+		return
+	}
 	resp := map[string]any{
 		"id":            user.ID,
 		"authentik_uid": user.AuthentikUID,
@@ -312,7 +320,11 @@ func (h *Handler) GetQuota(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, "not authenticated", http.StatusUnauthorized)
 		return
 	}
-	quota := h.getUserQuota(r.Context(), user)
+	quota, err := h.getUserQuota(r.Context(), user)
+	if err != nil {
+		respond.SafeError(w, "failed to load device quota", err, http.StatusInternalServerError)
+		return
+	}
 	respond.JsonOK(w, quota, http.StatusOK)
 }
 
@@ -431,10 +443,11 @@ func buildServerPingResults(servers []models.VPNServer) []ServerPingResult {
 // ═══════════════════════════════════════════════════════════════════════════
 
 type ConnectRequest struct {
-	ServerID       string `json:"server_id"`
-	PublicKey      string `json:"public_key"`
-	DeviceName     string `json:"device_name"`
-	PQKEMPublicKey string `json:"pq_kem_public_key,omitempty"`
+	ServerID       string         `json:"server_id"`
+	PublicKey      string         `json:"public_key"`
+	DeviceName     string         `json:"device_name"`
+	Device         *DeviceRequest `json:"device,omitempty"`
+	PQKEMPublicKey string         `json:"pq_kem_public_key,omitempty"`
 }
 
 func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
@@ -447,7 +460,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req ConnectRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeStrictJSON(r.Body, &req); err != nil {
 		respond.JsonError(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
@@ -459,13 +472,37 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, "public_key must be a valid 32-byte base64-encoded WireGuard key", http.StatusBadRequest)
 		return
 	}
-	req.DeviceName = sanitizeDeviceName(req.DeviceName)
+	deviceRequest, err := normalizeDeviceRequest(req.Device, req.DeviceName)
+	if err != nil {
+		respond.JsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var device *models.Device
+	if deviceRequest.clientInstanceID != nil {
+		device, err = h.resolveRegisteredDevice(r.Context(), user.ID, deviceRequest)
+		if errors.Is(err, repo.ErrDeviceRevoked) {
+			respond.JsonErrorCode(w, "device is revoked", "device_revoked", http.StatusConflict)
+			return
+		}
+		if err != nil {
+			respond.SafeError(w, "failed to resolve device identity", err, http.StatusInternalServerError)
+			return
+		}
+	}
 
 	// 1b. Idempotency: if the same public key is already active for this user,
 	// return the existing allocation instead of treating it as a new device.
 	// This prevents "device limit reached" errors caused by duplicate connect
 	// attempts (e.g. rapid retries, race conditions in the desktop client).
 	if existingPeer, err := h.peerRepo.GetActiveByUserAndPublicKey(r.Context(), user.ID, req.PublicKey); err == nil {
+		if existingPeer.DeviceID == nil {
+			respond.JsonError(w, "active connection has no device identity", http.StatusInternalServerError)
+			return
+		}
+		if device != nil && *existingPeer.DeviceID != device.ID {
+			respond.JsonErrorCode(w, "public key belongs to another device", "peer_operation_conflict", http.StatusConflict)
+			return
+		}
 		existingServer, sErr := h.serverRepo.GetByID(r.Context(), existingPeer.ServerID)
 		if sErr == nil {
 			wireGuard, configured := enabledServerTransport(existingServer, "wireguard")
@@ -484,6 +521,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Cache-Control", "no-store")
 			respond.JsonOK(w, models.ConnectionConfig{
 				PeerID:          existingPeer.ID,
+				DeviceID:        *existingPeer.DeviceID,
 				PeerIP:          peerIPAddr,
 				ServerPublicKey: serverPubKey,
 				ServerEndpoint:  wireGuardEndpointForServerHost(wireGuard.Host, wireGuard.Port),
@@ -499,19 +537,22 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Enforce global user device limit based on plan/quota
-	userQuota := h.getUserQuota(r.Context(), user)
-	if userQuota.ConnectedDevices >= userQuota.MaxDevices {
-		respond.JsonErrorCode(w, fmt.Sprintf("device limit reached (%d/%d devices in use on your %s)", userQuota.ConnectedDevices, userQuota.MaxDevices, userQuota.PlanName), "device_limit_reached", http.StatusConflict)
+	userQuota, err := h.getUserQuota(r.Context(), user)
+	if err != nil {
+		respond.SafeError(w, "failed to load device quota", err, http.StatusInternalServerError)
 		return
 	}
-
-	// 2b. If an active device with this name already exists for this user,
-	// deactivate the stale session so this device can reconnect seamlessly.
-	deviceName := strings.TrimSpace(req.DeviceName)
-	if deviceName != "" {
-		if err := h.peerRepo.DeactivateByName(r.Context(), user.ID, deviceName); err != nil {
-			slog.Warn("check device name deactivate error", "error", err)
+	replacesActiveDevice := false
+	if device != nil {
+		replacesActiveDevice, err = h.deviceRepo.HasActiveSession(r.Context(), user.ID, device.ID)
+		if err != nil {
+			respond.SafeError(w, "failed to check active device session", err, http.StatusInternalServerError)
+			return
 		}
+	}
+	if userQuota.ConnectedDevices >= userQuota.MaxDevices && !replacesActiveDevice {
+		respond.JsonErrorCode(w, fmt.Sprintf("device limit reached (%d/%d devices in use on your %s)", userQuota.ConnectedDevices, userQuota.MaxDevices, userQuota.PlanName), "device_limit_reached", http.StatusConflict)
+		return
 	}
 
 	// 3. Select server (explicit or least loaded)
@@ -591,11 +632,17 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, "failed to connect to VPN server", http.StatusBadGateway)
 		return
 	}
+	if device == nil {
+		device, err = h.deviceRepo.CreateLegacy(r.Context(), user.ID, deviceRequest.reportedName)
+		if err != nil {
+			_ = CallCoreRemovePeer(server, req.PublicKey)
+			respond.SafeError(w, "failed to create legacy device", err, http.StatusInternalServerError)
+			return
+		}
+	}
 
 	// 7. Clean up any previous active peers for this device, key or IP before saving
-	if req.DeviceName != "" {
-		_ = h.peerRepo.DeactivateByName(r.Context(), user.ID, req.DeviceName)
-	}
+	_ = h.peerRepo.DeactivateByDeviceID(r.Context(), user.ID, device.ID)
 	_ = h.peerRepo.DeactivateByPublicKey(r.Context(), user.ID, req.PublicKey)
 	_ = h.peerRepo.DeactivateByServerAndIP(r.Context(), server.ID, coreResp.AllowedIP)
 
@@ -605,7 +652,8 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		PublicKey:    req.PublicKey,
 		PresharedKey: psk,
 		AssignedIP:   coreResp.AllowedIP,
-		DeviceName:   req.DeviceName,
+		DeviceName:   device.ReportedName,
+		DeviceID:     &device.ID,
 	}
 	if err := h.peerRepo.Create(r.Context(), peer); err != nil {
 		_ = CallCoreRemovePeer(server, req.PublicKey)
@@ -620,9 +668,10 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	h.auditRepo.Log(r.Context(), &user.ID, "peer.connect",
 		map[string]interface{}{
 			"peer_id":     peer.ID,
+			"device_id":   device.ID,
 			"server_id":   server.ID,
 			"ip":          peer.AssignedIP,
-			"device_name": req.DeviceName,
+			"device_name": device.ReportedName,
 			"psk_enabled": psk != "",
 		}, r.RemoteAddr)
 
@@ -649,6 +698,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	}
 	config := models.ConnectionConfig{
 		PeerID:          peer.ID,
+		DeviceID:        device.ID,
 		PeerIP:          peerIPAddr,
 		ServerPublicKey: serverPubKey,
 		ServerEndpoint:  wireGuardEndpointForServerHost(wireGuard.Host, wireGuard.Port),
