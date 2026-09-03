@@ -4,16 +4,27 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CHECK_DIR="$(mktemp -d "${ROOT_DIR}/tmp/observability-check.XXXXXX")"
+CHECK_DIR_IN_CONTAINER="/workspace/${CHECK_DIR#"${ROOT_DIR}/"}"
 
 cleanup() {
   rm -rf -- "${CHECK_DIR}"
 }
 trap cleanup EXIT
 
+openssl req -x509 -newkey ed25519 -noenc -days 1 \
+  -subj '/CN=midorivpn-observability-check' \
+  -keyout "${CHECK_DIR}/prometheus-client.key" \
+  -out "${CHECK_DIR}/prometheus-client.crt" >/dev/null 2>&1
+chmod 0600 "${CHECK_DIR}/prometheus-client.key"
+install -m 0644 "${CHECK_DIR}/prometheus-client.crt" "${CHECK_DIR}/observability-ca.crt"
+
 sed \
   -e 's/__OBSERVABILITY_CLUSTER__/test-cluster/g' \
   -e 's/__CORE_NODE_NAME__/test-node/g' \
   -e 's/__VPN_CORE_METRICS_TARGET__/midori-control:8085/g' \
+  -e "s|/etc/prometheus/mtls/ca.crt|${CHECK_DIR_IN_CONTAINER}/observability-ca.crt|g" \
+  -e "s|/etc/prometheus/mtls/client.crt|${CHECK_DIR_IN_CONTAINER}/prometheus-client.crt|g" \
+  -e "s|/etc/prometheus/mtls/client.key|${CHECK_DIR_IN_CONTAINER}/prometheus-client.key|g" \
   "${ROOT_DIR}/deploy/observability/prometheus.yml.template" >"${CHECK_DIR}/prometheus.yml"
 chmod 0755 "${CHECK_DIR}"
 chmod 0644 "${CHECK_DIR}/prometheus.yml"
@@ -31,6 +42,9 @@ PROMETHEUS_IMAGE=docker.io/prom/prometheus@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 GRAFANA_IMAGE=docker.io/grafana/grafana@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 GRAFANA_ADMIN_USER=test-admin
 GRAFANA_ADMIN_PASSWORD=test-password-only
+PROMETHEUS_MTLS_CA=${CHECK_DIR}/observability-ca.crt
+PROMETHEUS_MTLS_CLIENT_CERT=${CHECK_DIR}/prometheus-client.crt
+PROMETHEUS_MTLS_CLIENT_KEY=${CHECK_DIR}/prometheus-client.key
 EOF
 chmod 0600 "${CHECK_DIR}/render.env"
 ENV_FILE="${CHECK_DIR}/render.env" bash "${ROOT_DIR}/scripts/render-observability.sh"
@@ -45,9 +59,12 @@ test "$(stat -c '%a' "${CHECK_DIR}/rendered/prometheus.yml")" = "644"
 test "$(stat -c '%a' "${CHECK_DIR}/rendered/grafana-datasource.yml")" = "644"
 rg -q '^          cluster: test-cluster$' "${CHECK_DIR}/rendered/prometheus.yml"
 rg -q '^          role: principal$' "${CHECK_DIR}/rendered/prometheus.yml"
+rg -q '^  - job_name: midorivpn-regional-core$' "${CHECK_DIR}/rendered/prometheus.yml"
+rg -q '^[[:space:]]+min_version: TLS13$' "${CHECK_DIR}/rendered/prometheus.yml"
+rg -q '^User=0$' "${CHECK_DIR}/rendered/midorivpn-prometheus.container"
 QUADLET_UNIT_DIRS="${CHECK_DIR}/rendered" /usr/libexec/podman/quadlet --user --dryrun >/dev/null
 
-bash "${ROOT_DIR}/scripts/pod.sh" promtool check config "${CHECK_DIR#${ROOT_DIR}/}/prometheus.yml"
+bash "${ROOT_DIR}/scripts/pod.sh" promtool check config "${CHECK_DIR#"${ROOT_DIR}"/}/prometheus.yml"
 bash "${ROOT_DIR}/scripts/pod.sh" promtool check rules deploy/observability/alerts.yml
 bash "${ROOT_DIR}/scripts/pod.sh" node -e \
   'const fs=require("fs"); const p="deploy/grafana/midori-vpn-dashboard.json"; const d=JSON.parse(fs.readFileSync(p,"utf8")); if (!d.uid || !Array.isArray(d.panels) || d.panels.length < 6) throw new Error("dashboard contract incomplete")'
@@ -60,5 +77,10 @@ if rg -n '^PublishPort=0\.0\.0\.0:' "${ROOT_DIR}/deploy/observability" --glob '*
 fi
 rg -q '^Network=test-network$' "${CHECK_DIR}/rendered/midorivpn-prometheus.container"
 rg -q '^Network=test-network$' "${CHECK_DIR}/rendered/midorivpn-grafana.container"
+rg -q '/etc/prometheus/mtls/client.key:ro,z$' "${CHECK_DIR}/rendered/midorivpn-prometheus.container"
+rg -Fq -- '--publish "${OBSERVABILITY_HOST_BIND}:${OBSERVABILITY_MTLS_PORT}:${OBSERVABILITY_MTLS_PORT}/tcp"' "${ROOT_DIR}/scripts/VPN/deploy-core-node.sh"
+rg -Fq 'for name in PROMETHEUS_MTLS_CLIENT_CERT PROMETHEUS_MTLS_CLIENT_KEY; do' "${ROOT_DIR}/scripts/VPN/deploy-core-node.sh"
+rg -Fq -- '--network "${OBSERVABILITY_NETWORK}"' "${ROOT_DIR}/scripts/deploy-pod.sh"
+rg -Fq 'wait_principal_target' "${ROOT_DIR}/scripts/deploy-observability.sh"
 
 printf 'Observability configuration is valid and remains private.\n'

@@ -29,6 +29,29 @@ require_port() {
   (( value >= 1 && value <= 65535 )) || die "${name} must be between 1 and 65535"
 }
 
+require_private_ipv4() {
+  local name="$1" value="${!1:-}" octet
+  local -a octets
+  IFS=. read -ra octets <<< "${value}"
+  [[ "${#octets[@]}" -eq 4 ]] || die "${name} must be an explicit RFC1918 or loopback IPv4 address"
+  for octet in "${octets[@]}"; do
+    if [[ ! "${octet}" =~ ^(0|[1-9][0-9]{0,2})$ ]] || ((10#${octet} > 255)); then
+      die "${name} must be an explicit RFC1918 or loopback IPv4 address"
+    fi
+  done
+  case "${octets[0]}.${octets[1]}" in
+    10.*|127.*|192.168) return 0 ;;
+  esac
+  [[ "${octets[0]}" == "172" && "${octets[1]}" -ge 16 && "${octets[1]}" -le 31 ]] || \
+    die "${name} must be an explicit RFC1918 or loopback IPv4 address"
+}
+
+require_spiffe_uri() {
+  local name="$1" value="${!1:-}"
+  [[ "${value}" =~ ^spiffe://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(/[A-Za-z0-9._~-]+)+$ ]] || \
+    die "${name} must be an absolute spiffe URI without credentials, query or fragment"
+}
+
 validate_secret_fingerprints() {
   local entry
   local -a entries
@@ -74,7 +97,9 @@ for name in CORE_NODE_NAME CORE_IMAGE REDIS_IMAGE REDIS_PASSWORD \
   PROXY_ENABLED WSS_TUNNEL_ENABLED MASQUE_ENABLED WS_MAX_GLOBAL WS_MAX_FREE \
   WS_MAX_BASIC WS_MAX_MEDIUM WS_MAX_PRO WS_MAX_ADMIN NODE_CONTROL_URL \
   CORE_NODE_ID CORE_NODE_STATE_DIR CORE_NODE_STATE_HOST_DIR \
-  CORE_NODE_ENROLLMENT_TOKEN_FILE CORE_NODE_MAX_PEERS; do
+  CORE_NODE_ENROLLMENT_TOKEN_FILE CORE_NODE_MAX_PEERS \
+  OBSERVABILITY_MTLS_PORT OBSERVABILITY_HOST_BIND OBSERVABILITY_TLS_CERT \
+  OBSERVABILITY_TLS_KEY OBSERVABILITY_CLIENT_CA OBSERVABILITY_ALLOWED_CLIENT_URI; do
   require_value "${name}"
 done
 
@@ -84,6 +109,10 @@ for name in CONTROL_NODE_ID CONTROL_NODE_PRIVATE_KEY CONTROL_DATA_ENCRYPTION_KEY
   AUTHENTIK_JWKS_URL AUTHENTIK_INTROSPECTION_URL OAUTH_ALLOWED_REDIRECT_URIS \
   CONTROL_OAUTH_REDIRECT_URI VPN_CLIENT_CA_KEY CONTROL_IMAGE CONTROL_HOST_PORT \
   CONTROL_CONTAINER_PORT CREDENTIAL_SIGNING_SECRET; do
+  require_empty "${name}"
+done
+
+for name in PROMETHEUS_MTLS_CLIENT_CERT PROMETHEUS_MTLS_CLIENT_KEY; do
   require_empty "${name}"
 done
 
@@ -107,6 +136,15 @@ validate_secret_fingerprints
 require_port VPN_CORE_PORT
 require_port VPN_CORE_HOST_PORT
 require_port WG_PORT
+require_port OBSERVABILITY_MTLS_PORT
+[[ "${OBSERVABILITY_MTLS_PORT}" == "9443" ]] || die "OBSERVABILITY_MTLS_PORT must use fleet-standard port 9443"
+require_private_ipv4 OBSERVABILITY_HOST_BIND
+require_spiffe_uri OBSERVABILITY_ALLOWED_CLIENT_URI
+for observability_file in OBSERVABILITY_TLS_CERT OBSERVABILITY_TLS_KEY OBSERVABILITY_CLIENT_CA; do
+  observability_path="${!observability_file}"
+  [[ "${observability_path}" = /* && -f "${observability_path}" && ! -L "${observability_path}" ]] || die "${observability_file} must be an absolute regular file"
+done
+[[ "$(stat -c '%a' "${OBSERVABILITY_TLS_KEY}")" == "600" ]] || die "OBSERVABILITY_TLS_KEY must have mode 0600"
 require_bool CORE_TLS_SKIP_VERIFY
 require_bool CORE_ALLOW_INSECURE_HTTP
 require_bool PROXY_ENABLED
@@ -142,6 +180,7 @@ pod_args=(
   pod create --name "${pod_name}"
   --publish "${WG_PORT}:${WG_PORT}/udp"
   --publish "127.0.0.1:${VPN_CORE_HOST_PORT}:${VPN_CORE_PORT}/tcp"
+  --publish "${OBSERVABILITY_HOST_BIND}:${OBSERVABILITY_MTLS_PORT}:${OBSERVABILITY_MTLS_PORT}/tcp"
 )
 if [[ "${PROXY_ENABLED}" == "true" ]]; then
   pod_args+=(--publish "127.0.0.1:${PROXY_HOST_PORT}:${PROXY_PORT}/tcp")
@@ -168,6 +207,9 @@ core_volumes=(
   --volume "${core_name}-wg:${WG_CONFIG_DIR}:Z"
   --volume "${CORE_NODE_STATE_HOST_DIR}:${CORE_NODE_STATE_DIR}:Z"
   --volume /run/midorivpn-health:/run/midorivpn-health:ro
+  --volume "${OBSERVABILITY_TLS_CERT}:${OBSERVABILITY_TLS_CERT}:ro,z"
+  --volume "${OBSERVABILITY_TLS_KEY}:${OBSERVABILITY_TLS_KEY}:ro,z"
+  --volume "${OBSERVABILITY_CLIENT_CA}:${OBSERVABILITY_CLIENT_CA}:ro,z"
 )
 if [[ "${MASQUE_ENABLED}" == "true" ]]; then
   core_volumes+=(

@@ -60,7 +60,7 @@ management path.
 
 For the first regional rollout, one `vpn_servers` row maps to one Core node and
 each regional cluster contains one node. More nodes may be placed in the same
-region as separate servers, but they do not share live tunnel state. A future
+region as separate servers, but they do not share live tunnel state. The
 `cluster_id` groups those nodes for policy, rollout and observability; it does
 not make an existing tunnel portable between them.
 
@@ -105,8 +105,9 @@ node-local authenticated Redis.
 
 Management ingress must use TLS with certificate verification and an allowlist
 that admits only the principal management network. `CORE_TLS_SKIP_VERIFY` and
-plain HTTP are prohibited in production. The Core HTTP port and `/metrics` are
-not Internet-facing.
+plain HTTP are prohibited in production. The Core management HTTP port is not
+Internet-facing. `/metrics` is absent from that router and exists only on the
+dedicated TLS 1.3/mTLS observability listener on TCP/9443.
 
 The current signed operations add, update, remove and inspect WireGuard peers
 and return node statistics. Retries and a per-host circuit breaker already
@@ -212,9 +213,8 @@ the new placement succeeds.
 
 ## Signed desired configuration
 
-The implemented API signs each Control request, but it does not yet distribute
-a versioned desired-configuration bundle. Before unattended regional rollout,
-Control must issue a deterministic signed bundle containing at least:
+The implemented API signs each Control request and distributes a versioned,
+deterministic desired-configuration bundle containing at least:
 
 - `schema_version`, `cluster_id`, `node_id` and a monotonically increasing
   `revision`;
@@ -257,11 +257,11 @@ Initial regional enrollment is an operator-controlled process:
 
 The existing admin identity registry updates the Redis attached to the
 principal process. Regional nodes use independent Redis instances, so it is not
-yet a fleet-wide revocation channel. Until signed trust bundles are
-implemented, Control-key rotation or emergency revocation on regional nodes is
-a coordinated configuration deployment followed by verification on every
-node. No document or UI may claim instantaneous fleet revocation before that
-gate is closed.
+yet a fleet-wide revocation channel. Control-key rotation or emergency
+revocation on regional nodes is a coordinated configuration deployment
+followed by verification on every node. No document or UI may claim
+instantaneous fleet revocation before a
+signed trust-revision contract is implemented and certified.
 
 Node-originated enrollment and heartbeat use a separate node-specific Ed25519
 identity. Core generates and atomically persists the private key in a `0700`
@@ -341,7 +341,7 @@ restored after restart only to preserve established tunnels.
 
 Heartbeats report the applied revision and compatibility decision. Transport
 certification is deliberately absent from desired intent and remains false in
-observed state; MCL-05 must provide independent observed certification.
+observed state until the independent regional E2E gate records it.
 WSS, MASQUE and proxy can be enabled by desired state only when already enabled
 locally. OpenVPN and IKEv2 desired activation remain unavailable until their
 regional local-capability boundary is implemented and certified.
@@ -349,17 +349,26 @@ Admin ping remains an on-demand probe and is not treated as a heartbeat.
 
 ## Observability
 
-The principal Prometheus instance is the aggregation point. It scrapes every
-regional Core over the authenticated private management network, never through
-public Nginx. Labels are bounded to cluster, node and protocol; user IDs, peer
-keys, client IPs and destination addresses are prohibited.
+The principal Prometheus instance is the aggregation point. Every Core exposes
+a dedicated TLS 1.3 listener on TCP/9443 that requires a client certificate
+from its observability CA and the exact configured Prometheus SPIFFE URI SAN.
+The public Core router and OpenAPI expose neither `/metrics` nor discovery.
+Regional binds must be exact private IPv4 addresses reachable only from the
+principal management network.
+
+The principal supplies bounded HTTP service discovery from its central node
+inventory. Only nodes in operational clusters and active/draining lifecycle
+states are returned; stale operational nodes deliberately remain targets so
+scrape failure and heartbeat-age alerts fire. Enrolling, inactive, revoked and
+retired inventory is excluded. Labels are bounded to cluster, node and role;
+user IDs, peer keys, client IPs and destination addresses are prohibited.
 
 Control exposes aggregate reconciliation divergence, pending cleanup and live
-peer-operation gauges alongside capacity and provisioning failures. Alerting
-fires when divergence, cleanup, pending operations or observation errors
-persist. Fleet-level desired/observed revision drift, last report and
-circuit-breaker state remain part of the multicluster phase. Each node exposes
-local request latency, replay failures, WireGuard capacity and transport
+peer-operation gauges alongside provisioning failures. Fleet series cover last
+heartbeat, desired/observed revision convergence, version compatibility,
+desired-signature rejection, capacity and bounded authentication/replay failure
+reasons. Alerting covers all of those plus scrape availability and pending
+operations. Each node exposes local HTTP, WireGuard capacity and transport
 health. Grafana remains loopback-only and administrator access uses an SSH
 tunnel or an equivalent private channel.
 
@@ -409,12 +418,12 @@ upgrade; a migration requiring destructive rollback blocks the rollout.
 | Persistent cluster/node lifecycle model | Implemented locally in migrations 17–18; not deployed |
 | Node-generated Ed25519 enrollment with hashed one-use token | Implemented locally; not deployed |
 | Signed node-to-Control heartbeat and replay rejection | Implemented locally; not deployed |
-| Desired/observed history and fail-closed placement gate | Implemented locally; desired-state activation pending |
+| Desired/observed history and fail-closed placement gate | Implemented locally; not deployed |
 | Signed desired revisions and last-known-good activation | Implemented locally; not deployed |
-| Fleet identity revocation | Implemented for node-to-Control requests; Control-to-Core trust distribution remains MCL-03 |
+| Fleet identity revocation | Node-to-Control database revocation implemented; Control-to-Core trust rotation remains coordinated node configuration |
 | Durable heartbeat, version compatibility and revision drift | Implemented locally; deployment and regional certification pending |
-| Private central scrape of regional metrics | Designed, not deployed |
-| Cross-cluster-safe asymmetric transport credentials | Not implemented |
+| Private central scrape of regional metrics | TLS 1.3/mTLS listener, central HTTP discovery, fleet metrics and alerts implemented locally; not deployed |
+| Cross-cluster-safe asymmetric transport credentials | Implemented locally with scoped Ed25519 `mvpn2`; not deployed |
 | First regional acceptance and failure-isolation E2E | Paused; not certified |
 
 ## Regional production gate

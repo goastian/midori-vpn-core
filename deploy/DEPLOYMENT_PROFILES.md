@@ -2,10 +2,10 @@
 
 This is the executable deployment baseline for the topology defined in
 [`docs/CENTRAL_CONTROL_ARCHITECTURE.md`](../docs/CENTRAL_CONTROL_ARCHITECTURE.md).
-The regional script does not by itself certify a node or implement the future
-signed desired-state and last-known-good contracts described there. Signed
-enrollment, heartbeat and database-backed node-to-Control revocation are part
-of the current local implementation.
+The regional script does not by itself certify a node. Signed enrollment,
+heartbeat, desired-state polling, last-known-good activation, transport-token
+verification and private fleet observability are part of the current local
+implementation; the independent-server acceptance gate remains separate.
 
 MidoriVPN uses two explicit server profiles. A service is never promoted to a
 more privileged execution level merely because deployment is easier there.
@@ -98,6 +98,12 @@ node and token. Configure the complete set and restart immediately afterward;
 the bootstrap instance remains ineligible for modeled placement and is not a
 release-ready state. Partial configuration always fails startup.
 
+The principal also requires its dedicated observability server identity,
+public client-CA certificate and exact Prometheus client URI SAN. TCP/9443 is
+attached to `OBSERVABILITY_NETWORK`, never public ingress. The Prometheus
+client key stays outside the Core environment and is mounted only in the
+rootless Prometheus container.
+
 ## Regional profile: Core exit node
 
 Every additional server runs a rootless Core without `DATABASE_URL`,
@@ -133,6 +139,14 @@ dedicated public keys and bound to `TRANSPORT_CLUSTER_ID` plus the configured
 server UUID. `CREDENTIAL_SIGNING_SECRET` must be empty in this production
 profile.
 
+Configure `OBSERVABILITY_MTLS_PORT=9443`, an exact RFC1918
+`OBSERVABILITY_HOST_BIND`, the node-specific server certificate/key, public
+observability client-CA certificate and exact authorized Prometheus SPIFFE URI.
+The server key must be a regular `0600` file. The deployment script refuses a
+Prometheus client certificate or key on the regional and publishes 9443 only on
+the declared private address. Firewall and routing must restrict that address
+to the principal management network.
+
 The node-local Redis provides replay protection for Control-to-Core calls. It
 is not the Control data store and must not expose a host port. Control calls the
 regional Core over HTTPS and signs every peer/statistics request with Ed25519,
@@ -154,11 +168,11 @@ private signing key is copied to a regional node. Node management ports are reac
 TLS and an ingress allowlist restricted to the principal server.
 
 Revoking the enrolled node blocks its node-to-Control heartbeat immediately in
-the central database and invalidates unused enrollment tokens. The separate
-Control-to-Core admin identity registry remains local to each Core's Redis and
-does not yet propagate into independent regional instances. Until signed trust
-revisions are implemented, rotating or revoking Control-to-Core trust remains
-an explicit coordinated configuration update on every node.
+the central database and invalidates unused enrollment tokens. Control-to-Core
+authorized request keys remain explicit node-local configuration, so emergency
+rotation of that management trust is a coordinated deployment to every Core.
+Transport credentials use a separate Ed25519 public trust store; no regional
+possesses the issuer's private key.
 
 ## Gateway placement on both profiles
 
@@ -191,6 +205,12 @@ tests pass.
 - Unsigned and wrongly signed management calls return `401`.
 - Control can add a test peer, read real statistics and remove that peer.
 - Node health and transport health appear in the protected admin endpoint.
+- The dedicated TLS 1.3/mTLS observability endpoint rejects no-certificate,
+  wrong-URI and TLS 1.2 clients; it is reachable only from the principal.
+- Central HTTP discovery includes the active regional, excludes inactive and
+  revoked inventory, and preserves stale active targets for alerting.
+- Heartbeat, revision drift, version, signature/replay, capacity and pending
+  operation signals reach the private principal Prometheus.
 - Public user APIs expose only enabled, healthy and certified transports.
 - Restart and abrupt-stop tests leave no interface, route, XFRM state or
   gateway-specific nftables table behind.

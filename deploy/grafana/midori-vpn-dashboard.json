@@ -12,7 +12,7 @@
       "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
       "id": 1,
       "options": {"colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
-      "targets": [{"expr": "up{job=\"midorivpn-core\"}", "legendFormat": "{{node}}", "refId": "A"}],
+      "targets": [{"expr": "up{job=~\"midorivpn-(principal|regional)-core\"}", "legendFormat": "{{cluster}} / {{node}}", "refId": "A"}],
       "title": "Core scrape status",
       "type": "stat"
     },
@@ -136,6 +136,50 @@
       ],
       "title": "Peer reconciliation state",
       "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "midorivpn-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 60}, {"color": "red", "value": 90}]}}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 35},
+      "id": 12,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "time() - midori_vpn_node_last_seen_timestamp_seconds", "legendFormat": "{{cluster}} / {{node}}", "refId": "A"}],
+      "title": "Fleet heartbeat age",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "midorivpn-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 35},
+      "id": 13,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "midori_vpn_node_revision_drift", "legendFormat": "revision drift {{cluster}} / {{node}}", "refId": "A"},
+        {"expr": "1 - midori_vpn_node_version_compatible", "legendFormat": "version incompatible {{cluster}} / {{node}}", "refId": "B"},
+        {"expr": "midori_vpn_node_desired_signature_error", "legendFormat": "signature rejected {{cluster}} / {{node}}", "refId": "C"}
+      ],
+      "title": "Fleet desired-state convergence",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "midorivpn-prometheus"},
+      "fieldConfig": {"defaults": {"max": 100, "min": 0, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 42},
+      "id": 14,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "100 * midori_vpn_node_current_peers / clamp_min(midori_vpn_node_max_peers, 1)", "legendFormat": "{{cluster}} / {{node}}", "refId": "A"}],
+      "title": "Regional node capacity",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "midorivpn-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 42},
+      "id": 15,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [{"expr": "increase(midori_vpn_node_auth_failures_total[5m])", "legendFormat": "{{cluster}} / {{node}} / {{reason}}", "refId": "A"}],
+      "title": "Signed node authentication failures",
+      "type": "timeseries"
     }
   ],
   "refresh": "15s",
@@ -147,6 +191,6 @@
   "timezone": "browser",
   "title": "MidoriVPN — Private operations",
   "uid": "midorivpn-private-operations",
-  "version": 3,
+  "version": 4,
   "weekStart": ""
 }

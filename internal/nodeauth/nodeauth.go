@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/goastian/midori-vpn-core/internal/respond"
+	"github.com/goastian/midori-vpn-core/internal/telemetry"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -29,6 +31,11 @@ const (
 	maxClockSkew = 30 * time.Second
 	nonceTTL     = 2 * time.Minute
 	maxBodySize  = 1 << 20
+)
+
+var (
+	ErrReplayDetected              = errors.New("node request replay detected")
+	ErrReplayProtectionUnavailable = errors.New("node replay protection is unavailable")
 )
 
 type Signer struct {
@@ -207,6 +214,13 @@ func (v *Verifier) Middleware(next http.Handler) http.Handler {
 		}
 		req.Body = io.NopCloser(bytes.NewReader(body))
 		if err := v.Verify(req.Context(), req, body); err != nil {
+			reason := telemetry.NodeAuthInvalid
+			if errors.Is(err, ErrReplayDetected) {
+				reason = telemetry.NodeAuthReplay
+			} else if errors.Is(err, ErrReplayProtectionUnavailable) {
+				reason = telemetry.NodeAuthUnavailable
+			}
+			telemetry.RecordNodeAuthFailure(reason)
 			respond.JsonError(w, "unauthorized: invalid node signature", http.StatusUnauthorized)
 			return
 		}
@@ -276,17 +290,17 @@ func (v *Verifier) rejectReplay(ctx context.Context, nodeID, nonce string) error
 	if v.redis != nil {
 		revoked, err := v.redis.SIsMember(ctx, "nodeauth:revoked", nodeID).Result()
 		if err != nil {
-			return fmt.Errorf("check node revocation: %w", err)
+			return fmt.Errorf("%w: check node revocation", ErrReplayProtectionUnavailable)
 		}
 		if revoked {
 			return fmt.Errorf("node is revoked")
 		}
 		accepted, err := v.redis.SetNX(ctx, "nodeauth:nonce:"+nodeID+":"+nonce, "1", nonceTTL).Result()
 		if err != nil {
-			return fmt.Errorf("store node nonce: %w", err)
+			return fmt.Errorf("%w: store node nonce", ErrReplayProtectionUnavailable)
 		}
 		if !accepted {
-			return fmt.Errorf("node request replay detected")
+			return ErrReplayDetected
 		}
 		return nil
 	}
@@ -301,7 +315,7 @@ func (v *Verifier) rejectReplay(ctx context.Context, nodeID, nonce string) error
 	}
 	key := nodeID + ":" + nonce
 	if _, exists := v.seenNonces[key]; exists {
-		return fmt.Errorf("node request replay detected")
+		return ErrReplayDetected
 	}
 	v.seenNonces[key] = now.Add(nonceTTL)
 	return nil

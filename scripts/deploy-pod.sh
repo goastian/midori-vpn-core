@@ -18,6 +18,20 @@ require_value() {
   [ -n "${!name:-}" ] || die "missing required environment variable: ${name}"
 }
 
+require_bool() {
+  local name="$1"
+  case "${!name:-}" in
+    true|false) ;;
+    *) die "${name} must be true or false" ;;
+  esac
+}
+
+require_spiffe_uri() {
+  local name="$1" value="${!1:-}"
+  [[ "${value}" =~ ^spiffe://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(/[A-Za-z0-9._~-]+)+$ ]] || \
+    die "${name} must be an absolute spiffe URI without credentials, query or fragment"
+}
+
 validate_secret_fingerprints() {
   local entry
   local -a entries
@@ -77,9 +91,21 @@ for required_var in \
   PROXY_MAX_CONNS_PER_USER PROXY_TLS_ENABLED PROXY_TLS_TERMINATED_BY_NGINX \
   WSS_TUNNEL_ENABLED WSS_TUNNEL_MAX_CLIENTS \
   MASQUE_ENABLED MASQUE_PORT MASQUE_MAX_CLIENTS \
+  OBSERVABILITY_NETWORK OBSERVABILITY_MTLS_PORT OBSERVABILITY_TLS_CERT \
+  OBSERVABILITY_TLS_KEY OBSERVABILITY_CLIENT_CA OBSERVABILITY_ALLOWED_CLIENT_URI \
   WS_MAX_GLOBAL WS_MAX_FREE WS_MAX_BASIC WS_MAX_MEDIUM WS_MAX_PRO WS_MAX_ADMIN; do
   require_value "${required_var}"
 done
+
+[[ "${OBSERVABILITY_MTLS_PORT}" == "9443" ]] || die "OBSERVABILITY_MTLS_PORT must use fleet-standard port 9443"
+require_spiffe_uri OBSERVABILITY_ALLOWED_CLIENT_URI
+[[ "${OBSERVABILITY_NETWORK}" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$ ]] || die "OBSERVABILITY_NETWORK must be a Podman network name"
+podman network exists "${OBSERVABILITY_NETWORK}" || die "private observability network does not exist: ${OBSERVABILITY_NETWORK}"
+for observability_file in OBSERVABILITY_TLS_CERT OBSERVABILITY_TLS_KEY OBSERVABILITY_CLIENT_CA; do
+  observability_path="${!observability_file}"
+  [[ "${observability_path}" = /* && -f "${observability_path}" && ! -L "${observability_path}" ]] || die "${observability_file} must be an absolute regular file"
+done
+[[ "$(stat -c '%a' "${OBSERVABILITY_TLS_KEY}")" == "600" ]] || die "OBSERVABILITY_TLS_KEY must have mode 0600"
 
 require_bool ALLOW_LEGACY_HMAC_TRANSPORT_TOKENS
 if [[ "${APP_ENV}" == "production" && "${ALLOW_LEGACY_HMAC_TRANSPORT_TOKENS}" != "false" ]]; then
@@ -155,6 +181,7 @@ echo "📦 Creando Podman Pod '${POD_NAME}'..."
 pod_args=(
   pod create
   --name "${POD_NAME}"
+  --network "${OBSERVABILITY_NETWORK}"
   -p "${WG_PORT}:${WG_PORT}/udp"
   -p "127.0.0.1:${VPN_CORE_HOST_PORT}:${VPN_CORE_PORT}/tcp"
   -p "127.0.0.1:${CONTROL_HOST_PORT}:${CONTROL_CONTAINER_PORT}/tcp"
@@ -224,6 +251,9 @@ wait_healthy midori-pgbouncer
 echo "🛡️ Iniciando midori-vpn-core..."
 core_volume_args=(
   -v wg-config:/etc/wireguard:Z
+  -v "${OBSERVABILITY_TLS_CERT}:${OBSERVABILITY_TLS_CERT}:ro,z"
+  -v "${OBSERVABILITY_TLS_KEY}:${OBSERVABILITY_TLS_KEY}:ro,z"
+  -v "${OBSERVABILITY_CLIENT_CA}:${OBSERVABILITY_CLIENT_CA}:ro,z"
 )
 if [[ "${node_identity_configured}" == "true" ]]; then
   core_volume_args+=(-v "${CORE_NODE_STATE_HOST_DIR}:${CORE_NODE_STATE_DIR}:Z")

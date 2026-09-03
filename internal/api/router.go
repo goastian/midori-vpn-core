@@ -68,13 +68,11 @@ func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *au
 
 	h := core.NewHandler(cfg, mgr)
 	healthChecker := NewHealthChecker(cfg, mgr, pool)
-	metricsExporter := NewMetricsExporter(mgr, pool)
 
 	// Public Health Probes & Telemetry
 	r.Get("/health", h.Health)
 	r.Get("/livez", healthChecker.Livez)
 	r.Get("/readyz", healthChecker.Readyz)
-	r.Get("/metrics", metricsExporter.Handler)
 	if cfg.WSSTunnelEnabled {
 		serverID, _ := uuid.Parse(cfg.WSSTunnelServerID)
 		clusterID, _ := uuid.Parse(cfg.TransportClusterID)

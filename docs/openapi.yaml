@@ -50,19 +50,6 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/ReadinessOK'}
         '503': {$ref: '#/components/responses/ReadinessDegraded'}
-  /metrics:
-    get:
-      operationId: getPrometheusMetrics
-      tags: [Infrastructure]
-      security: []
-      description: Registered by Core but exposed only to the private scraper; public Nginx returns 404.
-      responses:
-        '200':
-          description: Prometheus exposition format.
-          content:
-            text/plain:
-              schema: {type: string}
-
   /api/v1/tunnel/ws:
     get:
       operationId: openTunnelWebSocket

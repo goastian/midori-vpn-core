@@ -25,6 +25,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/nodeplane"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 	"github.com/goastian/midori-vpn-core/internal/respond"
+	"github.com/goastian/midori-vpn-core/internal/telemetry"
 )
 
 const maxNodePlaneBody = 64 << 10
@@ -72,6 +73,7 @@ func (h *NodePlaneHandler) Enroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.verifier.Verify(r.Context(), r, body, nodeID, publicKey); err != nil {
+		recordFleetAuthenticationFailure(err)
 		if errors.Is(err, fleetauth.ErrReplayProtectionUnavailable) {
 			slog.Error("node enrollment replay protection unavailable", "node_id", nodeID)
 			respond.JsonError(w, "node enrollment is unavailable", http.StatusServiceUnavailable)
@@ -122,6 +124,7 @@ func (h *NodePlaneHandler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.verifier.Verify(r.Context(), r, body, nodeID, publicKey); err != nil {
+		recordFleetAuthenticationFailure(err)
 		if errors.Is(err, fleetauth.ErrReplayProtectionUnavailable) {
 			slog.Error("node heartbeat replay protection unavailable", "node_id", nodeID)
 			respond.JsonError(w, "node authentication is unavailable", http.StatusServiceUnavailable)
@@ -213,6 +216,7 @@ func (h *NodePlaneHandler) authenticateNodeRequest(w http.ResponseWriter, r *htt
 		return uuid.Nil, false
 	}
 	if err := h.verifier.Verify(r.Context(), r, body, nodeID, publicKey); err != nil {
+		recordFleetAuthenticationFailure(err)
 		if errors.Is(err, fleetauth.ErrReplayProtectionUnavailable) {
 			slog.Error("node request replay protection unavailable", "node_id", nodeID)
 			respond.JsonError(w, "node authentication is unavailable", http.StatusServiceUnavailable)
@@ -222,6 +226,16 @@ func (h *NodePlaneHandler) authenticateNodeRequest(w http.ResponseWriter, r *htt
 		return uuid.Nil, false
 	}
 	return nodeID, true
+}
+
+func recordFleetAuthenticationFailure(err error) {
+	reason := telemetry.NodeAuthInvalid
+	if errors.Is(err, fleetauth.ErrReplayDetected) {
+		reason = telemetry.NodeAuthReplay
+	} else if errors.Is(err, fleetauth.ErrReplayProtectionUnavailable) {
+		reason = telemetry.NodeAuthUnavailable
+	}
+	telemetry.RecordNodeAuthFailure(reason)
 }
 
 func (h *Handler) AdminCreateCluster(w http.ResponseWriter, r *http.Request) {

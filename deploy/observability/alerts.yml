@@ -2,13 +2,76 @@ groups:
   - name: midorivpn-core
     rules:
       - alert: MidoriVPNCoreDown
-        expr: up{job="midorivpn-core"} == 0
+        expr: up{job=~"midorivpn-(principal|regional)-core"} == 0
         for: 2m
         labels:
           severity: critical
         annotations:
           summary: MidoriVPN Core is not being scraped
           description: The private Prometheus target has been unavailable for two minutes.
+
+      - alert: MidoriVPNNodeHeartbeatStale
+        expr: time() - midori_vpn_node_last_seen_timestamp_seconds > 90
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Regional Core heartbeat is stale
+          description: Node {{ $labels.node }} in cluster {{ $labels.cluster }} has not delivered a current signed heartbeat.
+
+      - alert: MidoriVPNNodeRevisionDrift
+        expr: midori_vpn_node_revision_drift > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Regional Core desired and observed revisions differ
+          description: Node {{ $labels.node }} has not converged to the latest desired revision.
+
+      - alert: MidoriVPNNodeVersionIncompatible
+        expr: midori_vpn_node_version_compatible == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Regional Core version is incompatible
+          description: Node {{ $labels.node }} does not satisfy the current desired-state version requirement.
+
+      - alert: MidoriVPNDesiredStateSignatureRejected
+        expr: midori_vpn_node_desired_signature_error > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Regional Core rejected the desired-state signature
+          description: Node {{ $labels.node }} reported a desired-state signature failure; placement must remain closed.
+
+      - alert: MidoriVPNNodeAuthenticationFailures
+        expr: increase(midori_vpn_node_auth_failures_total{reason=~"invalid_signature|replay"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Signed node authentication was rejected
+          description: A Core or Control endpoint rejected a signed request because its signature or nonce was invalid.
+
+      - alert: MidoriVPNNodeReplayProtectionUnavailable
+        expr: increase(midori_vpn_node_auth_failures_total{reason="unavailable"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Node replay protection is unavailable
+          description: Signed management traffic is failing closed because its replay store cannot be used.
+
+      - alert: MidoriVPNNodeCapacityHigh
+        expr: midori_vpn_node_max_peers > 0 and midori_vpn_node_current_peers / midori_vpn_node_max_peers > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Regional Core peer capacity is above ninety percent
+          description: Node {{ $labels.node }} is close to its observed peer capacity.
 
       - alert: MidoriVPNControlDatabaseUnavailable
         expr: midori_vpn_control_database_up{role="principal"} == 0

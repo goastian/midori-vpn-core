@@ -33,7 +33,10 @@ const (
 	nonceTTL        = 2 * time.Minute
 )
 
-var ErrReplayProtectionUnavailable = errors.New("node replay protection is unavailable")
+var (
+	ErrReplayDetected              = errors.New("node request replay detected")
+	ErrReplayProtectionUnavailable = errors.New("node replay protection is unavailable")
+)
 
 type ReplayStore interface {
 	Use(context.Context, uuid.UUID, string, time.Duration) (bool, error)
@@ -81,7 +84,7 @@ func (v *Verifier) Verify(ctx context.Context, req *http.Request, body []byte, n
 		return fmt.Errorf("%w: persist node nonce", ErrReplayProtectionUnavailable)
 	}
 	if !accepted {
-		return errors.New("node request replay detected")
+		return ErrReplayDetected
 	}
 	return nil
 }

@@ -91,6 +91,7 @@ Important security groups:
 - `TRANSPORT_TOKEN_ISSUER`, `TRANSPORT_TOKEN_AUTHORIZED_KEYS`, `TRANSPORT_CLUSTER_ID`: issuer and dedicated public trust/scope for Ed25519 `mvpn2` proxy, WSS and MASQUE credentials. Regional nodes never receive the private signing key.
 - `NODE_CONTROL_URL`, `CORE_NODE_ID`, `CORE_NODE_STATE_DIR`, `CORE_NODE_ENROLLMENT_TOKEN_FILE`, `CORE_NODE_MAX_PEERS`: enrolled node identity, signed 30-second desired-state polling with jitter, and private atomic last-known-good storage.
 - `NODE_SECRET_FINGERPRINTS`: optional `name=sha256` references that let a node reject desired transports whose local secret material does not match, without distributing the secret.
+- `OBSERVABILITY_MTLS_PORT`, `OBSERVABILITY_TLS_CERT`, `OBSERVABILITY_TLS_KEY`, `OBSERVABILITY_CLIENT_CA`, `OBSERVABILITY_ALLOWED_CLIENT_URI`: dedicated TLS 1.3/mTLS metrics listener and exact Prometheus SPIFFE identity; regional deployment also requires an exact private `OBSERVABILITY_HOST_BIND`.
 - `NODE_AUTH_REDIS_URL`: shared nonce/revocation state for signed requests.
 - `ALLOW_LEGACY_HMAC_TRANSPORT_TOKENS` and `CREDENTIAL_SIGNING_SECRET`: explicit development-only bridge for obsolete HMAC credentials; production rejects both the opt-in and an implicit secret.
 - `CONTROL_DATA_ENCRYPTION_KEY`: principal-only, canonical base64 for exactly 32 random bytes; encrypts recoverable WireGuard PSKs in PostgreSQL and must be backed up separately.
@@ -161,9 +162,11 @@ scripts/render-observability.sh      # render private Prometheus/Grafana Quadlet
 scripts/check-observability.sh       # validate rules, dashboard and private binds
 ```
 
-Prometheus and Grafana share the existing private Core Podman network but
-publish their administrative ports only on `127.0.0.1`. Public Nginx continues
-to return `404` for `/metrics`; operators reach Grafana through an SSH tunnel.
+Prometheus and Grafana share the private Core Podman network but publish their
+administrative ports only on `127.0.0.1`. Prometheus uses a dedicated client
+identity to scrape TLS 1.3/mTLS Core listeners on TCP/9443 and discovers only
+operational regional inventory from the principal. Public Nginx continues to
+return `404` for `/metrics`; operators reach Grafana through an SSH tunnel.
 See `deploy/OBSERVABILITY.md` for rendering, deployment and rollback.
 
 ## Authentication and capability model

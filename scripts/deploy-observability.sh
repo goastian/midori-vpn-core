@@ -33,6 +33,20 @@ wait_url() {
   return 1
 }
 
+wait_principal_target() {
+  local attempts="${1:-90}" response
+  local query_url="http://127.0.0.1:9090/api/v1/query?query=up%7Bjob%3D%22midorivpn-principal-core%22%7D"
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    response="$(curl --fail --silent --show-error --max-time 3 "${query_url}" 2>/dev/null || true)"
+    if grep -Eq '"value":\[[^]]+,"1"\]' <<<"${response}"; then
+      return 0
+    fi
+    sleep 1
+  done
+  printf 'error: principal Core did not become an authenticated Prometheus target\n' >&2
+  return 1
+}
+
 rollback() {
   local status="$1"
   trap - ERR
@@ -55,7 +69,9 @@ rollback() {
 
 [[ "${OBSERVABILITY_CONFIG_DIR}" = /* && "${QUADLET_DIR}" = /* ]] || die "configuration paths must be absolute"
 [[ "${CORE_IMAGE}" == localhost/* ]] || die "CORE_IMAGE must be a verified local staging image"
-[[ "${GRAFANA_STARTUP_ATTEMPTS}" =~ ^[0-9]+$ ]] && ((GRAFANA_STARTUP_ATTEMPTS >= 1)) || die "GRAFANA_STARTUP_ATTEMPTS must be a positive integer"
+if [[ ! "${GRAFANA_STARTUP_ATTEMPTS}" =~ ^[0-9]+$ ]] || ((GRAFANA_STARTUP_ATTEMPTS < 1)); then
+  die "GRAFANA_STARTUP_ATTEMPTS must be a positive integer"
+fi
 [[ -f "${core_unit}" ]] || die "Core Quadlet not found: ${core_unit}"
 podman image exists "${CORE_IMAGE}" || die "Core image is not loaded: ${CORE_IMAGE}"
 
@@ -100,6 +116,7 @@ wait_url "${CORE_HEALTH_URL}" "Core"
 
 systemctl --user restart midorivpn-prometheus.service
 wait_url "${PROMETHEUS_HEALTH_URL}" "Prometheus"
+wait_principal_target
 systemctl --user restart midorivpn-grafana.service
 wait_url "${GRAFANA_HEALTH_URL}" "Grafana" "${GRAFANA_STARTUP_ATTEMPTS}"
 

@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"runtime"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	controlpkg "github.com/goastian/midori-vpn-core/internal/control"
+	"github.com/goastian/midori-vpn-core/internal/telemetry"
 	"github.com/goastian/midori-vpn-core/internal/wg"
 )
 
@@ -25,6 +28,11 @@ var (
 )
 
 const durationBucketCount = 11
+
+const (
+	ObservabilityPort    = 9443
+	maxDiscoveredTargets = 2048
+)
 
 var durationBuckets = [durationBucketCount]float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
 
@@ -77,6 +85,25 @@ func NewMetricsExporter(mgr *wg.Manager, pool *pgxpool.Pool) *MetricsExporter {
 	return &MetricsExporter{mgr: mgr, pool: pool}
 }
 
+func NewObservabilityHandler(mgr *wg.Manager, pool *pgxpool.Pool) http.Handler {
+	exporter := NewMetricsExporter(mgr, pool)
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", getOnly(http.HandlerFunc(exporter.Handler)))
+	mux.Handle("/api/v1/observability/targets", getOnly(http.HandlerFunc(exporter.DiscoveryHandler)))
+	return mux
+}
+
+func getOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 type transportMetric struct {
 	protocol string
 	status   string
@@ -88,6 +115,19 @@ type controlMetrics struct {
 	transports  []transportMetric
 	currentPeer int64
 	maxPeers    int64
+	nodes       []fleetNodeMetric
+}
+
+type fleetNodeMetric struct {
+	cluster             string
+	node                string
+	lastSeenUnix        int64
+	revisionDrift       int
+	versionCompatible   int
+	healthStatus        string
+	currentPeers        int
+	maxPeers            int
+	desiredSignatureBad int
 }
 
 func (m *MetricsExporter) controlMetrics(parent context.Context) controlMetrics {
@@ -130,6 +170,56 @@ func (m *MetricsExporter) controlMetrics(parent context.Context) controlMetrics 
 		FROM vpn_servers
 		WHERE is_active = TRUE`).Scan(&result.currentPeer, &result.maxPeers); err != nil {
 		result.databaseUp = 0
+		return result
+	}
+
+	rows, err = m.pool.Query(ctx, `
+		SELECT cluster.name, node.name,
+		       COALESCE(EXTRACT(EPOCH FROM node.last_seen_at)::BIGINT, 0),
+		       CASE WHEN desired.revision IS NOT NULL
+		                  AND observation.applied_revision = desired.revision THEN 0 ELSE 1 END,
+		       CASE WHEN observation.version_compatible THEN 1 ELSE 0 END,
+		       COALESCE(observation.health_status, 'unknown'),
+		       COALESCE(observation.current_peers, 0),
+		       COALESCE(observation.max_peers, 0),
+		       CASE WHEN observation.last_error_code = 'desired_state_signature_invalid' THEN 1 ELSE 0 END
+		FROM core_nodes node
+		JOIN clusters cluster ON cluster.id = node.cluster_id
+		LEFT JOIN LATERAL (
+			SELECT revision FROM desired_revisions
+			WHERE node_id = node.id ORDER BY revision DESC LIMIT 1
+		) desired ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT applied_revision, version_compatible, health_status,
+			       current_peers, max_peers, last_error_code
+			FROM node_observations
+			WHERE node_id = node.id ORDER BY received_at DESC, id DESC LIMIT 1
+		) observation ON TRUE
+		WHERE cluster.state IN ('active', 'draining')
+		  AND node.state IN ('active', 'draining')
+		ORDER BY cluster.name, node.name`)
+	if err != nil {
+		result.databaseUp = 0
+		return result
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var metric fleetNodeMetric
+		if err := rows.Scan(
+			&metric.cluster, &metric.node, &metric.lastSeenUnix,
+			&metric.revisionDrift, &metric.versionCompatible,
+			&metric.healthStatus, &metric.currentPeers, &metric.maxPeers,
+			&metric.desiredSignatureBad,
+		); err != nil {
+			result.databaseUp = 0
+			result.nodes = nil
+			return result
+		}
+		result.nodes = append(result.nodes, metric)
+	}
+	if rows.Err() != nil {
+		result.databaseUp = 0
+		result.nodes = nil
 	}
 	return result
 }
@@ -171,6 +261,37 @@ func (m *MetricsExporter) Handler(w http.ResponseWriter, r *http.Request) {
 	writeMetric(&output, "midori_vpn_reconciliation_cleanup_pending", "Peer cleanups pending after the latest reconciliation pass.", "gauge", reconciliation.CleanupPending)
 	writeMetric(&output, "midori_vpn_peer_operations_pending", "Durable peer operations that have not fully converged.", "gauge", reconciliation.PendingOperations)
 	writeMetric(&output, "midori_vpn_reconciliation_observation_errors", "Core or database observation errors in the latest reconciliation pass.", "gauge", reconciliation.ObservationErrors)
+	authFailures := telemetry.NodeAuthFailures()
+	fmt.Fprintln(&output, "# HELP midori_vpn_node_auth_failures_total Rejected signed node requests by bounded failure class.")
+	fmt.Fprintln(&output, "# TYPE midori_vpn_node_auth_failures_total counter")
+	for _, metric := range []struct {
+		reason string
+		value  uint64
+	}{
+		{reason: "invalid_signature", value: authFailures[telemetry.NodeAuthInvalid]},
+		{reason: "replay", value: authFailures[telemetry.NodeAuthReplay]},
+		{reason: "unavailable", value: authFailures[telemetry.NodeAuthUnavailable]},
+	} {
+		fmt.Fprintf(&output, "midori_vpn_node_auth_failures_total{reason=\"%s\"} %d\n", metric.reason, metric.value)
+	}
+	fmt.Fprintln(&output)
+	writeMetricHeader(&output, "midori_vpn_node_last_seen_timestamp_seconds", "Unix timestamp of the latest accepted heartbeat for an operational node.", "gauge")
+	writeMetricHeader(&output, "midori_vpn_node_revision_drift", "Whether the latest observed revision differs from current desired state.", "gauge")
+	writeMetricHeader(&output, "midori_vpn_node_version_compatible", "Whether the node reports compatibility with current desired state.", "gauge")
+	writeMetricHeader(&output, "midori_vpn_node_health_status", "Latest bounded health status reported by an operational node.", "gauge")
+	writeMetricHeader(&output, "midori_vpn_node_current_peers", "Current peers reported by an operational node.", "gauge")
+	writeMetricHeader(&output, "midori_vpn_node_max_peers", "Maximum peers reported by an operational node.", "gauge")
+	writeMetricHeader(&output, "midori_vpn_node_desired_signature_error", "Whether the node most recently rejected a desired-state signature.", "gauge")
+	for _, node := range control.nodes {
+		labels := fmt.Sprintf("cluster=\"%s\",node=\"%s\"", prometheusLabel(node.cluster), prometheusLabel(node.node))
+		fmt.Fprintf(&output, "midori_vpn_node_last_seen_timestamp_seconds{%s} %d\n", labels, node.lastSeenUnix)
+		fmt.Fprintf(&output, "midori_vpn_node_revision_drift{%s} %d\n", labels, node.revisionDrift)
+		fmt.Fprintf(&output, "midori_vpn_node_version_compatible{%s} %d\n", labels, node.versionCompatible)
+		fmt.Fprintf(&output, "midori_vpn_node_health_status{%s,status=\"%s\"} 1\n", labels, prometheusLabel(node.healthStatus))
+		fmt.Fprintf(&output, "midori_vpn_node_current_peers{%s} %d\n", labels, node.currentPeers)
+		fmt.Fprintf(&output, "midori_vpn_node_max_peers{%s} %d\n", labels, node.maxPeers)
+		fmt.Fprintf(&output, "midori_vpn_node_desired_signature_error{%s} %d\n", labels, node.desiredSignatureBad)
+	}
 	for _, metric := range control.transports {
 		fmt.Fprintf(&output, "midori_vpn_transport_status{protocol=\"%s\",status=\"%s\"} %d\n", prometheusLabel(metric.protocol), prometheusLabel(metric.status), metric.count)
 	}
@@ -181,8 +302,73 @@ func (m *MetricsExporter) Handler(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(output.String()))
 }
 
+type prometheusTargetGroup struct {
+	Targets []string          `json:"targets"`
+	Labels  map[string]string `json:"labels"`
+}
+
+// DiscoveryHandler returns only non-principal nodes in an operational
+// lifecycle state. Stale nodes deliberately remain targets so Prometheus can
+// emit up=0 while the fleet heartbeat alert reports their stale observation.
+func (m *MetricsExporter) DiscoveryHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if m.pool == nil {
+		http.NotFound(w, r)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	rows, err := m.pool.Query(ctx, `
+		SELECT cluster.name, node.name, node.management_host
+		FROM core_nodes node
+		JOIN clusters cluster ON cluster.id = node.cluster_id
+		WHERE cluster.is_principal = FALSE
+		  AND cluster.state IN ('active', 'draining')
+		  AND node.state IN ('active', 'draining')
+		  AND octet_length(node.identity_public_key) = 32
+		ORDER BY cluster.name, node.name
+		LIMIT $1`, maxDiscoveredTargets+1)
+	if err != nil {
+		http.Error(w, "observability discovery unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	defer rows.Close()
+	groups := make([]prometheusTargetGroup, 0)
+	for rows.Next() {
+		var cluster, node, host string
+		if err := rows.Scan(&cluster, &node, &host); err != nil {
+			http.Error(w, "observability discovery unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if len(groups) == maxDiscoveredTargets {
+			http.Error(w, "observability target limit exceeded", http.StatusServiceUnavailable)
+			return
+		}
+		groups = append(groups, prometheusTargetGroup{
+			Targets: []string{net.JoinHostPort(host, fmt.Sprint(ObservabilityPort))},
+			Labels:  map[string]string{"cluster": cluster, "node": node, "role": "regional"},
+		})
+	}
+	if rows.Err() != nil {
+		http.Error(w, "observability discovery unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(groups)
+}
+
 func writeMetric(output *strings.Builder, name, help, metricType string, value any) {
 	fmt.Fprintf(output, "# HELP %s %s\n# TYPE %s %s\n%s %v\n\n", name, help, name, metricType, name, value)
+}
+
+func writeMetricHeader(output *strings.Builder, name, help, metricType string) {
+	fmt.Fprintf(output, "# HELP %s %s\n# TYPE %s %s\n", name, help, name, metricType)
 }
 
 func writeHistogram(output *strings.Builder, name, help string, histogram *durationHistogram) {

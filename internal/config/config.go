@@ -49,6 +49,14 @@ type Config struct {
 	AllowLegacyHMACTransportTokens bool
 	CredentialSigningSecret        string
 
+	// Dedicated TLS 1.3 observability listener. The client URI is matched
+	// against a verified certificate URI SAN after normal chain validation.
+	ObservabilityMTLSPort         int
+	ObservabilityTLSCert          string
+	ObservabilityTLSKey           string
+	ObservabilityClientCA         string
+	ObservabilityAllowedClientURI string
+
 	// CORS
 	CORSAllowedOrigins string // comma-separated list of allowed origins
 	// Allowed browser-extension origins for CORS (comma-separated, e.g.
@@ -185,6 +193,11 @@ func Load() *Config {
 		TransportClusterID:             env("TRANSPORT_CLUSTER_ID"),
 		AllowLegacyHMACTransportTokens: requireEnvBool("ALLOW_LEGACY_HMAC_TRANSPORT_TOKENS"),
 		CredentialSigningSecret:        env("CREDENTIAL_SIGNING_SECRET"),
+		ObservabilityMTLSPort:          envIntDefault("OBSERVABILITY_MTLS_PORT", 0),
+		ObservabilityTLSCert:           env("OBSERVABILITY_TLS_CERT"),
+		ObservabilityTLSKey:            env("OBSERVABILITY_TLS_KEY"),
+		ObservabilityClientCA:          env("OBSERVABILITY_CLIENT_CA"),
+		ObservabilityAllowedClientURI:  env("OBSERVABILITY_ALLOWED_CLIENT_URI"),
 		WGInterface:                    requireEnv("WG_INTERFACE"),
 		WGPort:                         requireEnvInt("WG_PORT"),
 		Subnet:                         requireEnv("WG_SUBNET"),
@@ -367,6 +380,30 @@ func Load() *Config {
 				log.Fatal("FATAL: enabled transport gateways in one Core process must use the same server UUID")
 			}
 			configuredServerID = serverID
+		}
+	}
+	observabilityConfigured := cfg.ObservabilityMTLSPort != 0 || cfg.ObservabilityTLSCert != "" ||
+		cfg.ObservabilityTLSKey != "" || cfg.ObservabilityClientCA != "" || cfg.ObservabilityAllowedClientURI != ""
+	if cfg.AppEnv == "production" && cfg.DeploymentProfile != "" && !observabilityConfigured {
+		log.Fatal("FATAL: production deployment profiles require the mTLS observability listener")
+	}
+	if observabilityConfigured {
+		if cfg.ObservabilityMTLSPort != 9443 {
+			log.Fatal("FATAL: OBSERVABILITY_MTLS_PORT must use the fleet-standard port 9443")
+		}
+		for name, path := range map[string]string{
+			"OBSERVABILITY_TLS_CERT":  cfg.ObservabilityTLSCert,
+			"OBSERVABILITY_TLS_KEY":   cfg.ObservabilityTLSKey,
+			"OBSERVABILITY_CLIENT_CA": cfg.ObservabilityClientCA,
+		} {
+			if !filepath.IsAbs(path) {
+				log.Fatalf("FATAL: %s must be an absolute path", name)
+			}
+		}
+		clientURI, err := url.Parse(cfg.ObservabilityAllowedClientURI)
+		if err != nil || clientURI.Scheme != "spiffe" || clientURI.Host == "" || clientURI.Path == "" ||
+			clientURI.User != nil || clientURI.RawQuery != "" || clientURI.Fragment != "" {
+			log.Fatal("FATAL: OBSERVABILITY_ALLOWED_CLIENT_URI must be an absolute spiffe URI without credentials, query or fragment")
 		}
 	}
 	if cfg.AppEnv == "production" && cfg.NodeAuthRedisURL == "" {

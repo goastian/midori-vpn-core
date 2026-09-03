@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -23,6 +24,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/masque"
 	"github.com/goastian/midori-vpn-core/internal/nodeauth"
 	"github.com/goastian/midori-vpn-core/internal/nodeplane"
+	"github.com/goastian/midori-vpn-core/internal/observability"
 	"github.com/goastian/midori-vpn-core/internal/proxy"
 	"github.com/goastian/midori-vpn-core/internal/proxytoken"
 	"github.com/goastian/midori-vpn-core/internal/respond"
@@ -149,6 +151,7 @@ func main() {
 
 	// Optional: connect to PostgreSQL + JWKS if DATABASE_URL is set
 	var router http.Handler
+	var observabilityHandler http.Handler
 	var proxyServer *proxy.Server
 	if cfg.DatabaseURL != "" && cfg.AuthentikClientID != "" {
 		pool, err := db.Connect(shutdownCtx, cfg)
@@ -181,6 +184,7 @@ func main() {
 
 		slog.Info("Control API enabled", "auth", "PostgreSQL + Authentik")
 		router = api.NewRouterWithDB(cfg, manager, pool, jwks, verifier, clientCertificateAuthority, transportVerifier, dataCipher)
+		observabilityHandler = api.NewObservabilityHandler(manager, pool)
 
 		if cfg.ProxyEnabled {
 			proxyServer = proxy.NewWithDB(cfg, pool, transportVerifier)
@@ -188,6 +192,7 @@ func main() {
 	} else {
 		slog.Info("Control API disabled", "reason", "no DATABASE_URL or AUTHENTIK_CLIENT_ID")
 		router = api.NewRouter(cfg, manager, verifier, transportVerifier)
+		observabilityHandler = api.NewObservabilityHandler(manager, nil)
 		if cfg.ProxyEnabled {
 			proxyServer = proxy.New(cfg, transportVerifier)
 		}
@@ -198,6 +203,28 @@ func main() {
 				slog.Error("proxy server stopped", "error", err)
 			}
 		}()
+	}
+	var observabilityServer *http.Server
+	var observabilityErrCh chan error
+	if cfg.ObservabilityMTLSPort != 0 {
+		observabilityServer, err = observability.NewServer(
+			fmt.Sprintf(":%d", cfg.ObservabilityMTLSPort),
+			cfg.ObservabilityTLSCert, cfg.ObservabilityTLSKey,
+			cfg.ObservabilityClientCA, cfg.ObservabilityAllowedClientURI,
+			observabilityHandler,
+		)
+		if err != nil {
+			log.Fatalf("failed to initialize private observability listener: %v", err)
+		}
+		observabilityErrCh = make(chan error, 1)
+		go func() {
+			serveErr := observabilityServer.ListenAndServeTLS("", "")
+			if errors.Is(serveErr, http.ErrServerClosed) {
+				serveErr = nil
+			}
+			observabilityErrCh <- serveErr
+		}()
+		slog.Info("private mTLS observability listening", "port", cfg.ObservabilityMTLSPort)
 	}
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
@@ -235,6 +262,11 @@ func main() {
 
 	select {
 	case err := <-serverErrCh:
+		if observabilityServer != nil {
+			shutdown, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			_ = observabilityServer.Shutdown(shutdown)
+			cancel()
+		}
 		if masqueGateway != nil {
 			shutdown, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			_ = masqueGateway.Shutdown(shutdown)
@@ -248,9 +280,23 @@ func main() {
 		api.CancelJobs()
 		shutdown, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		_ = srv.Shutdown(shutdown)
+		if observabilityServer != nil {
+			_ = observabilityServer.Shutdown(shutdown)
+		}
 		cancel()
 		if err != nil {
 			log.Fatalf("MASQUE server error: %v", err)
+		}
+	case err := <-observabilityErrCh:
+		api.CancelJobs()
+		shutdown, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		_ = srv.Shutdown(shutdown)
+		if masqueGateway != nil {
+			_ = masqueGateway.Shutdown(shutdown)
+		}
+		cancel()
+		if err != nil {
+			log.Fatalf("private observability server error: %v", err)
 		}
 	case <-shutdownCtx.Done():
 		slog.Info("shutting down...")
@@ -269,9 +315,19 @@ func main() {
 				slog.Error("MASQUE graceful shutdown error", "error", err)
 			}
 		}
+		if observabilityServer != nil {
+			if err := observabilityServer.Shutdown(ctx); err != nil {
+				slog.Error("observability graceful shutdown error", "error", err)
+			}
+		}
 
 		if err := <-serverErrCh; err != nil {
 			slog.Error("server stopped with error", "error", err)
+		}
+		if observabilityServer != nil {
+			if err := <-observabilityErrCh; err != nil {
+				slog.Error("observability server stopped with error", "error", err)
+			}
 		}
 	}
 

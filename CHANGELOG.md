@@ -4,6 +4,10 @@
 
 ### Security
 
+- Removed metrics from the public Core router and added a dedicated TLS
+  1.3/mTLS observability listener. Core verifies both the private client CA and
+  an exact Prometheus SPIFFE URI SAN; regional deployment rejects client keys
+  and binds the fixed fleet port only to an explicit private address.
 - Replaced shared HMAC proxy/WSS/MASQUE credentials with canonical Ed25519
   `mvpn2` tokens carrying issuer, audience, user, persistent device, server,
   cluster, `iat`, `exp`, `jti` and rotating `kid`. Regional gateways receive
@@ -41,6 +45,10 @@
 
 ### Operations
 
+- Added bounded central HTTP discovery for operational regional nodes plus
+  fleet metrics, alerts and dashboard panels for heartbeat, desired/observed
+  drift, version compatibility, signature/replay failures, capacity and pending
+  operations. Stale active nodes remain scrape targets so outages stay visible.
 - Added jittered 30-second desired-state polling, persisted desired/observed
   revision reporting, runtime WireGuard endpoint selection and admission
   capacity enforced under the same lock as local bundle activation. Desired
@@ -84,8 +92,8 @@
   RPM and browser-store packages, including immutable build inputs, SPDX SBOMs,
   provenance, existing RPM trust, keyless OCI identity and store-signing gates.
 - Added private, digest-pinned Prometheus 3.14 and Grafana 13.2 Quadlets with
-  loopback-only administration, a dedicated in-network scrape path, seven
-  operational alerts and rollback-protected deployment. The dashboard now
+  loopback-only administration, dedicated mTLS scrape paths, 18 operational
+  alerts and rollback-protected deployment. The dashboard now
   covers HTTP and provisioning percentiles, database state, transport health,
   peer capacity and aggregate traffic without user, address or destination
   labels.

@@ -37,6 +37,9 @@ render() {
     -e "s|__GRAFANA_HOST_PORT__|${GRAFANA_HOST_PORT}|g" \
     -e "s|__PROMETHEUS_IMAGE__|$(escape_sed "${PROMETHEUS_IMAGE}")|g" \
     -e "s|__GRAFANA_IMAGE__|$(escape_sed "${GRAFANA_IMAGE}")|g" \
+    -e "s|__PROMETHEUS_MTLS_CA__|$(escape_sed "${PROMETHEUS_MTLS_CA}")|g" \
+    -e "s|__PROMETHEUS_MTLS_CLIENT_CERT__|$(escape_sed "${PROMETHEUS_MTLS_CLIENT_CERT}")|g" \
+    -e "s|__PROMETHEUS_MTLS_CLIENT_KEY__|$(escape_sed "${PROMETHEUS_MTLS_CLIENT_KEY}")|g" \
     -e "s|__OBSERVABILITY_CONFIG_DIR__|$(escape_sed "${output_dir}")|g" \
     "${source}" >"${destination}"
   chmod 0644 "${destination}"
@@ -52,7 +55,8 @@ for name in \
   OBSERVABILITY_CONFIG_DIR OBSERVABILITY_CLUSTER OBSERVABILITY_NETWORK \
   CORE_NODE_NAME VPN_CORE_METRICS_TARGET \
   PROMETHEUS_HOST_PORT GRAFANA_HOST_PORT \
-  PROMETHEUS_IMAGE GRAFANA_IMAGE GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD; do
+  PROMETHEUS_IMAGE GRAFANA_IMAGE GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD \
+  PROMETHEUS_MTLS_CA PROMETHEUS_MTLS_CLIENT_CERT PROMETHEUS_MTLS_CLIENT_KEY; do
   require_value "${name}"
 done
 
@@ -63,11 +67,18 @@ done
 [[ "${GRAFANA_ADMIN_USER}" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$ ]] || die "GRAFANA_ADMIN_USER contains unsupported characters"
 for port_name in PROMETHEUS_HOST_PORT GRAFANA_HOST_PORT; do
   port_value="${!port_name}"
-  [[ "${port_value}" =~ ^[0-9]+$ ]] && ((port_value >= 1 && port_value <= 65535)) || die "${port_name} must be a valid TCP port"
+  if [[ ! "${port_value}" =~ ^[0-9]+$ ]] || ((port_value < 1 || port_value > 65535)); then
+    die "${port_name} must be a valid TCP port"
+  fi
 done
 [[ "${PROMETHEUS_IMAGE}" =~ @sha256:[0-9a-f]{64}$ ]] || die "PROMETHEUS_IMAGE must be pinned by sha256 digest"
 [[ "${GRAFANA_IMAGE}" =~ @sha256:[0-9a-f]{64}$ ]] || die "GRAFANA_IMAGE must be pinned by sha256 digest"
 (( ${#GRAFANA_ADMIN_PASSWORD} >= 16 )) || die "GRAFANA_ADMIN_PASSWORD must contain at least 16 characters"
+for tls_path_name in PROMETHEUS_MTLS_CA PROMETHEUS_MTLS_CLIENT_CERT PROMETHEUS_MTLS_CLIENT_KEY; do
+  tls_path="${!tls_path_name}"
+  [[ "${tls_path}" = /* && -f "${tls_path}" && ! -L "${tls_path}" ]] || die "${tls_path_name} must be an absolute regular file"
+done
+[[ "$(stat -c '%a' "${PROMETHEUS_MTLS_CLIENT_KEY}")" == "600" ]] || die "PROMETHEUS_MTLS_CLIENT_KEY must have mode 0600"
 
 output_dir="${1:-${OBSERVABILITY_CONFIG_DIR}}"
 [[ "${output_dir}" = /* ]] || die "observability output directory must be absolute"
