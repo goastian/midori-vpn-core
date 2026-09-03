@@ -60,12 +60,17 @@ func insertDeviceHandlerFixture(t *testing.T) (*control.Handler, *models.User, u
 			id, user_id, server_id, public_key, assigned_ip, device_name,
 			device_id, is_active, created_at
 		) VALUES
-			($1, $3, $4, 'old-key', '10.77.0.2/32', 'handler-host', $5, FALSE, $6),
-			($2, $3, $4, 'active-key', '10.77.0.3/32', 'handler-host', $5, TRUE, $7)`,
+			($1, $3, $4, $8, '10.77.0.2/32', 'handler-host', $5, FALSE, $6),
+			($2, $3, $4, $9, '10.77.0.3/32', 'handler-host', $5, TRUE, $7)`,
 		olderPeerID, activePeerID, user.ID, serverID, deviceID,
-		time.Now().UTC().Add(-time.Hour), time.Now().UTC()); err != nil {
+		time.Now().UTC().Add(-time.Hour), time.Now().UTC(), connectOperationKey(61), connectOperationKey(62)); err != nil {
 		t.Fatalf("insert peers: %v", err)
 	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `
+			UPDATE peer_operations SET state = 'failed', capacity_reserved = FALSE
+			WHERE user_id = $1 AND state IN ('pending', 'core_applied', 'cleanup_pending')`, user.ID)
+	})
 
 	return control.NewHandler(pool, &config.Config{}), user, deviceID, olderPeerID, activePeerID
 }
@@ -130,7 +135,7 @@ func TestUpdateDeviceAliasReturnsStableDevice(t *testing.T) {
 	}
 }
 
-func TestDeleteDeviceDoesNotRevokeBeforeCoreConverges(t *testing.T) {
+func TestDeleteDeviceRevokesFirstAndReturnsDurableCleanupPending(t *testing.T) {
 	handler, user, deviceID, _, activePeerID := insertDeviceHandlerFixture(t)
 	request := withUser(
 		withChiParam(httptest.NewRequest(http.MethodDelete, "/api/v1/control/devices/"+deviceID.String(), nil), "id", deviceID.String()),
@@ -138,24 +143,24 @@ func TestDeleteDeviceDoesNotRevokeBeforeCoreConverges(t *testing.T) {
 	)
 	recorder := httptest.NewRecorder()
 	handler.DeleteMyDevice(recorder, request)
-	if recorder.Code != http.StatusServiceUnavailable {
+	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("delete device: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var failure struct {
-		Code string `json:"code"`
+	var pending struct {
+		Data struct {
+			Status string `json:"status"`
+		} `json:"data"`
 	}
-	if err := json.NewDecoder(recorder.Body).Decode(&failure); err != nil {
-		t.Fatalf("decode delete failure: %v", err)
-	}
-	if failure.Code != "device_cleanup_pending" || recorder.Header().Get("Retry-After") != "5" {
-		t.Fatalf("unexpected cleanup failure: code=%q retry=%q", failure.Code, recorder.Header().Get("Retry-After"))
+	if err := json.NewDecoder(recorder.Body).Decode(&pending); err != nil ||
+		pending.Data.Status != "device_cleanup_pending" || recorder.Header().Get("Retry-After") != "5" {
+		t.Fatalf("unexpected cleanup response: status=%q retry=%q", pending.Data.Status, recorder.Header().Get("Retry-After"))
 	}
 
 	listRequest := withUser(httptest.NewRequest(http.MethodGet, "/api/v1/control/devices", nil), user)
 	listRecorder := httptest.NewRecorder()
 	handler.ListMyDevices(listRecorder, listRequest)
 	devices := decodeResponseData[[]deviceHandlerResponse](t, listRecorder)
-	if len(devices) != 1 || devices[0].Status != "connected" || devices[0].ActiveConnection == nil || devices[0].ActiveConnection.ID != activePeerID {
-		t.Fatalf("failed cleanup changed device state: %#v", devices)
+	if len(devices) != 1 || devices[0].Status != "cleanup_pending" || devices[0].ActiveConnection == nil || devices[0].ActiveConnection.ID != activePeerID {
+		t.Fatalf("pending cleanup hid access or failed to revoke the device: %#v", devices)
 	}
 }

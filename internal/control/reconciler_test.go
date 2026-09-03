@@ -319,3 +319,71 @@ func TestReconcileServerProtectsPeerCommittedAfterObservationStarted(t *testing.
 		t.Fatalf("new concurrent peer was not protected: %#v", result)
 	}
 }
+
+func TestReconcilerCompletesDurableDisconnectWithExactOwner(t *testing.T) {
+	fixture := newReconciliationFixture(t)
+	connected := fixture.begin(t, 74)
+	peer, _ := fixture.complete(t, connected, "10.99.0.74/32")
+	operations := repo.NewPeerOperationRepo(fixture.pool)
+	disconnect, err := operations.BeginDisconnect(context.Background(), peer.ID)
+	if err != nil {
+		t.Fatalf("BeginDisconnect: %v", err)
+	}
+	fixture.makeStale(t, disconnect.Operation.ID)
+	core := newFakeReconciliationCore(fixture.serverID)
+	core.peers[fixture.serverID] = []control.CorePeerStatsResponse{{
+		PublicKey: peer.PublicKey, OperationID: connected.Operation.ID.String(), AllowedIP: peer.AssignedIP,
+	}}
+
+	report := control.NewReconciler(fixture.pool, core).RunOnce(context.Background())
+
+	var state models.PeerOperationState
+	var active bool
+	var currentPeers int
+	if err := fixture.pool.QueryRow(context.Background(), `
+		SELECT operation.state, peer.is_active, server.current_peers
+		FROM peer_operations operation
+		JOIN peers peer ON peer.id = operation.previous_peer_id
+		JOIN vpn_servers server ON server.id = peer.server_id
+		WHERE operation.id = $1`, disconnect.Operation.ID).Scan(&state, &active, &currentPeers); err != nil {
+		t.Fatalf("load reconciled disconnect: %v", err)
+	}
+	wantRemoval := peer.PublicKey + "\x00" + connected.Operation.ID.String()
+	if state != models.PeerOperationCompleted || active || currentPeers != 0 ||
+		len(core.removeCalls) != 1 || core.removeCalls[0] != wantRemoval || report.PendingOperations != 0 {
+		t.Fatalf("disconnect recovery mismatch: state=%s active=%t current=%d removals=%#v report=%#v",
+			state, active, currentPeers, core.removeCalls, report)
+	}
+}
+
+func TestReconcilerCancelsCoreAppliedConnectAfterBan(t *testing.T) {
+	fixture := newReconciliationFixture(t)
+	pending := fixture.begin(t, 75)
+	if err := repo.NewPeerOperationRepo(fixture.pool).MarkCoreApplied(context.Background(), pending.Operation.ID, "10.99.0.75/32"); err != nil {
+		t.Fatalf("MarkCoreApplied: %v", err)
+	}
+	if _, err := fixture.pool.Exec(context.Background(), `
+		UPDATE users SET is_banned = TRUE, banned_at = NOW() WHERE id = $1`, fixture.userID); err != nil {
+		t.Fatalf("ban fixture user: %v", err)
+	}
+	fixture.makeStale(t, pending.Operation.ID)
+	core := newFakeReconciliationCore(fixture.serverID)
+	core.peers[fixture.serverID] = []control.CorePeerStatsResponse{{
+		PublicKey: pending.Operation.PublicKey, OperationID: pending.Operation.ID.String(), AllowedIP: "10.99.0.75/32",
+	}}
+
+	control.NewReconciler(fixture.pool, core).RunOnce(context.Background())
+
+	var state models.PeerOperationState
+	var currentPeers int
+	if err := fixture.pool.QueryRow(context.Background(), `
+		SELECT operation.state, server.current_peers
+		FROM peer_operations operation
+		JOIN vpn_servers server ON server.id = operation.server_id
+		WHERE operation.id = $1`, pending.Operation.ID).Scan(&state, &currentPeers); err != nil {
+		t.Fatalf("load denied operation: %v", err)
+	}
+	if state != models.PeerOperationFailed || currentPeers != 0 || len(core.removeCalls) != 1 {
+		t.Fatalf("denied connect did not converge: state=%s current=%d removals=%#v", state, currentPeers, core.removeCalls)
+	}
+}

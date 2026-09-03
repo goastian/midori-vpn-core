@@ -290,7 +290,7 @@ func TestDeviceRepoListsAliasesAndPaginatesSessionHistory(t *testing.T) {
 	}
 }
 
-func TestDeviceRepoRevocationPreservesHistoryAndInvalidatesMaterial(t *testing.T) {
+func TestDeviceRepoRevocationBlocksAccessWithoutHidingPendingSession(t *testing.T) {
 	pool := testPool(t)
 	deviceRepo := repo.NewDeviceRepo(pool)
 	userID := insertTestUser(t, pool)
@@ -318,7 +318,7 @@ func TestDeviceRepoRevocationPreservesHistoryAndInvalidatesMaterial(t *testing.T
 		t.Fatal(err)
 	}
 
-	revoked, err := deviceRepo.RevokeWithMaterial(context.Background(), userID, device.ID)
+	revoked, err := deviceRepo.RevokeForCleanup(context.Background(), userID, device.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +330,7 @@ func TestDeviceRepoRevocationPreservesHistoryAndInvalidatesMaterial(t *testing.T
 	if err := pool.QueryRow(context.Background(), `SELECT is_active, preshared_key FROM peers WHERE id = $1`, peerID).Scan(&active, &psk); err != nil {
 		t.Fatal(err)
 	}
-	if active || psk != "" {
+	if !active || psk != "" {
 		t.Fatalf("peer material remains: active=%v psk=%q", active, psk)
 	}
 	var certificateRevoked bool
@@ -343,7 +343,7 @@ func TestDeviceRepoRevocationPreservesHistoryAndInvalidatesMaterial(t *testing.T
 	if err := pool.QueryRow(context.Background(), `SELECT current_peers FROM vpn_servers WHERE id = $1`, serverID).Scan(&currentPeers); err != nil {
 		t.Fatal(err)
 	}
-	if !certificateRevoked || currentPeers != 0 {
+	if !certificateRevoked || currentPeers != 1 {
 		t.Fatalf("revocation mismatch: certificate=%v current_peers=%d", certificateRevoked, currentPeers)
 	}
 	count, err := repo.NewPeerRepo(pool).CountByDevice(context.Background(), userID, device.ID)

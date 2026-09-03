@@ -1,5 +1,5 @@
 -- Midori VPN v2.0.0 Canonical Consolidated PostgreSQL Schema
--- Generated from migrations 000001 - 000014
+-- Generated from migrations 000001 - 000015
 
 BEGIN;
 
@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS vpn_servers (
     max_peers      INTEGER     NOT NULL DEFAULT 100,
     current_peers  INTEGER     NOT NULL DEFAULT 0,
     is_active      BOOLEAN     NOT NULL DEFAULT TRUE,
+    draining_at    TIMESTAMPTZ,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -130,6 +131,8 @@ CREATE INDEX IF NOT EXISTS idx_peers_assigned_ip ON peers (assigned_ip);
 CREATE INDEX IF NOT EXISTS idx_peers_created_at ON peers (created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_peers_active_device ON peers (device_id) WHERE is_active = TRUE AND device_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_peers_device_created ON peers (device_id, created_at DESC) WHERE device_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_peers_user_active ON peers (user_id) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_peers_server_active ON peers (server_id) WHERE is_active = TRUE;
 
 -- ============================================================
 -- Table: peer_operations
@@ -173,6 +176,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_peer_operations_live_key
 CREATE INDEX IF NOT EXISTS idx_peer_operations_state_updated ON peer_operations (state, updated_at);
 CREATE INDEX IF NOT EXISTS idx_peer_operations_user_created ON peer_operations (user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_peer_operations_server_state ON peer_operations (server_id, state);
+CREATE INDEX IF NOT EXISTS idx_peer_operations_user_live
+    ON peer_operations (user_id) WHERE state IN ('pending', 'core_applied', 'cleanup_pending');
+CREATE INDEX IF NOT EXISTS idx_peer_operations_previous_peer_live
+    ON peer_operations (previous_peer_id)
+    WHERE previous_peer_id IS NOT NULL
+      AND state IN ('pending', 'core_applied', 'cleanup_pending');
 
 ALTER TABLE peers
     ADD COLUMN provision_operation_id UUID,

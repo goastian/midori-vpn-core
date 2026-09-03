@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -17,6 +18,8 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/models"
 )
 
+var ErrServerNotDrained = errors.New("server still has active sessions or operations")
+
 type ServerRepo struct {
 	pool *pgxpool.Pool
 
@@ -28,7 +31,7 @@ type ServerRepo struct {
 }
 
 const serverColumns = `id, name, host, endpoint, port, wg_port, public_key, location, country_code,
-	max_peers, current_peers, is_active, created_at, updated_at`
+	max_peers, current_peers, is_active, draining_at, created_at, updated_at`
 
 type rowScanner interface {
 	Scan(dest ...interface{}) error
@@ -59,6 +62,37 @@ func (r *ServerRepo) Create(ctx context.Context, s *models.VPNServer) error {
 		s.Name, s.Host, s.Endpoint, s.Port, s.WGPort, s.PublicKey, s.Location,
 		s.CountryCode, s.MaxPeers,
 	).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt)
+}
+
+// CreateWithTransports persists the server and its advertised transports in a
+// single transaction so a server can never become visible with a partial
+// transport contract.
+func (r *ServerRepo) CreateWithTransports(ctx context.Context, s *models.VPNServer, transports []models.TransportCapability) error {
+	if len(transports) == 0 {
+		return errors.New("server must have at least one transport")
+	}
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin create server: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO vpn_servers (name, host, endpoint, port, wg_port, public_key, location, country_code, max_peers, is_active, draining_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id, created_at, updated_at`,
+		s.Name, s.Host, s.Endpoint, s.Port, s.WGPort, s.PublicKey, s.Location,
+		s.CountryCode, s.MaxPeers, s.IsActive, s.DrainingAt,
+	).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		return fmt.Errorf("create server: %w", err)
+	}
+	if err := replaceTransportsTx(ctx, tx, s.ID, transports); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit server creation: %w", err)
+	}
+	r.InvalidateCache()
+	return nil
 }
 
 func (r *ServerRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.VPNServer, error) {
@@ -213,14 +247,52 @@ func (r *ServerRepo) Update(ctx context.Context, s *models.VPNServer) error {
 	query := `
 		UPDATE vpn_servers
 		SET name = $1, host = $2, endpoint = $3, port = $4, wg_port = $5, public_key = $6,
-		    location = $7, country_code = $8, max_peers = $9, is_active = $10, updated_at = NOW()
-		WHERE id = $11
+		    location = $7, country_code = $8, max_peers = $9, is_active = $10,
+		    draining_at = $11, updated_at = NOW()
+		WHERE id = $12
 	`
 	_, err := r.pool.Exec(ctx, query,
 		s.Name, s.Host, s.Endpoint, s.Port, s.WGPort, s.PublicKey, s.Location,
-		s.CountryCode, s.MaxPeers, s.IsActive, s.ID,
+		s.CountryCode, s.MaxPeers, s.IsActive, s.DrainingAt, s.ID,
 	)
 	return err
+}
+
+// UpdateWithTransports updates the server and, when requested, replaces its
+// transport contract in the same transaction.
+func (r *ServerRepo) UpdateWithTransports(ctx context.Context, s *models.VPNServer, transports []models.TransportCapability, replace bool) error {
+	if replace && len(transports) == 0 {
+		return errors.New("server must have at least one transport")
+	}
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin update server: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, `
+		UPDATE vpn_servers
+		SET name = $1, host = $2, endpoint = $3, port = $4, wg_port = $5, public_key = $6,
+		    location = $7, country_code = $8, max_peers = $9, is_active = $10,
+		    draining_at = $11, updated_at = NOW()
+		WHERE id = $12`,
+		s.Name, s.Host, s.Endpoint, s.Port, s.WGPort, s.PublicKey, s.Location,
+		s.CountryCode, s.MaxPeers, s.IsActive, s.DrainingAt, s.ID)
+	if err != nil {
+		return fmt.Errorf("update server: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return pgx.ErrNoRows
+	}
+	if replace {
+		if err := replaceTransportsTx(ctx, tx, s.ID, transports); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit server update: %w", err)
+	}
+	r.InvalidateCache()
+	return nil
 }
 
 // ReplaceTransports atomically replaces a server's advertised transport
@@ -236,6 +308,17 @@ func (r *ServerRepo) ReplaceTransports(ctx context.Context, serverID uuid.UUID, 
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if err := replaceTransportsTx(ctx, tx, serverID, transports); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit server transports: %w", err)
+	}
+	r.InvalidateCache()
+	return nil
+}
+
+func replaceTransportsTx(ctx context.Context, tx pgx.Tx, serverID uuid.UUID, transports []models.TransportCapability) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM vpn_server_transports WHERE server_id = $1`, serverID); err != nil {
 		return fmt.Errorf("delete server transports: %w", err)
 	}
@@ -243,10 +326,11 @@ func (r *ServerRepo) ReplaceTransports(ctx context.Context, serverID uuid.UUID, 
 	for _, transport := range transports {
 		metadata := []byte("{}")
 		if len(transport.Metadata) > 0 {
-			metadata, err = json.Marshal(transport.Metadata)
+			encoded, err := json.Marshal(transport.Metadata)
 			if err != nil {
 				return fmt.Errorf("encode transport metadata: %w", err)
 			}
+			metadata = encoded
 		}
 		batch.Queue(`
 			INSERT INTO vpn_server_transports
@@ -259,10 +343,6 @@ func (r *ServerRepo) ReplaceTransports(ctx context.Context, serverID uuid.UUID, 
 	if err := results.Close(); err != nil {
 		return fmt.Errorf("insert server transports: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit server transports: %w", err)
-	}
-	r.InvalidateCache()
 	return nil
 }
 
@@ -318,6 +398,99 @@ func (r *ServerRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	defer r.InvalidateCache()
 	_, err := r.pool.Exec(ctx, `DELETE FROM vpn_servers WHERE id = $1`, id)
 	return err
+}
+
+// DrainAndDelete first makes the server unavailable for new connections. The
+// draining marker is committed even when active sessions or live operations
+// keep the server from being deleted.
+func (r *ServerRepo) DrainAndDelete(ctx context.Context, id uuid.UUID) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin server drain: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	operationRows, err := tx.Query(ctx, `
+		SELECT operation.id
+		FROM peer_operations operation
+		LEFT JOIN peers previous ON previous.id = operation.previous_peer_id
+		WHERE operation.state IN ('pending', 'core_applied', 'cleanup_pending')
+		  AND (operation.server_id = $1 OR previous.server_id = $1)
+		ORDER BY operation.id
+		FOR UPDATE OF operation`, id)
+	if err != nil {
+		return fmt.Errorf("lock server operations: %w", err)
+	}
+	for operationRows.Next() {
+		var operationID uuid.UUID
+		if err := operationRows.Scan(&operationID); err != nil {
+			operationRows.Close()
+			return fmt.Errorf("scan locked server operation: %w", err)
+		}
+	}
+	if err := operationRows.Err(); err != nil {
+		operationRows.Close()
+		return fmt.Errorf("lock server operation rows: %w", err)
+	}
+	operationRows.Close()
+
+	peerRows, err := tx.Query(ctx, `
+		SELECT id FROM peers
+		WHERE server_id = $1 AND is_active = TRUE
+		ORDER BY id FOR UPDATE`, id)
+	if err != nil {
+		return fmt.Errorf("lock server sessions: %w", err)
+	}
+	for peerRows.Next() {
+		var peerID uuid.UUID
+		if err := peerRows.Scan(&peerID); err != nil {
+			peerRows.Close()
+			return fmt.Errorf("scan locked server session: %w", err)
+		}
+	}
+	if err := peerRows.Err(); err != nil {
+		peerRows.Close()
+		return fmt.Errorf("lock server session rows: %w", err)
+	}
+	peerRows.Close()
+
+	var serverID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM vpn_servers WHERE id = $1 FOR UPDATE`, id).Scan(&serverID); err != nil {
+		return fmt.Errorf("lock draining server: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE vpn_servers
+		SET is_active = FALSE, draining_at = COALESCE(draining_at, NOW()), updated_at = NOW()
+		WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("mark server draining: %w", err)
+	}
+
+	var blockers int
+	if err := tx.QueryRow(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM peers WHERE server_id = $1 AND is_active = TRUE) +
+			(SELECT COUNT(*)
+			 FROM peer_operations operation
+			 LEFT JOIN peers previous ON previous.id = operation.previous_peer_id
+			 WHERE operation.state IN ('pending', 'core_applied', 'cleanup_pending')
+			   AND (operation.server_id = $1 OR previous.server_id = $1))`, id).Scan(&blockers); err != nil {
+		return fmt.Errorf("count server drain blockers: %w", err)
+	}
+	if blockers > 0 {
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit server draining state: %w", err)
+		}
+		r.InvalidateCache()
+		return ErrServerNotDrained
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM vpn_servers WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("delete drained server: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit server deletion: %w", err)
+	}
+	r.InvalidateCache()
+	return nil
 }
 
 // loadTransports attaches the normalized transport contract in a single query.
@@ -386,7 +559,7 @@ func scanServer(row rowScanner) (*models.VPNServer, error) {
 	if err := row.Scan(
 		&s.ID, &s.Name, &s.Host, &s.Endpoint, &s.Port, &s.WGPort, &s.PublicKey,
 		&s.Location, &s.CountryCode, &s.MaxPeers, &s.CurrentPeers, &s.IsActive,
-		&s.CreatedAt, &s.UpdatedAt,
+		&s.DrainingAt, &s.CreatedAt, &s.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}

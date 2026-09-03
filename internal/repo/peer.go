@@ -119,6 +119,36 @@ func (r *PeerRepo) ListActiveByUser(ctx context.Context, userID uuid.UUID) ([]mo
 	return peers, nil
 }
 
+// ListActiveWithDeniedAccess returns sessions that must be removed because
+// their user was banned or their owning device was revoked. These durable
+// flags also cover a connection that completed concurrently with the action.
+func (r *PeerRepo) ListActiveWithDeniedAccess(ctx context.Context) ([]models.Peer, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT `+operationPeerColumns+`
+		FROM peers peer
+		JOIN users ON users.id = peer.user_id
+		JOIN devices ON devices.id = peer.device_id
+		WHERE peer.is_active = TRUE
+		  AND (users.is_banned = TRUE OR devices.revoked_at IS NOT NULL)
+		ORDER BY peer.created_at, peer.id`)
+	if err != nil {
+		return nil, fmt.Errorf("list active peers with denied access: %w", err)
+	}
+	defer rows.Close()
+	peers := make([]models.Peer, 0)
+	for rows.Next() {
+		peer, err := scanOperationPeer(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan active peer with denied access: %w", err)
+		}
+		peers = append(peers, *peer)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list active peers with denied access rows: %w", err)
+	}
+	return peers, nil
+}
+
 func (r *PeerRepo) ListByDevice(ctx context.Context, userID, deviceID uuid.UUID, limit, offset int) ([]models.Peer, error) {
 	query := `
 		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,

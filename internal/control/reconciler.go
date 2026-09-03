@@ -105,6 +105,19 @@ type serverObservation struct {
 
 func (r *Reconciler) RunOnce(ctx context.Context) ReconciliationReport {
 	report := ReconciliationReport{}
+	deniedPeers, err := r.peerRepo.ListActiveWithDeniedAccess(ctx)
+	if err != nil {
+		report.ObservationErrors++
+		slog.Error("peer reconciliation could not list denied access", "error", err)
+	} else {
+		for index := range deniedPeers {
+			if _, err := r.operationRepo.BeginDisconnect(ctx, deniedPeers[index].ID); err != nil &&
+				!errors.Is(err, repo.ErrConnectionInProgress) {
+				report.ObservationErrors++
+				slog.Error("peer reconciliation could not schedule denied access cleanup", "peer_id", deniedPeers[index].ID, "error", err)
+			}
+		}
+	}
 	servers, err := r.serverRepo.ListForReconciliation(ctx)
 	if err != nil {
 		report.ObservationErrors++
@@ -136,6 +149,23 @@ func (r *Reconciler) RunOnce(ctx context.Context) ReconciliationReport {
 	} else {
 		for index := range operations {
 			operation := &operations[index]
+			if operation.Action == models.PeerOperationDisconnect {
+				if err := r.recoverDisconnect(ctx, operation, serverByID, observations, dirtyServers); err != nil {
+					slog.Error("peer reconciliation disconnect recovery failed", "operation_id", operation.ID, "error", err)
+				}
+				continue
+			}
+			allowed, accessErr := r.operationRepo.AccessAllowed(ctx, operation.ID)
+			if accessErr != nil {
+				slog.Error("peer reconciliation could not verify operation access", "operation_id", operation.ID, "error", accessErr)
+				continue
+			}
+			if !allowed && (operation.State == models.PeerOperationPending || operation.State == models.PeerOperationCoreApplied) {
+				if err := r.recoverDeniedConnect(ctx, operation, serverByID, observations, dirtyServers); err != nil {
+					slog.Error("peer reconciliation denied connection cleanup failed", "operation_id", operation.ID, "error", err)
+				}
+				continue
+			}
 			switch operation.State {
 			case models.PeerOperationPending, models.PeerOperationCoreApplied:
 				if err := r.recoverConnect(ctx, operation, serverByID, observations, dirtyServers); err != nil {
@@ -220,6 +250,14 @@ func (r *Reconciler) RunOnce(ctx context.Context) ReconciliationReport {
 			continue
 		}
 		for _, operation := range live {
+			if operation.Action == models.PeerOperationDisconnect {
+				if operation.PreviousOperationID != nil {
+					ownedExact[peerOwner(operation.PublicKey, operation.PreviousOperationID.String())] = true
+				} else {
+					ownedLegacy[operation.PublicKey] = true
+				}
+				continue
+			}
 			ownedExact[peerOwner(operation.PublicKey, operation.ID.String())] = true
 		}
 		for _, peer := range observation.peers {
@@ -252,6 +290,71 @@ func (r *Reconciler) RunOnce(ctx context.Context) ReconciliationReport {
 	}
 	storeReconciliationMetrics(report)
 	return report
+}
+
+func (r *Reconciler) recoverDisconnect(ctx context.Context, operation *models.PeerOperation, servers map[uuid.UUID]*models.VPNServer, observations map[uuid.UUID]serverObservation, dirty map[uuid.UUID]bool) error {
+	server := servers[operation.ServerID]
+	observation, valid := observations[operation.ServerID]
+	if server == nil || !valid {
+		return r.operationRepo.RecordAttemptFailure(ctx, operation.ID, errors.New("disconnect Core observation unavailable"))
+	}
+	observed, exists := findObservedByKey(observation.peers, operation.PublicKey)
+	expectedID := ""
+	if operation.PreviousOperationID != nil {
+		expectedID = operation.PreviousOperationID.String()
+	}
+	if !exists || (expectedID != "" && observed.OperationID != expectedID) {
+		_, err := r.operationRepo.CompleteDisconnect(ctx, operation.ID)
+		return err
+	}
+	if expectedID == "" {
+		expectedID = observed.OperationID
+		if expectedID == "" {
+			return r.operationRepo.RecordAttemptFailure(ctx, operation.ID, errors.New("disconnect Core operation identity unavailable"))
+		}
+		parsed, err := uuid.Parse(expectedID)
+		if err != nil {
+			return r.operationRepo.RecordAttemptFailure(ctx, operation.ID, errors.New("disconnect Core operation identity is invalid"))
+		}
+		if err := r.operationRepo.SetPreviousOperationID(ctx, operation.ID, parsed); err != nil {
+			return err
+		}
+	}
+	if err := r.operationRepo.RecordAttemptStarted(ctx, operation.ID); err != nil {
+		if errors.Is(err, repo.ErrOperationState) {
+			return nil
+		}
+		return err
+	}
+	if err := r.core.RemovePeer(ctx, server, operation.PublicKey, expectedID); err != nil {
+		_ = r.operationRepo.RecordAttemptFailure(ctx, operation.ID, err)
+		return err
+	}
+	dirty[operation.ServerID] = true
+	_, err := r.operationRepo.CompleteDisconnect(ctx, operation.ID)
+	return err
+}
+
+func (r *Reconciler) recoverDeniedConnect(ctx context.Context, operation *models.PeerOperation, servers map[uuid.UUID]*models.VPNServer, observations map[uuid.UUID]serverObservation, dirty map[uuid.UUID]bool) error {
+	server := servers[operation.ServerID]
+	observation, valid := observations[operation.ServerID]
+	if server == nil || !valid {
+		return r.operationRepo.RecordAttemptFailure(ctx, operation.ID, errors.New("denied connection Core observation unavailable"))
+	}
+	if _, exists := findObservedPeer(observation.peers, operation.PublicKey, operation.ID.String()); exists {
+		if err := r.operationRepo.RecordAttemptStarted(ctx, operation.ID); err != nil {
+			if errors.Is(err, repo.ErrOperationState) {
+				return nil
+			}
+			return err
+		}
+		if err := r.core.RemovePeer(ctx, server, operation.PublicKey, operation.ID.String()); err != nil {
+			_ = r.operationRepo.RecordAttemptFailure(ctx, operation.ID, err)
+			return err
+		}
+		dirty[operation.ServerID] = true
+	}
+	return r.operationRepo.CancelDeniedConnect(ctx, operation.ID)
 }
 
 func (r *Reconciler) recoverConnect(ctx context.Context, operation *models.PeerOperation, servers map[uuid.UUID]*models.VPNServer, observations map[uuid.UUID]serverObservation, dirty map[uuid.UUID]bool) error {

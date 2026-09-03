@@ -21,6 +21,7 @@ var (
 	ErrServerCapacity        = errors.New("server is full or inactive")
 	ErrOperationState        = errors.New("peer operation is in an invalid state")
 	ErrPeerOperationConflict = errors.New("public key belongs to another device")
+	ErrAccessRevoked         = errors.New("user or device access is revoked")
 )
 
 type BeginConnectParams struct {
@@ -40,6 +41,12 @@ type BeginConnectResult struct {
 	Device       *models.Device
 	PreviousPeer *models.Peer
 	ExistingPeer *models.Peer
+}
+
+type BeginDisconnectResult struct {
+	Operation        *models.PeerOperation
+	Peer             *models.Peer
+	AlreadyConverged bool
 }
 
 type PeerOperationRepo struct {
@@ -299,6 +306,87 @@ func (r *PeerOperationRepo) BeginConnect(ctx context.Context, params BeginConnec
 	return &BeginConnectResult{Operation: operation, Device: device, PreviousPeer: previousPeer}, nil
 }
 
+// BeginDisconnect durably records the exact database peer and Core operation
+// that may be removed. Replays return the same live operation.
+func (r *PeerOperationRepo) BeginDisconnect(ctx context.Context, peerID uuid.UUID) (*BeginDisconnectResult, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("begin disconnect operation: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var userID uuid.UUID
+	var publicKey string
+	if err := tx.QueryRow(ctx, `
+		SELECT user_id, public_key FROM peers WHERE id = $1`, peerID).Scan(&userID, &publicKey); err != nil {
+		return nil, fmt.Errorf("load disconnect owner: %w", err)
+	}
+	var lockedUser uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM users WHERE id = $1 FOR UPDATE`, userID).Scan(&lockedUser); err != nil {
+		return nil, fmt.Errorf("lock disconnect user: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, publicKey); err != nil {
+		return nil, fmt.Errorf("lock disconnect key: %w", err)
+	}
+
+	peer, err := scanOperationPeer(tx.QueryRow(ctx, `
+		SELECT `+operationPeerColumns+` FROM peers WHERE id = $1 FOR UPDATE`, peerID))
+	if err != nil {
+		return nil, fmt.Errorf("lock disconnect peer: %w", err)
+	}
+	if !peer.IsActive {
+		return &BeginDisconnectResult{Peer: peer, AlreadyConverged: true}, nil
+	}
+	if peer.DeviceID == nil {
+		return nil, errors.New("active peer has no device identity")
+	}
+	existing, err := scanPeerOperation(tx.QueryRow(ctx, `
+		SELECT `+operationColumns+` FROM peer_operations
+		WHERE action = 'disconnect' AND previous_peer_id = $1
+		  AND state IN ('pending', 'core_applied', 'cleanup_pending')
+		ORDER BY created_at DESC LIMIT 1`, peer.ID))
+	if err == nil {
+		return &BeginDisconnectResult{Operation: existing, Peer: peer}, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("load existing disconnect operation: %w", err)
+	}
+
+	var blockingID uuid.UUID
+	err = tx.QueryRow(ctx, `
+		SELECT id FROM peer_operations
+		WHERE state IN ('pending', 'core_applied', 'cleanup_pending')
+		  AND (device_id = $1 OR public_key = $2)
+		LIMIT 1`, *peer.DeviceID, peer.PublicKey).Scan(&blockingID)
+	if err == nil {
+		return nil, ErrConnectionInProgress
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("check concurrent disconnect operation: %w", err)
+	}
+
+	operationID := uuid.New()
+	operation, err := scanPeerOperation(tx.QueryRow(ctx, `
+		INSERT INTO peer_operations (
+			id, action, state, user_id, device_id, server_id, public_key,
+			previous_peer_id, previous_operation_id, assigned_ip, attempts
+		) VALUES ($1, 'disconnect', 'pending', $2, $3, $4, $5, $6, $7, $8, 0)
+		RETURNING `+operationColumns,
+		operationID, peer.UserID, *peer.DeviceID, peer.ServerID, peer.PublicKey,
+		peer.ID, peer.ProvisionOperationID, peer.AssignedIP))
+	if err != nil {
+		var pgError *pgconn.PgError
+		if errors.As(err, &pgError) && pgError.Code == "23505" {
+			return nil, ErrConnectionInProgress
+		}
+		return nil, fmt.Errorf("create disconnect operation: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit disconnect operation: %w", err)
+	}
+	return &BeginDisconnectResult{Operation: operation, Peer: peer}, nil
+}
+
 func (r *PeerOperationRepo) SetPreviousOperationID(ctx context.Context, operationID, previousOperationID uuid.UUID) error {
 	if previousOperationID == uuid.Nil {
 		return errors.New("previous operation ID is required")
@@ -376,6 +464,18 @@ func (r *PeerOperationRepo) CompleteConnect(ctx context.Context, operationID uui
 	if operation.State != models.PeerOperationCoreApplied {
 		return nil, nil, ErrOperationState
 	}
+	var banned bool
+	var revokedAt *time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT users.is_banned, devices.revoked_at
+		FROM users JOIN devices ON devices.user_id = users.id
+		WHERE users.id = $1 AND devices.id = $2
+		FOR UPDATE OF users, devices`, operation.UserID, operation.DeviceID).Scan(&banned, &revokedAt); err != nil {
+		return nil, nil, fmt.Errorf("lock operation access state: %w", err)
+	}
+	if banned || revokedAt != nil {
+		return nil, nil, ErrAccessRevoked
+	}
 
 	var previousPeer *models.Peer
 	if operation.PreviousPeerID != nil {
@@ -430,6 +530,122 @@ func (r *PeerOperationRepo) CompleteConnect(ctx context.Context, operationID uui
 		return nil, nil, fmt.Errorf("commit completed peer operation: %w", err)
 	}
 	return peer, previousPeer, nil
+}
+
+// CompleteDisconnect atomically retires the exact target session, detaches it
+// from meshes, repairs the server counter and closes the durable operation.
+func (r *PeerOperationRepo) CompleteDisconnect(ctx context.Context, operationID uuid.UUID) (*models.Peer, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("begin disconnect completion: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	operation, err := scanPeerOperation(tx.QueryRow(ctx, `
+		SELECT `+operationColumns+` FROM peer_operations WHERE id = $1 FOR UPDATE`, operationID))
+	if err != nil {
+		return nil, fmt.Errorf("lock disconnect operation: %w", err)
+	}
+	if operation.Action != models.PeerOperationDisconnect || operation.PreviousPeerID == nil {
+		return nil, ErrOperationState
+	}
+	peer, err := scanOperationPeer(tx.QueryRow(ctx, `
+		SELECT `+operationPeerColumns+` FROM peers WHERE id = $1 FOR UPDATE`, *operation.PreviousPeerID))
+	if err != nil {
+		return nil, fmt.Errorf("lock disconnect target: %w", err)
+	}
+	if operation.State == models.PeerOperationCompleted {
+		return peer, nil
+	}
+	if operation.Action != models.PeerOperationDisconnect ||
+		(operation.State != models.PeerOperationPending && operation.State != models.PeerOperationCoreApplied) {
+		return nil, ErrOperationState
+	}
+	var lockedServer uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM vpn_servers WHERE id = $1 FOR UPDATE`, peer.ServerID).Scan(&lockedServer); err != nil {
+		return nil, fmt.Errorf("lock disconnect server: %w", err)
+	}
+	if peer.IsActive {
+		if _, err := tx.Exec(ctx, `UPDATE peers SET is_active = FALSE WHERE id = $1`, peer.ID); err != nil {
+			return nil, fmt.Errorf("deactivate disconnected peer: %w", err)
+		}
+		peer.IsActive = false
+	}
+	if _, err := tx.Exec(ctx, `UPDATE mesh_members SET peer_id = NULL WHERE peer_id = $1`, peer.ID); err != nil {
+		return nil, fmt.Errorf("detach disconnected peer from meshes: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE peer_operations
+		SET state = 'completed', capacity_reserved = FALSE,
+		    core_applied_at = COALESCE(core_applied_at, NOW()),
+		    completed_at = COALESCE(completed_at, NOW()), last_error = '', updated_at = NOW()
+		WHERE id = $1`, operation.ID); err != nil {
+		return nil, fmt.Errorf("complete disconnect operation: %w", err)
+	}
+	if _, err := recalculateServerPeerCount(ctx, tx, peer.ServerID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit disconnect completion: %w", err)
+	}
+	return peer, nil
+}
+
+// AccessAllowed reports whether a live provisioning operation may still
+// create a session after a concurrent ban or device revocation.
+func (r *PeerOperationRepo) AccessAllowed(ctx context.Context, operationID uuid.UUID) (bool, error) {
+	var allowed bool
+	if err := r.pool.QueryRow(ctx, `
+		SELECT NOT users.is_banned AND devices.revoked_at IS NULL
+		FROM peer_operations operation
+		JOIN users ON users.id = operation.user_id
+		JOIN devices ON devices.id = operation.device_id
+		WHERE operation.id = $1`, operationID).Scan(&allowed); err != nil {
+		return false, fmt.Errorf("load operation access state: %w", err)
+	}
+	return allowed, nil
+}
+
+// CancelDeniedConnect closes a provisioning operation only after its exact
+// Core owner is absent. It also releases any reserved capacity.
+func (r *PeerOperationRepo) CancelDeniedConnect(ctx context.Context, operationID uuid.UUID) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin denied connection cancellation: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	operation, err := scanPeerOperation(tx.QueryRow(ctx, `
+		SELECT `+operationColumns+` FROM peer_operations WHERE id = $1 FOR UPDATE`, operationID))
+	if err != nil {
+		return fmt.Errorf("lock denied connection operation: %w", err)
+	}
+	if operation.Action == models.PeerOperationDisconnect ||
+		(operation.State != models.PeerOperationPending && operation.State != models.PeerOperationCoreApplied) {
+		return ErrOperationState
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE peers SET is_active = FALSE
+		WHERE provision_operation_id = $1 AND is_active = TRUE`, operation.ID); err != nil {
+		return fmt.Errorf("retire denied connection peer: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE peer_operations
+		SET state = 'failed', capacity_reserved = FALSE,
+		    last_error = 'access revoked before completion', updated_at = NOW()
+		WHERE id = $1`, operation.ID); err != nil {
+		return fmt.Errorf("cancel denied connection operation: %w", err)
+	}
+	var lockedServer uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM vpn_servers WHERE id = $1 FOR UPDATE`, operation.ServerID).Scan(&lockedServer); err != nil {
+		return fmt.Errorf("lock denied connection server: %w", err)
+	}
+	if _, err := recalculateServerPeerCount(ctx, tx, operation.ServerID); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit denied connection cancellation: %w", err)
+	}
+	return nil
 }
 
 func (r *PeerOperationRepo) FailDefinitively(ctx context.Context, operationID uuid.UUID, cause error) error {
@@ -553,8 +769,34 @@ func (r *PeerOperationRepo) CountCleanupPending(ctx context.Context) (int64, err
 	return count, nil
 }
 
+func (r *PeerOperationRepo) HasLiveByDevice(ctx context.Context, deviceID uuid.UUID) (bool, error) {
+	var exists bool
+	if err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM peer_operations
+			WHERE device_id = $1
+			  AND state IN ('pending', 'core_applied', 'cleanup_pending')
+		)`, deviceID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check live device operations: %w", err)
+	}
+	return exists, nil
+}
+
+func (r *PeerOperationRepo) HasLiveByUser(ctx context.Context, userID uuid.UUID) (bool, error) {
+	var exists bool
+	if err := r.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM peer_operations
+			WHERE user_id = $1
+			  AND state IN ('pending', 'core_applied', 'cleanup_pending')
+		)`, userID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check live user operations: %w", err)
+	}
+	return exists, nil
+}
+
 // ListPendingCleanupTargets prevents the generic orphan pass from racing or
-// duplicating a durable replacement cleanup handled by its owning operation.
+// duplicating a durable replacement or disconnect handled by its operation.
 func (r *PeerOperationRepo) ListPendingCleanupTargets(ctx context.Context) ([]PendingCleanupTarget, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT previous.server_id, previous.public_key,
@@ -562,7 +804,9 @@ func (r *PeerOperationRepo) ListPendingCleanupTargets(ctx context.Context) ([]Pe
 		                previous.provision_operation_id::text, '')
 		FROM peer_operations operation
 		JOIN peers previous ON previous.id = operation.previous_peer_id
-		WHERE operation.state = 'cleanup_pending'
+		WHERE (operation.action IN ('connect', 'replace') AND operation.state = 'cleanup_pending')
+		   OR (operation.action = 'disconnect'
+		       AND operation.state IN ('pending', 'core_applied', 'cleanup_pending'))
 		ORDER BY previous.server_id, previous.public_key`)
 	if err != nil {
 		return nil, fmt.Errorf("list pending peer cleanup targets: %w", err)

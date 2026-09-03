@@ -18,6 +18,7 @@ import (
 
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/models"
+	"github.com/goastian/midori-vpn-core/internal/repo"
 	"github.com/goastian/midori-vpn-core/internal/respond"
 )
 
@@ -81,7 +82,9 @@ func adapterLabel(reference string) string {
 
 func presentDevice(device models.Device, active *models.Peer) deviceResponse {
 	status := "disconnected"
-	if device.RevokedAt != nil {
+	if device.RevokedAt != nil && active != nil {
+		status = "cleanup_pending"
+	} else if device.RevokedAt != nil {
 		status = "revoked"
 	} else if active != nil {
 		status = "connected"
@@ -228,9 +231,12 @@ func (h *Handler) DeleteMyDevice(w http.ResponseWriter, r *http.Request) {
 		respond.SafeError(w, "failed to load device", err, http.StatusInternalServerError)
 		return
 	}
-	if device.RevokedAt != nil {
-		respond.JsonOK(w, presentDevice(*device, nil), http.StatusOK)
-		return
+	if device.RevokedAt == nil {
+		device, err = h.deviceRepo.RevokeForCleanup(r.Context(), user.ID, deviceID)
+		if err != nil {
+			respond.SafeError(w, "failed to revoke device material", err, http.StatusInternalServerError)
+			return
+		}
 	}
 
 	active, err := h.peerRepo.GetActiveByDevice(r.Context(), user.ID, deviceID)
@@ -241,28 +247,35 @@ func (h *Handler) DeleteMyDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if active != nil {
-		server, err := h.serverRepo.GetByID(r.Context(), active.ServerID)
-		if err != nil {
-			respond.SafeError(w, "failed to load device server", err, http.StatusInternalServerError)
-			return
-		}
-		if err := CallCoreRemoveCurrentPeer(server, active.PublicKey); err != nil {
-			slog.Error("device cleanup did not converge", "device_id", deviceID, "peer_id", active.ID, "error", err)
+		outcome, disconnectErr := h.disconnectPeer(r.Context(), active.ID)
+		if disconnectErr != nil || !outcome.Converged {
+			if disconnectErr != nil && !errors.Is(disconnectErr, repo.ErrConnectionInProgress) {
+				slog.Error("device cleanup could not be scheduled", "device_id", deviceID, "peer_id", active.ID, "error", disconnectErr)
+			}
+			h.auditRepo.Log(r.Context(), &user.ID, "device.revoke",
+				map[string]interface{}{"device_id": deviceID, "cleanup_pending": true}, r.RemoteAddr)
 			w.Header().Set("Retry-After", "5")
-			respond.JsonErrorCode(w, "device cleanup did not converge; retry is required", "device_cleanup_pending", http.StatusServiceUnavailable)
+			respondStatus(w, "device_cleanup_pending", http.StatusAccepted)
 			return
 		}
 	}
-
-	revoked, err := h.deviceRepo.RevokeWithMaterial(r.Context(), user.ID, deviceID)
+	liveOperation, err := h.peerOperationRepo.HasLiveByDevice(r.Context(), deviceID)
 	if err != nil {
-		respond.SafeError(w, "failed to revoke device material", err, http.StatusInternalServerError)
+		slog.Error("device cleanup state could not be verified", "device_id", deviceID, "error", err)
+		h.auditRepo.Log(r.Context(), &user.ID, "device.revoke",
+			map[string]interface{}{"device_id": deviceID, "cleanup_pending": true}, r.RemoteAddr)
+		w.Header().Set("Retry-After", "5")
+		respondStatus(w, "device_cleanup_pending", http.StatusAccepted)
 		return
 	}
-	if active != nil {
-		h.detachPeerFromMeshSessions(r.Context(), active)
+	if liveOperation {
+		h.auditRepo.Log(r.Context(), &user.ID, "device.revoke",
+			map[string]interface{}{"device_id": deviceID, "cleanup_pending": true}, r.RemoteAddr)
+		w.Header().Set("Retry-After", "5")
+		respondStatus(w, "device_cleanup_pending", http.StatusAccepted)
+		return
 	}
 	h.auditRepo.Log(r.Context(), &user.ID, "device.revoke",
 		map[string]interface{}{"device_id": deviceID}, r.RemoteAddr)
-	respond.JsonOK(w, presentDevice(*revoked, nil), http.StatusOK)
+	respond.JsonOK(w, presentDevice(*device, nil), http.StatusOK)
 }

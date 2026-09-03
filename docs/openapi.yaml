@@ -346,10 +346,10 @@ paths:
       tags: [Connections]
       responses:
         '200': {$ref: '#/components/responses/Device'}
+        '202': {$ref: '#/components/responses/Accepted'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
-        '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/control/devices/{id}/sessions:
     parameters:
       - {$ref: '#/components/parameters/ID'}
@@ -392,9 +392,12 @@ paths:
       tags: [Connections]
       responses:
         '200': {$ref: '#/components/responses/OK'}
+        '202': {$ref: '#/components/responses/Accepted'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/control/connections/{id}/config:
     parameters:
       - {$ref: '#/components/parameters/ID'}
@@ -624,6 +627,8 @@ paths:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/admin/users/{id}/ban:
     parameters:
@@ -634,8 +639,10 @@ paths:
       requestBody: {$ref: '#/components/requestBodies/BanUser'}
       responses:
         '200': {$ref: '#/components/responses/OK'}
+        '202': {$ref: '#/components/responses/Accepted'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
     delete:
       operationId: unbanAdminUser
       tags: [Administration]
@@ -680,6 +687,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/admin/node-identities:
     get:
@@ -729,8 +738,11 @@ paths:
       tags: [Administration, Connections]
       responses:
         '200': {$ref: '#/components/responses/OK'}
+        '202': {$ref: '#/components/responses/Accepted'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/admin/mesh:
     get:
       operationId: listAdminMeshes
@@ -889,6 +901,10 @@ components:
             - device_limit_reached
             - device_revoked
             - device_cleanup_pending
+            - disconnect_pending
+            - ban_cleanup_pending
+            - active_devices_must_be_disconnected
+            - server_not_drained
             - peer_operation_conflict
             - core_peer_state_unavailable
             - origin_country_unavailable
@@ -1319,6 +1335,11 @@ components:
       content: {application/json: {schema: {$ref: '#/components/schemas/SuccessEnvelope'}}}
     Created:
       description: Created JSON envelope.
+      content: {application/json: {schema: {$ref: '#/components/schemas/SuccessEnvelope'}}}
+    Accepted:
+      description: Durable operation accepted and pending convergence.
+      headers:
+        Retry-After: {schema: {type: integer, minimum: 1}}
       content: {application/json: {schema: {$ref: '#/components/schemas/SuccessEnvelope'}}}
     NodePeerProvision:
       description: Peer provisioning result. HTTP 201 is new; HTTP 200 is an idempotent replay.

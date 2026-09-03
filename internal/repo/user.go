@@ -2,13 +2,17 @@ package repo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/goastian/midori-vpn-core/internal/models"
 )
+
+var ErrActiveDevicesMustBeDisconnected = errors.New("active devices must be disconnected")
 
 const userColumns = `id, authentik_uid, email, display_name, groups, is_banned, banned_at, ban_reason, created_at, updated_at`
 
@@ -97,8 +101,14 @@ func (r *UserRepo) Update(ctx context.Context, u *models.User) error {
 
 func (r *UserRepo) Ban(ctx context.Context, id uuid.UUID, reason string) error {
 	query := `UPDATE users SET is_banned = TRUE, banned_at = NOW(), ban_reason = $1, updated_at = NOW() WHERE id = $2`
-	_, err := r.pool.Exec(ctx, query, reason, id)
-	return err
+	tag, err := r.pool.Exec(ctx, query, reason, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 func (r *UserRepo) Unban(ctx context.Context, id uuid.UUID) error {
@@ -110,6 +120,39 @@ func (r *UserRepo) Unban(ctx context.Context, id uuid.UUID) error {
 func (r *UserRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	_, err := r.pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
 	return err
+}
+
+// DeleteIfDrained prevents cascading deletion from hiding active access or a
+// live operation. The user row is locked first, matching BeginConnect and Ban.
+func (r *UserRepo) DeleteIfDrained(ctx context.Context, id uuid.UUID) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin drained user deletion: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var userID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT id FROM users WHERE id = $1 FOR UPDATE`, id).Scan(&userID); err != nil {
+		return fmt.Errorf("lock user for deletion: %w", err)
+	}
+	var blockers int
+	if err := tx.QueryRow(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM peers WHERE user_id = $1 AND is_active = TRUE) +
+			(SELECT COUNT(*) FROM peer_operations
+			 WHERE user_id = $1
+			   AND state IN ('pending', 'core_applied', 'cleanup_pending'))`, id).Scan(&blockers); err != nil {
+		return fmt.Errorf("count user deletion blockers: %w", err)
+	}
+	if blockers > 0 {
+		return ErrActiveDevicesMustBeDisconnected
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("delete drained user: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit drained user deletion: %w", err)
+	}
+	return nil
 }
 
 func (r *UserRepo) Create(ctx context.Context, u *models.User) error {

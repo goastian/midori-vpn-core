@@ -746,6 +746,17 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	}
 	peer, previousPeer, err := h.peerOperationRepo.CompleteConnect(r.Context(), operationID)
 	if err != nil {
+		if errors.Is(err, repo.ErrAccessRevoked) {
+			cleanupErr := CallCoreRemovePeerContext(r.Context(), server, req.PublicKey, operationID.String())
+			if cleanupErr == nil {
+				cleanupErr = h.peerOperationRepo.CancelDeniedConnect(r.Context(), operationID)
+			}
+			if cleanupErr != nil {
+				h.recordDisconnectFailure(r.Context(), operationID, cleanupErr)
+			}
+			respond.JsonError(w, "account or device access was revoked", http.StatusForbidden)
+			return
+		}
 		slog.Error("failed to complete peer operation", "operation_id", operationID, "error", err)
 		respond.JsonError(w, "failed to save connection", http.StatusInternalServerError)
 		return
@@ -808,19 +819,22 @@ func (h *Handler) Disconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	server, err := h.serverRepo.GetByID(r.Context(), peer.ServerID)
-	if err == nil {
-		_ = CallCoreRemoveCurrentPeer(server, peer.PublicKey)
-		_ = h.serverRepo.UpdatePeerCount(r.Context(), peer.ServerID, -1)
+	outcome, err := h.disconnectPeer(r.Context(), peerID)
+	if errors.Is(err, repo.ErrConnectionInProgress) {
+		w.Header().Set("Retry-After", "5")
+		respond.JsonErrorCode(w, "connection operation is still in progress", "connection_in_progress", http.StatusConflict)
+		return
 	}
-
-	h.detachPeerFromMeshSessions(r.Context(), peer)
-	_ = h.peerRepo.Deactivate(r.Context(), peerID)
+	if err != nil {
+		slog.Error("failed to schedule disconnect", "peer_id", peerID, "error", err)
+		respond.JsonError(w, "failed to disconnect peer", http.StatusInternalServerError)
+		return
+	}
 
 	h.auditRepo.Log(r.Context(), &user.ID, "peer.disconnect",
 		map[string]interface{}{"peer_id": peerID, "server_id": peer.ServerID}, r.RemoteAddr)
 
-	respond.JsonOK(w, map[string]string{"status": "disconnected"}, http.StatusOK)
+	respondDisconnect(w, outcome, "disconnect_pending")
 }
 
 func (h *Handler) ExportConfig(w http.ResponseWriter, r *http.Request) {
@@ -1199,7 +1213,15 @@ func (h *Handler) AdminDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.userRepo.Delete(r.Context(), id); err != nil {
+	if err := h.userRepo.DeleteIfDrained(r.Context(), id); err != nil {
+		if errors.Is(err, repo.ErrActiveDevicesMustBeDisconnected) {
+			respond.JsonErrorCode(w, "active devices must be disconnected before deleting the user", "active_devices_must_be_disconnected", http.StatusConflict)
+			return
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			respond.JsonError(w, "user not found", http.StatusNotFound)
+			return
+		}
 		slog.Error("admin delete user error", "user_id", id, "error", err)
 		respond.JsonError(w, "failed to delete user", http.StatusInternalServerError)
 		return
@@ -1235,30 +1257,47 @@ func (h *Handler) AdminBanUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.userRepo.Ban(r.Context(), id, req.Reason); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respond.JsonError(w, "user not found", http.StatusNotFound)
+			return
+		}
 		slog.Error("admin ban user error", "user_id", id, "error", err)
 		respond.JsonError(w, "failed to ban user", http.StatusInternalServerError)
 		return
 	}
 
-	// Disconnect all active peers for banned user
-	peers, _ := h.peerRepo.ListByUser(r.Context(), id)
-	for _, p := range peers {
-		if !p.IsActive {
-			continue
+	cleanupPending := false
+	peers, listErr := h.peerRepo.ListActiveByUser(r.Context(), id)
+	if listErr != nil {
+		cleanupPending = true
+		slog.Error("banned user cleanup could not list sessions", "user_id", id, "error", listErr)
+	} else {
+		for index := range peers {
+			outcome, disconnectErr := h.disconnectPeer(r.Context(), peers[index].ID)
+			if disconnectErr != nil || !outcome.Converged {
+				cleanupPending = true
+				if disconnectErr != nil && !errors.Is(disconnectErr, repo.ErrConnectionInProgress) {
+					slog.Error("banned user cleanup could not be scheduled", "user_id", id, "peer_id", peers[index].ID, "error", disconnectErr)
+				}
+			}
 		}
-		server, err := h.serverRepo.GetByID(r.Context(), p.ServerID)
-		if err == nil {
-			_ = CallCoreRemoveCurrentPeer(server, p.PublicKey)
-			_ = h.serverRepo.UpdatePeerCount(r.Context(), p.ServerID, -1)
-		}
-		h.detachPeerFromMeshSessions(r.Context(), &p)
-		_ = h.peerRepo.Deactivate(r.Context(), p.ID)
+	}
+	if liveOperation, operationErr := h.peerOperationRepo.HasLiveByUser(r.Context(), id); operationErr != nil {
+		cleanupPending = true
+		slog.Error("banned user cleanup state could not be verified", "user_id", id, "error", operationErr)
+	} else if liveOperation {
+		cleanupPending = true
 	}
 
 	h.auditRepo.Log(r.Context(), &admin.ID, "admin.user.ban",
 		map[string]interface{}{"target_user_id": id, "reason": req.Reason}, r.RemoteAddr)
 
-	respond.JsonOK(w, map[string]string{"status": "banned"}, http.StatusOK)
+	if cleanupPending {
+		w.Header().Set("Retry-After", "5")
+		respondStatus(w, "ban_cleanup_pending", http.StatusAccepted)
+		return
+	}
+	respondStatus(w, "banned", http.StatusOK)
 }
 
 func (h *Handler) AdminUnbanUser(w http.ResponseWriter, r *http.Request) {
@@ -1442,15 +1481,9 @@ func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.serverRepo.Create(r.Context(), server); err != nil {
+	if err := h.serverRepo.CreateWithTransports(r.Context(), server, transports); err != nil {
 		slog.Error("admin create server error", "error", err)
 		respond.JsonError(w, "failed to create server", http.StatusInternalServerError)
-		return
-	}
-	if err := h.serverRepo.ReplaceTransports(r.Context(), server.ID, transports); err != nil {
-		slog.Error("admin create server transports error", "server_id", server.ID, "error", err)
-		_ = h.serverRepo.Delete(r.Context(), server.ID)
-		respond.JsonError(w, "failed to save server transports", http.StatusInternalServerError)
 		return
 	}
 	server.SetTransports(transports)
@@ -1548,6 +1581,9 @@ func (h *Handler) AdminUpdateServer(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.IsActive != nil {
 		server.IsActive = *req.IsActive
+		if server.IsActive {
+			server.DrainingAt = nil
+		}
 	}
 	var transports []models.TransportCapability
 	if req.Transports != nil {
@@ -1562,17 +1598,12 @@ func (h *Handler) AdminUpdateServer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := h.serverRepo.Update(r.Context(), server); err != nil {
+	if err := h.serverRepo.UpdateWithTransports(r.Context(), server, transports, req.Transports != nil); err != nil {
 		slog.Error("admin update server error", "server_id", server.ID, "error", err)
 		respond.JsonError(w, "failed to update server", http.StatusInternalServerError)
 		return
 	}
 	if req.Transports != nil {
-		if err := h.serverRepo.ReplaceTransports(r.Context(), server.ID, transports); err != nil {
-			slog.Error("admin update server transports error", "server_id", server.ID, "error", err)
-			respond.JsonError(w, "failed to save server transports", http.StatusInternalServerError)
-			return
-		}
 		server.SetTransports(transports)
 	}
 	server.ApplyCapabilities()
@@ -1591,7 +1622,15 @@ func (h *Handler) AdminDeleteServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.serverRepo.Delete(r.Context(), id); err != nil {
+	if err := h.serverRepo.DrainAndDelete(r.Context(), id); err != nil {
+		if errors.Is(err, repo.ErrServerNotDrained) {
+			respond.JsonErrorCode(w, "server is draining and still has active sessions or operations", "server_not_drained", http.StatusConflict)
+			return
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			respond.JsonError(w, "server not found", http.StatusNotFound)
+			return
+		}
 		slog.Error("admin delete server error", "server_id", id, "error", err)
 		respond.JsonError(w, "failed to delete server", http.StatusInternalServerError)
 		return
@@ -1628,20 +1667,23 @@ func (h *Handler) AdminForceDisconnectPeer(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	server, err := h.serverRepo.GetByID(r.Context(), peer.ServerID)
-	if err == nil {
-		_ = CallCoreRemoveCurrentPeer(server, peer.PublicKey)
-		_ = h.serverRepo.UpdatePeerCount(r.Context(), peer.ServerID, -1)
+	outcome, err := h.disconnectPeer(r.Context(), peerID)
+	if errors.Is(err, repo.ErrConnectionInProgress) {
+		w.Header().Set("Retry-After", "5")
+		respond.JsonErrorCode(w, "connection operation is still in progress", "connection_in_progress", http.StatusConflict)
+		return
 	}
-
-	h.detachPeerFromMeshSessions(r.Context(), peer)
-	_ = h.peerRepo.Deactivate(r.Context(), peerID)
+	if err != nil {
+		slog.Error("admin disconnect could not be scheduled", "peer_id", peerID, "error", err)
+		respond.JsonError(w, "failed to disconnect peer", http.StatusInternalServerError)
+		return
+	}
 
 	admin := auth.GetUser(r)
 	h.auditRepo.Log(r.Context(), &admin.ID, "admin.peer.disconnect",
 		map[string]interface{}{"peer_id": peerID, "user_id": peer.UserID}, r.RemoteAddr)
 
-	respond.JsonOK(w, map[string]string{"status": "disconnected"}, http.StatusOK)
+	respondDisconnect(w, outcome, "disconnect_pending")
 }
 
 func (h *Handler) AdminListAuditLogs(w http.ResponseWriter, r *http.Request) {

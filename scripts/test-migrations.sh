@@ -63,6 +63,15 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000013_peer_operations.up.sql >/dev/null
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000014_previous_peer_operation.up.sql >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000015_safe_admin_operations.up.sql >/dev/null
+
+draining_column="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'vpn_servers' AND column_name = 'draining_at'")"
+[ "${draining_column}" = "1" ] || { printf 'error: migration 15 did not add draining_at\n' >&2; exit 1; }
+admin_indexes="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname IN ('idx_peers_user_active','idx_peers_server_active','idx_peer_operations_user_live','idx_peer_operations_previous_peer_live')")"
+[ "${admin_indexes}" = "4" ] || { printf 'error: migration 15 created %s of 4 administrative indexes\n' "${admin_indexes}" >&2; exit 1; }
 
 remaining="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT count(*) FROM information_schema.columns WHERE table_name = 'vpn_servers' AND column_name IN ('proxy_port','proxy_scheme','wss_tunnel_enabled','wss_host','wss_port')")"
@@ -204,6 +213,12 @@ cascade_rows="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
 [ "${cascade_rows}" = "0" ] || { printf 'error: user cascade left %s device-related rows\n' "${cascade_rows}" >&2; exit 1; }
 
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000015_safe_admin_operations.down.sql >/dev/null
+admin_artifacts="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'vpn_servers' AND column_name = 'draining_at') + (SELECT COUNT(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname IN ('idx_peers_user_active','idx_peers_server_active','idx_peer_operations_user_live','idx_peer_operations_previous_peer_live'))")"
+[ "${admin_artifacts}" = "0" ] || { printf 'error: migration 15 rollback left %s artifacts\n' "${admin_artifacts}" >&2; exit 1; }
+
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000014_previous_peer_operation.down.sql >/dev/null
 previous_operation_column="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'peer_operations' AND column_name = 'previous_operation_id'")"
@@ -255,6 +270,8 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000013_peer_operations.up.sql >/dev/null
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000014_previous_peer_operation.up.sql >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000015_safe_admin_operations.up.sql >/dev/null
 
 # The device-based certificate key permits equal hostnames on distinct
 # registered installations without merging either device.
@@ -281,5 +298,8 @@ schema_devices="$(podman exec "${container}" psql -U midori -d midori_schema_tes
 schema_operations="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
   "SELECT to_regclass('public.peer_operations') IS NOT NULL")"
 [ "${schema_operations}" = "t" ] || { printf 'error: consolidated schema did not create peer_operations\n' >&2; exit 1; }
+schema_draining="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
+  "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'vpn_servers' AND column_name = 'draining_at'")"
+[ "${schema_draining}" = "1" ] || { printf 'error: consolidated schema did not create draining_at\n' >&2; exit 1; }
 
-printf 'Migration chain 1-14, migrations 9-14 rollback, and consolidated schema verified on PostgreSQL 18.\n'
+printf 'Migration chain 1-15, migrations 9-15 rollback, and consolidated schema verified on PostgreSQL 18.\n'

@@ -439,3 +439,161 @@ func TestPeerOperationRechecksQuotaBeforeCapacity(t *testing.T) {
 		t.Fatalf("capacity recheck error = %v; want ErrServerCapacity", err)
 	}
 }
+
+func TestPeerOperationDisconnectIsDurableIdempotentAndRecounts(t *testing.T) {
+	fixture := newPeerOperationFixture(t, 1)
+	operationRepo := repo.NewPeerOperationRepo(fixture.pool)
+	connect := beginFixtureConnect(t, fixture, operationRepo, operationKey(70))
+	peer, _ := completeFixtureConnect(t, operationRepo, connect.Operation.ID, "10.90.0.70/32")
+
+	first, err := operationRepo.BeginDisconnect(context.Background(), peer.ID)
+	if err != nil {
+		t.Fatalf("BeginDisconnect: %v", err)
+	}
+	second, err := operationRepo.BeginDisconnect(context.Background(), peer.ID)
+	if err != nil {
+		t.Fatalf("BeginDisconnect retry: %v", err)
+	}
+	if first.Operation.ID != second.Operation.ID || first.Operation.Action != models.PeerOperationDisconnect ||
+		first.Operation.PreviousOperationID == nil || *first.Operation.PreviousOperationID != connect.Operation.ID {
+		t.Fatalf("disconnect replay lost exact ownership: first=%#v second=%#v", first.Operation, second.Operation)
+	}
+
+	disconnected, err := operationRepo.CompleteDisconnect(context.Background(), first.Operation.ID)
+	if err != nil {
+		t.Fatalf("CompleteDisconnect: %v", err)
+	}
+	if disconnected.IsActive {
+		t.Fatal("completed disconnect still reports an active peer")
+	}
+	var state models.PeerOperationState
+	var active bool
+	var currentPeers int
+	if err := fixture.pool.QueryRow(context.Background(), `
+		SELECT operation.state, peer.is_active, server.current_peers
+		FROM peer_operations operation
+		JOIN peers peer ON peer.id = operation.previous_peer_id
+		JOIN vpn_servers server ON server.id = peer.server_id
+		WHERE operation.id = $1`, first.Operation.ID).Scan(&state, &active, &currentPeers); err != nil {
+		t.Fatalf("load completed disconnect: %v", err)
+	}
+	if state != models.PeerOperationCompleted || active || currentPeers != 0 {
+		t.Fatalf("disconnect did not converge atomically: state=%s active=%t current=%d", state, active, currentPeers)
+	}
+	retry, err := operationRepo.BeginDisconnect(context.Background(), peer.ID)
+	if err != nil || !retry.AlreadyConverged {
+		t.Fatalf("completed disconnect retry = %#v, %v", retry, err)
+	}
+}
+
+func TestCompletedConnectCannotCrossConcurrentAccessRevocation(t *testing.T) {
+	fixture := newPeerOperationFixture(t, 1)
+	operationRepo := repo.NewPeerOperationRepo(fixture.pool)
+	pending := beginFixtureConnect(t, fixture, operationRepo, operationKey(71))
+	if err := operationRepo.MarkCoreApplied(context.Background(), pending.Operation.ID, "10.90.0.71/32"); err != nil {
+		t.Fatalf("MarkCoreApplied: %v", err)
+	}
+	if _, err := fixture.pool.Exec(context.Background(), `
+		UPDATE users SET is_banned = TRUE, banned_at = NOW() WHERE id = $1`, fixture.userID); err != nil {
+		t.Fatalf("ban fixture user: %v", err)
+	}
+	if _, _, err := operationRepo.CompleteConnect(context.Background(), pending.Operation.ID); !errors.Is(err, repo.ErrAccessRevoked) {
+		t.Fatalf("CompleteConnect error = %v, want ErrAccessRevoked", err)
+	}
+	if err := operationRepo.CancelDeniedConnect(context.Background(), pending.Operation.ID); err != nil {
+		t.Fatalf("CancelDeniedConnect: %v", err)
+	}
+	var state models.PeerOperationState
+	var currentPeers int
+	if err := fixture.pool.QueryRow(context.Background(), `
+		SELECT operation.state, server.current_peers
+		FROM peer_operations operation
+		JOIN vpn_servers server ON server.id = operation.server_id
+		WHERE operation.id = $1`, pending.Operation.ID).Scan(&state, &currentPeers); err != nil {
+		t.Fatalf("load canceled operation: %v", err)
+	}
+	if state != models.PeerOperationFailed || currentPeers != 0 {
+		t.Fatalf("denied operation leaked state: state=%s current=%d", state, currentPeers)
+	}
+}
+
+func TestAdministrativeDeletionRequiresConvergedAccess(t *testing.T) {
+	fixture := newPeerOperationFixture(t, 1)
+	operationRepo := repo.NewPeerOperationRepo(fixture.pool)
+	connect := beginFixtureConnect(t, fixture, operationRepo, operationKey(72))
+	peer, _ := completeFixtureConnect(t, operationRepo, connect.Operation.ID, "10.90.0.72/32")
+	userRepo := repo.NewUserRepo(fixture.pool)
+	if err := userRepo.DeleteIfDrained(context.Background(), fixture.userID); !errors.Is(err, repo.ErrActiveDevicesMustBeDisconnected) {
+		t.Fatalf("DeleteIfDrained error = %v", err)
+	}
+	disconnect, err := operationRepo.BeginDisconnect(context.Background(), peer.ID)
+	if err != nil {
+		t.Fatalf("BeginDisconnect: %v", err)
+	}
+	if _, err := operationRepo.CompleteDisconnect(context.Background(), disconnect.Operation.ID); err != nil {
+		t.Fatalf("CompleteDisconnect: %v", err)
+	}
+	if err := userRepo.DeleteIfDrained(context.Background(), fixture.userID); err != nil {
+		t.Fatalf("DeleteIfDrained after convergence: %v", err)
+	}
+}
+
+func TestServerDrainPersistsUntilSessionsConverge(t *testing.T) {
+	fixture := newPeerOperationFixture(t, 1)
+	operationRepo := repo.NewPeerOperationRepo(fixture.pool)
+	connect := beginFixtureConnect(t, fixture, operationRepo, operationKey(73))
+	peer, _ := completeFixtureConnect(t, operationRepo, connect.Operation.ID, "10.90.0.73/32")
+	serverRepo := repo.NewServerRepo(fixture.pool)
+	if err := serverRepo.DrainAndDelete(context.Background(), fixture.serverID); !errors.Is(err, repo.ErrServerNotDrained) {
+		t.Fatalf("DrainAndDelete error = %v", err)
+	}
+	server, err := serverRepo.GetByID(context.Background(), fixture.serverID)
+	if err != nil {
+		t.Fatalf("GetByID draining server: %v", err)
+	}
+	if server.IsActive || server.DrainingAt == nil {
+		t.Fatalf("server did not enter draining state: %#v", server)
+	}
+	disconnect, err := operationRepo.BeginDisconnect(context.Background(), peer.ID)
+	if err != nil {
+		t.Fatalf("BeginDisconnect: %v", err)
+	}
+	if _, err := operationRepo.CompleteDisconnect(context.Background(), disconnect.Operation.ID); err != nil {
+		t.Fatalf("CompleteDisconnect: %v", err)
+	}
+	if err := serverRepo.DrainAndDelete(context.Background(), fixture.serverID); err != nil {
+		t.Fatalf("DrainAndDelete after convergence: %v", err)
+	}
+}
+
+func TestServerAndTransportsUpdateRollsBackTogether(t *testing.T) {
+	pool := testPool(t)
+	serverRepo := repo.NewServerRepo(pool)
+	server := &models.VPNServer{
+		Name: "Atomic server", Host: "atomic.test.invalid", Port: 443, WGPort: 51820,
+		MaxPeers: 10, IsActive: true,
+	}
+	valid := []models.TransportCapability{{
+		Protocol: "wireguard", Host: "atomic.test.invalid", Port: 51820,
+		Enabled: true, Priority: 100, HealthStatus: "unknown",
+	}}
+	if err := serverRepo.CreateWithTransports(context.Background(), server, valid); err != nil {
+		t.Fatalf("CreateWithTransports: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM vpn_servers WHERE id = $1`, server.ID) })
+	server.Name = "Must roll back"
+	invalid := []models.TransportCapability{{
+		Protocol: "obsolete", Host: "atomic.test.invalid", Port: 51820,
+		Enabled: true, Priority: 100, HealthStatus: "unknown",
+	}}
+	if err := serverRepo.UpdateWithTransports(context.Background(), server, invalid, true); err == nil {
+		t.Fatal("UpdateWithTransports accepted an invalid transport")
+	}
+	persisted, err := serverRepo.GetByID(context.Background(), server.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if persisted.Name != "Atomic server" || len(persisted.Transports) != 1 || persisted.Transports[0].Protocol != "wireguard" {
+		t.Fatalf("partial server update escaped rollback: %#v", persisted)
+	}
+}

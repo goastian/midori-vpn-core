@@ -41,7 +41,11 @@ func TestPresentDeviceSeparatesStableIdentityAndActiveSession(t *testing.T) {
 	}
 	device.RevokedAt = &now
 	presented = presentDevice(device, peer)
-	if presented.Status != "revoked" {
+	if presented.Status != "cleanup_pending" {
 		t.Fatalf("revoked status = %q", presented.Status)
+	}
+	presented = presentDevice(device, nil)
+	if presented.Status != "revoked" {
+		t.Fatalf("converged revoked status = %q", presented.Status)
 	}
 }

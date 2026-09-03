@@ -78,10 +78,10 @@ func (r *DeviceRepo) UpdateAlias(ctx context.Context, userID, deviceID uuid.UUID
 	return device, nil
 }
 
-// RevokeWithMaterial atomically revokes a device after its active Core peer
-// has been removed. Session rows remain as audit history, while recoverable
-// PSKs and active client certificates are invalidated.
-func (r *DeviceRepo) RevokeWithMaterial(ctx context.Context, userID, deviceID uuid.UUID) (*models.Device, error) {
+// RevokeForCleanup atomically blocks future access and invalidates recoverable
+// material before remote cleanup begins. Active session rows remain active
+// until their durable disconnect operations have converged with Core.
+func (r *DeviceRepo) RevokeForCleanup(ctx context.Context, userID, deviceID uuid.UUID) (*models.Device, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("begin device revocation: %w", err)
@@ -96,24 +96,6 @@ func (r *DeviceRepo) RevokeWithMaterial(ctx context.Context, userID, deviceID uu
 		return nil, fmt.Errorf("lock device for revocation: %w", err)
 	}
 
-	if _, err := tx.Exec(ctx, `
-		WITH deactivated AS (
-			UPDATE peers
-			SET is_active = FALSE
-			WHERE user_id = $1 AND device_id = $2 AND is_active = TRUE
-			RETURNING server_id
-		), counts AS (
-			SELECT server_id, COUNT(*)::INTEGER AS removed
-			FROM deactivated
-			GROUP BY server_id
-		)
-		UPDATE vpn_servers AS server
-		SET current_peers = GREATEST(server.current_peers - counts.removed, 0),
-		    updated_at = NOW()
-		FROM counts
-		WHERE server.id = counts.server_id`, userID, deviceID); err != nil {
-		return nil, fmt.Errorf("deactivate device sessions: %w", err)
-	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE peers
 		SET preshared_key = ''

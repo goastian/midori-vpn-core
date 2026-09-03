@@ -32,6 +32,7 @@ type VPNServer struct {
 	MaxPeers          int                   `json:"max_peers"`
 	CurrentPeers      int                   `json:"current_peers"`
 	IsActive          bool                  `json:"is_active"`
+	DrainingAt        *time.Time            `json:"draining_at,omitempty"`
 	SupportsWireGuard bool                  `json:"supports_wireguard"`
 	SupportsProxy     bool                  `json:"supports_proxy"`
 	SupportsMeshExit  bool                  `json:"supports_mesh_exit"`
