@@ -74,6 +74,21 @@ type Device struct {
 	RevokedAt        *time.Time `json:"revoked_at,omitempty"`
 }
 
+type DeviceConnection struct {
+	ID            uuid.UUID  `json:"id"`
+	DeviceID      uuid.UUID  `json:"device_id"`
+	ServerID      uuid.UUID  `json:"server_id"`
+	Protocol      string     `json:"protocol"`
+	PublicKey     string     `json:"public_key"`
+	AssignedIP    string     `json:"assigned_ip"`
+	IsActive      bool       `json:"is_active"`
+	BytesSent     int64      `json:"bytes_sent"`
+	BytesReceived int64      `json:"bytes_received"`
+	LastHandshake *time.Time `json:"last_handshake"`
+	CreatedAt     time.Time  `json:"created_at"`
+	ExpiresAt     *time.Time `json:"expires_at"`
+}
+
 // TransportCapability is the server-advertised contract consumed by clients.
 // A transport is never advertised until its backend has passed health checks.
 type TransportCapability struct {

@@ -85,6 +85,10 @@
 
 ### API contract
 
+- Added user device list, alias, revocation and paginated session-history
+  endpoints. The primary connection list now returns active sessions only;
+  revocation preserves audit history, invalidates recoverable material and
+  fails explicitly when Core cleanup has not converged.
 - Connection and certificate enrollment now accept a structured device
   identity while retaining deprecated `device_name` compatibility. Connection
   responses, peers and certificates expose `device_id`; quotas count devices

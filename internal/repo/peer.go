@@ -94,6 +94,96 @@ func (r *PeerRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]models.P
 	return peers, nil
 }
 
+func (r *PeerRepo) ListActiveByUser(ctx context.Context, userID uuid.UUID) ([]models.Peer, error) {
+	query := `
+		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
+		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
+		FROM peers
+		WHERE user_id = $1 AND is_active = TRUE
+		ORDER BY created_at DESC
+	`
+	rows, err := r.pool.Query(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list active peers by user: %w", err)
+	}
+	defer rows.Close()
+
+	peers := make([]models.Peer, 0)
+	for rows.Next() {
+		peer, err := scanPeer(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan active peer by user: %w", err)
+		}
+		peers = append(peers, *peer)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list active peers by user rows: %w", err)
+	}
+	return peers, nil
+}
+
+func (r *PeerRepo) ListByDevice(ctx context.Context, userID, deviceID uuid.UUID, limit, offset int) ([]models.Peer, error) {
+	query := `
+		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
+		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
+		FROM peers
+		WHERE user_id = $1 AND device_id = $2
+		ORDER BY created_at DESC, id DESC
+		LIMIT $3 OFFSET $4
+	`
+	rows, err := r.pool.Query(ctx, query, userID, deviceID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("list device sessions: %w", err)
+	}
+	defer rows.Close()
+
+	peers := make([]models.Peer, 0)
+	for rows.Next() {
+		peer, err := scanPeer(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan device session: %w", err)
+		}
+		peers = append(peers, *peer)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list device sessions rows: %w", err)
+	}
+	return peers, nil
+}
+
+func (r *PeerRepo) CountByDevice(ctx context.Context, userID, deviceID uuid.UUID) (int, error) {
+	var count int
+	if err := r.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM peers WHERE user_id = $1 AND device_id = $2`, userID, deviceID).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count device sessions: %w", err)
+	}
+	return count, nil
+}
+
+func (r *PeerRepo) GetActiveByDevice(ctx context.Context, userID, deviceID uuid.UUID) (*models.Peer, error) {
+	peer, err := scanPeer(r.pool.QueryRow(ctx, `
+		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
+		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
+		FROM peers
+		WHERE user_id = $1 AND device_id = $2 AND is_active = TRUE`, userID, deviceID))
+	if err != nil {
+		return nil, fmt.Errorf("get active device peer: %w", err)
+	}
+	return peer, nil
+}
+
+func scanPeer(row interface{ Scan(...interface{}) error }) (*models.Peer, error) {
+	var peer models.Peer
+	if err := row.Scan(
+		&peer.ID, &peer.UserID, &peer.ServerID, &peer.PublicKey, &peer.PresharedKey,
+		&peer.AssignedIP, &peer.IsActive, &peer.DeviceName, &peer.DeviceID,
+		&peer.LastHandshake, &peer.BytesSent, &peer.BytesReceived, &peer.CreatedAt, &peer.ExpiresAt,
+	); err != nil {
+		return nil, err
+	}
+	return &peer, nil
+}
+
 func (r *PeerRepo) ListByServer(ctx context.Context, serverID uuid.UUID) ([]models.Peer, error) {
 	query := `
 		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
@@ -227,11 +317,6 @@ func (r *PeerRepo) UpdateStats(ctx context.Context, id uuid.UUID, bytesSent, byt
 
 func (r *PeerRepo) Deactivate(ctx context.Context, id uuid.UUID) error {
 	_, err := r.pool.Exec(ctx, `UPDATE peers SET is_active = FALSE WHERE id = $1`, id)
-	return err
-}
-
-func (r *PeerRepo) Delete(ctx context.Context, id uuid.UUID) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM peers WHERE id = $1`, id)
 	return err
 }
 

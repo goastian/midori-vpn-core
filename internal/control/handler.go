@@ -747,46 +747,6 @@ func (h *Handler) Disconnect(w http.ResponseWriter, r *http.Request) {
 	respond.JsonOK(w, map[string]string{"status": "disconnected"}, http.StatusOK)
 }
 
-func (h *Handler) DeleteConnection(w http.ResponseWriter, r *http.Request) {
-	user := auth.GetUser(r)
-
-	peerID, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		respond.JsonError(w, "invalid peer id", http.StatusBadRequest)
-		return
-	}
-
-	peer, err := h.peerRepo.GetByID(r.Context(), peerID)
-	if err != nil {
-		respond.JsonError(w, "peer not found", http.StatusNotFound)
-		return
-	}
-
-	if peer.UserID != user.ID && !IsAdmin(user) {
-		respond.JsonError(w, "not your peer", http.StatusForbidden)
-		return
-	}
-
-	// Remove from WireGuard if the peer is active
-	if peer.IsActive {
-		if server, err := h.serverRepo.GetByID(r.Context(), peer.ServerID); err == nil {
-			_ = CallCoreRemovePeer(server, peer.PublicKey)
-			_ = h.serverRepo.UpdatePeerCount(r.Context(), peer.ServerID, -1)
-		}
-	}
-	h.detachPeerFromMeshSessions(r.Context(), peer)
-
-	if err := h.peerRepo.Delete(r.Context(), peerID); err != nil {
-		respond.JsonError(w, "failed to delete device", http.StatusInternalServerError)
-		return
-	}
-
-	h.auditRepo.Log(r.Context(), &user.ID, "peer.delete",
-		map[string]interface{}{"peer_id": peerID, "server_id": peer.ServerID}, r.RemoteAddr)
-
-	respond.JsonOK(w, map[string]string{"status": "deleted"}, http.StatusOK)
-}
-
 func (h *Handler) ExportConfig(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r)
 
@@ -982,7 +942,7 @@ PersistentKeepalive = 25
 
 func (h *Handler) ListMyConnections(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r)
-	peers, err := h.peerRepo.ListByUser(r.Context(), user.ID)
+	peers, err := h.peerRepo.ListActiveByUser(r.Context(), user.ID)
 	if err != nil {
 		slog.Error("list connections error", "error", err)
 		respond.JsonError(w, "failed to list connections", http.StatusInternalServerError)

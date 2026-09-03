@@ -30,6 +30,118 @@ func NewDeviceRepo(pool *pgxpool.Pool) *DeviceRepo {
 	return &DeviceRepo{pool: pool}
 }
 
+func (r *DeviceRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]models.Device, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT `+deviceColumns+`
+		FROM devices
+		WHERE user_id = $1
+		ORDER BY revoked_at NULLS FIRST, last_seen_at DESC, id`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list devices: %w", err)
+	}
+	defer rows.Close()
+
+	devices := make([]models.Device, 0)
+	for rows.Next() {
+		device, err := scanDevice(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan device: %w", err)
+		}
+		devices = append(devices, *device)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list devices rows: %w", err)
+	}
+	return devices, nil
+}
+
+func (r *DeviceRepo) GetByUser(ctx context.Context, userID, deviceID uuid.UUID) (*models.Device, error) {
+	device, err := scanDevice(r.pool.QueryRow(ctx, `
+		SELECT `+deviceColumns+`
+		FROM devices
+		WHERE id = $1 AND user_id = $2`, deviceID, userID))
+	if err != nil {
+		return nil, fmt.Errorf("get device: %w", err)
+	}
+	return device, nil
+}
+
+func (r *DeviceRepo) UpdateAlias(ctx context.Context, userID, deviceID uuid.UUID, alias string) (*models.Device, error) {
+	device, err := scanDevice(r.pool.QueryRow(ctx, `
+		UPDATE devices
+		SET alias = NULLIF($3, '')
+		WHERE id = $1 AND user_id = $2
+		RETURNING `+deviceColumns, deviceID, userID, alias))
+	if err != nil {
+		return nil, fmt.Errorf("update device alias: %w", err)
+	}
+	return device, nil
+}
+
+// RevokeWithMaterial atomically revokes a device after its active Core peer
+// has been removed. Session rows remain as audit history, while recoverable
+// PSKs and active client certificates are invalidated.
+func (r *DeviceRepo) RevokeWithMaterial(ctx context.Context, userID, deviceID uuid.UUID) (*models.Device, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("begin device revocation: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := scanDevice(tx.QueryRow(ctx, `
+		SELECT `+deviceColumns+`
+		FROM devices
+		WHERE id = $1 AND user_id = $2
+		FOR UPDATE`, deviceID, userID)); err != nil {
+		return nil, fmt.Errorf("lock device for revocation: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		WITH deactivated AS (
+			UPDATE peers
+			SET is_active = FALSE
+			WHERE user_id = $1 AND device_id = $2 AND is_active = TRUE
+			RETURNING server_id
+		), counts AS (
+			SELECT server_id, COUNT(*)::INTEGER AS removed
+			FROM deactivated
+			GROUP BY server_id
+		)
+		UPDATE vpn_servers AS server
+		SET current_peers = GREATEST(server.current_peers - counts.removed, 0),
+		    updated_at = NOW()
+		FROM counts
+		WHERE server.id = counts.server_id`, userID, deviceID); err != nil {
+		return nil, fmt.Errorf("deactivate device sessions: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE peers
+		SET preshared_key = ''
+		WHERE user_id = $1 AND device_id = $2 AND preshared_key <> ''`, userID, deviceID); err != nil {
+		return nil, fmt.Errorf("invalidate device session material: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE device_certificates
+		SET revoked_at = NOW(), revocation_reason = 'device-revoked'
+		WHERE user_id = $1 AND device_id = $2 AND revoked_at IS NULL`, userID, deviceID); err != nil {
+		return nil, fmt.Errorf("revoke device certificates: %w", err)
+	}
+
+	device, err := scanDevice(tx.QueryRow(ctx, `
+		UPDATE devices
+		SET revoked_at = COALESCE(revoked_at, NOW())
+		WHERE id = $1 AND user_id = $2
+		RETURNING `+deviceColumns, deviceID, userID))
+	if err != nil {
+		return nil, fmt.Errorf("revoke device: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit device revocation: %w", err)
+	}
+	return device, nil
+}
+
 // ResolveRegistered returns the stable device for an installation, updating
 // observations without ever replacing its user alias. A sole active legacy
 // device with the same reported name is adopted; ambiguous matches remain

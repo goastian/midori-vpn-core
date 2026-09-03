@@ -313,10 +313,53 @@ paths:
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
 
+  /api/v1/control/devices:
+    get:
+      operationId: listCurrentUserDevices
+      tags: [Connections]
+      responses:
+        '200': {$ref: '#/components/responses/DeviceList'}
+        '500': {$ref: '#/components/responses/InternalError'}
+  /api/v1/control/devices/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    patch:
+      operationId: updateCurrentUserDevice
+      tags: [Connections]
+      requestBody: {$ref: '#/components/requestBodies/DeviceUpdate'}
+      responses:
+        '200': {$ref: '#/components/responses/Device'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+    delete:
+      operationId: revokeCurrentUserDevice
+      tags: [Connections]
+      responses:
+        '200': {$ref: '#/components/responses/Device'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/control/devices/{id}/sessions:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+      - {$ref: '#/components/parameters/Page'}
+      - {$ref: '#/components/parameters/PageSize'}
+    get:
+      operationId: listCurrentUserDeviceSessions
+      tags: [Connections]
+      responses:
+        '200': {$ref: '#/components/responses/DeviceSessionPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalError'}
+
   /api/v1/control/connections:
     get:
       operationId: listCurrentUserConnections
       tags: [Connections]
+      description: Returns active sessions only; historical sessions are paginated under their device.
       responses:
         '200': {$ref: '#/components/responses/ConnectionList'}
         '500': {$ref: '#/components/responses/InternalError'}
@@ -337,17 +380,6 @@ paths:
       - {$ref: '#/components/parameters/ID'}
     delete:
       operationId: disconnectConnection
-      tags: [Connections]
-      responses:
-        '200': {$ref: '#/components/responses/OK'}
-        '400': {$ref: '#/components/responses/BadRequest'}
-        '403': {$ref: '#/components/responses/Forbidden'}
-        '404': {$ref: '#/components/responses/NotFound'}
-  /api/v1/control/connections/{id}/device:
-    parameters:
-      - {$ref: '#/components/parameters/ID'}
-    delete:
-      operationId: deleteConnectionDevice
       tags: [Connections]
       responses:
         '200': {$ref: '#/components/responses/OK'}
@@ -788,6 +820,14 @@ components:
       name: offset
       in: query
       schema: {type: integer, minimum: 0}
+    Page:
+      name: page
+      in: query
+      schema: {type: integer, minimum: 1, default: 1}
+    PageSize:
+      name: page_size
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 100, default: 20}
   schemas:
     SuccessEnvelope:
       type: object
@@ -832,6 +872,7 @@ components:
             - client_pki_unavailable
             - device_limit_reached
             - device_revoked
+            - device_cleanup_pending
             - peer_operation_conflict
             - origin_country_unavailable
       additionalProperties: false
@@ -927,10 +968,9 @@ components:
     Device:
       type: object
       additionalProperties: false
-      required: [id, user_id, client_instance_id, reported_name, alias, display_name, device_type, adapter_reference, first_seen_at, last_seen_at]
+      required: [id, client_instance_id, reported_name, alias, display_name, device_type, adapter_reference, adapter_label, first_seen_at, last_seen_at, revoked_at, status, active_connection]
       properties:
         id: {type: string, format: uuid}
-        user_id: {type: string, format: uuid}
         client_instance_id:
           type: [string, 'null']
           format: uuid
@@ -942,9 +982,70 @@ components:
         adapter_reference:
           type: string
           pattern: '^(net-v1:[A-Za-z0-9_-]{43})?$'
+        adapter_label: {type: string, pattern: '^(LAN · [A-F0-9]{8})?$'}
         first_seen_at: {type: string, format: date-time}
         last_seen_at: {type: string, format: date-time}
-        revoked_at: {type: string, format: date-time}
+        revoked_at: {type: [string, 'null'], format: date-time}
+        status:
+          type: string
+          enum: [connected, disconnected, connecting, disconnecting, cleanup_pending, revoked]
+        active_connection:
+          oneOf:
+            - {$ref: '#/components/schemas/DeviceConnection'}
+            - {type: 'null'}
+    DeviceConnection:
+      type: object
+      additionalProperties: false
+      required: [id, device_id, server_id, protocol, public_key, assigned_ip, is_active, bytes_sent, bytes_received, last_handshake, created_at, expires_at]
+      properties:
+        id: {type: string, format: uuid}
+        device_id: {type: string, format: uuid}
+        server_id: {type: string, format: uuid}
+        protocol: {type: string, enum: [wireguard, openvpn, ikev2, wss, masque, proxy]}
+        public_key: {type: string}
+        assigned_ip: {type: string}
+        is_active: {type: boolean}
+        bytes_sent: {type: integer, format: int64}
+        bytes_received: {type: integer, format: int64}
+        last_handshake: {type: [string, 'null'], format: date-time}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: [string, 'null'], format: date-time}
+    DeviceSessionPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, page_size, total]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/DeviceConnection'}}
+        page: {type: integer, minimum: 1}
+        page_size: {type: integer, minimum: 1, maximum: 100}
+        total: {type: integer, minimum: 0}
+    DeviceUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [alias]
+      properties:
+        alias: {type: string, maxLength: 64, description: Empty clears the user-selected alias.}
+    DeviceEnvelope:
+      type: object
+      additionalProperties: false
+      required: [ok, data]
+      properties:
+        ok: {const: true}
+        data: {$ref: '#/components/schemas/Device'}
+    DeviceListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [ok, data]
+      properties:
+        ok: {const: true}
+        data: {type: array, items: {$ref: '#/components/schemas/Device'}}
+    DeviceSessionPageEnvelope:
+      type: object
+      additionalProperties: false
+      required: [ok, data]
+      properties:
+        ok: {const: true}
+        data: {$ref: '#/components/schemas/DeviceSessionPage'}
     ConnectionSummary:
       type: object
       description: A persisted connection summary. It never includes a preshared key.
@@ -1129,6 +1230,7 @@ components:
     Connection: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ConnectionRequest'}}}}
     TunnelCredential: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TunnelCredentialRequest'}}}}
     CertificateEnrollment: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CertificateEnrollmentRequest'}}}}
+    DeviceUpdate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/DeviceUpdateRequest'}}}}
     MeshCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MeshCreateRequest'}}}}
     MeshJoin: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MeshJoinRequest'}}}}
     MeshInvite: {required: false, content: {application/json: {schema: {$ref: '#/components/schemas/MeshInviteRequest'}}}}
@@ -1178,6 +1280,21 @@ components:
       content:
         application/json:
           schema: {$ref: '#/components/schemas/ConnectionListEnvelope'}
+    Device:
+      description: Registered device with at most one active session.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/DeviceEnvelope'}
+    DeviceList:
+      description: Stable device list; historical sessions are not top-level rows.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/DeviceListEnvelope'}
+    DeviceSessionPage:
+      description: Paginated session history for one device.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/DeviceSessionPageEnvelope'}
     ConnectionConfiguration:
       description: Sensitive connection configuration; clients must not persist it beyond tunnel setup.
       headers:
@@ -1196,5 +1313,13 @@ components:
     TooManyRequests: {description: Rate limit exceeded., headers: {Retry-After: {schema: {type: integer}}}, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
     InternalError: {description: Safe production error., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
     BadGateway: {description: Upstream or node operation failed., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
-    ServiceUnavailable: {description: Required capability or dependency is unavailable., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
+    ServiceUnavailable:
+      description: Required capability or dependency is unavailable.
+      headers:
+        Retry-After:
+          description: Optional delay in seconds before retrying a pending cleanup.
+          schema: {type: integer, minimum: 1}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
     NotImplemented: {description: Registered operation is not implemented., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}

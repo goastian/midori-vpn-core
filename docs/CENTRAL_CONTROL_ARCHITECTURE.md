@@ -145,6 +145,16 @@ record only when user and reported name produce exactly one candidate. Equal
 or otherwise ambiguous names remain separate for explicit cleanup. A raw MAC
 address is neither accepted by the contract nor persisted in PostgreSQL.
 
+The user-facing API lists stable devices separately from sessions. A device
+response embeds at most its current active session; prior sessions are retained
+under a paginated device-history endpoint, while the compatibility connection
+list returns active sessions only. Revoking a device first requires its Core
+peer removal to converge, then atomically deactivates the database session,
+invalidates recoverable peer material, revokes its client certificates and
+marks the device revoked without deleting audit history. Until durable cleanup
+operations are introduced, a failed Core removal returns an explicit retryable
+failure and leaves the device active.
+
 A successful connection follows this order:
 
 1. Control authenticates the user and checks quota and server capacity.

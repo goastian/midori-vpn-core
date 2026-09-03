@@ -230,3 +230,124 @@ func TestDeviceCertificateRepoRejectsMissingDeviceID(t *testing.T) {
 		t.Fatal("certificate without device_id was accepted")
 	}
 }
+
+func TestDeviceRepoListsAliasesAndPaginatesSessionHistory(t *testing.T) {
+	pool := testPool(t)
+	deviceRepo := repo.NewDeviceRepo(pool)
+	peerRepo := repo.NewPeerRepo(pool)
+	userID := insertTestUser(t, pool)
+	serverID := insertDeviceTestServer(t, pool)
+	device, err := deviceRepo.ResolveRegistered(context.Background(), userID, uuid.New(), "history-host", models.DeviceTypeDesktop, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	olderID := insertDeviceTestPeer(t, pool, userID, serverID, device.ID, "history-host", "10.99.4.2/32", false)
+	newerID := insertDeviceTestPeer(t, pool, userID, serverID, device.ID, "history-host", "10.99.4.3/32", true)
+	if _, err := pool.Exec(context.Background(), `
+		UPDATE peers SET created_at = NOW() - INTERVAL '1 hour' WHERE id = $1`, olderID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(context.Background(), `
+		UPDATE peers SET created_at = NOW() WHERE id = $1`, newerID); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := deviceRepo.UpdateAlias(context.Background(), userID, device.ID, "Private laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.DisplayName != "Private laptop" {
+		t.Fatalf("display name = %q", updated.DisplayName)
+	}
+	devices, err := deviceRepo.ListByUser(context.Background(), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 1 || devices[0].ID != device.ID || devices[0].Alias != "Private laptop" {
+		t.Fatalf("unexpected device list: %#v", devices)
+	}
+	active, err := peerRepo.ListActiveByUser(context.Background(), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 || active[0].ID != newerID {
+		t.Fatalf("active sessions = %#v", active)
+	}
+	firstPage, err := peerRepo.ListByDevice(context.Background(), userID, device.ID, 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPage, err := peerRepo.ListByDevice(context.Background(), userID, device.ID, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	total, err := peerRepo.CountByDevice(context.Background(), userID, device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || len(firstPage) != 1 || firstPage[0].ID != newerID || len(secondPage) != 1 || secondPage[0].ID != olderID {
+		t.Fatalf("unexpected history total=%d first=%#v second=%#v", total, firstPage, secondPage)
+	}
+}
+
+func TestDeviceRepoRevocationPreservesHistoryAndInvalidatesMaterial(t *testing.T) {
+	pool := testPool(t)
+	deviceRepo := repo.NewDeviceRepo(pool)
+	userID := insertTestUser(t, pool)
+	serverID := insertDeviceTestServer(t, pool)
+	device, err := deviceRepo.ResolveRegistered(context.Background(), userID, uuid.New(), "revoke-host", models.DeviceTypeDesktop, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerID := insertDeviceTestPeer(t, pool, userID, serverID, device.ID, "revoke-host", "10.99.5.2/32", true)
+	if _, err := pool.Exec(context.Background(), `
+		UPDATE peers SET preshared_key = 'recoverable-test-value' WHERE id = $1`, peerID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(context.Background(), `
+		UPDATE vpn_servers SET current_peers = 1 WHERE id = $1`, serverID); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := pool.Exec(context.Background(), `
+		INSERT INTO device_certificates (
+			id, user_id, server_id, device_name, device_id, serial_number,
+			certificate_pem, public_key_sha256, not_before, not_after
+		) VALUES ($1, $2, $3, $4, $5, $6, 'CERTIFICATE', $7, $8, $9)`,
+		uuid.New(), userID, serverID, device.ReportedName, device.ID, uuid.NewString(), strings.Repeat("f", 64), now, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	revoked, err := deviceRepo.RevokeWithMaterial(context.Background(), userID, device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revoked.RevokedAt == nil {
+		t.Fatal("device was not revoked")
+	}
+	var active bool
+	var psk string
+	if err := pool.QueryRow(context.Background(), `SELECT is_active, preshared_key FROM peers WHERE id = $1`, peerID).Scan(&active, &psk); err != nil {
+		t.Fatal(err)
+	}
+	if active || psk != "" {
+		t.Fatalf("peer material remains: active=%v psk=%q", active, psk)
+	}
+	var certificateRevoked bool
+	if err := pool.QueryRow(context.Background(), `
+		SELECT revoked_at IS NOT NULL AND revocation_reason = 'device-revoked'
+		FROM device_certificates WHERE device_id = $1`, device.ID).Scan(&certificateRevoked); err != nil {
+		t.Fatal(err)
+	}
+	var currentPeers int
+	if err := pool.QueryRow(context.Background(), `SELECT current_peers FROM vpn_servers WHERE id = $1`, serverID).Scan(&currentPeers); err != nil {
+		t.Fatal(err)
+	}
+	if !certificateRevoked || currentPeers != 0 {
+		t.Fatalf("revocation mismatch: certificate=%v current_peers=%d", certificateRevoked, currentPeers)
+	}
+	count, err := repo.NewPeerRepo(pool).CountByDevice(context.Background(), userID, device.ID)
+	if err != nil || count != 1 {
+		t.Fatalf("history count=%d err=%v", count, err)
+	}
+}

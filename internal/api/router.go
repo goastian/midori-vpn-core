@@ -134,12 +134,15 @@ func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *au
 			r.Post("/certificates", ch.EnrollDeviceCertificate)
 			r.Get("/certificates", ch.ListDeviceCertificates)
 			r.Delete("/certificates/{id}", ch.RevokeDeviceCertificate)
+			r.Get("/devices", ch.ListMyDevices)
+			r.Patch("/devices/{id}", ch.UpdateMyDevice)
+			r.Delete("/devices/{id}", ch.DeleteMyDevice)
+			r.Get("/devices/{id}/sessions", ch.ListMyDeviceSessions)
 
 			// Connections
 			r.Post("/connections", ch.Connect)
 			r.Get("/connections", ch.ListMyConnections)
 			r.Delete("/connections/{id}", ch.Disconnect)
-			r.Delete("/connections/{id}/device", ch.DeleteConnection)
 			r.Get("/connections/{id}/config", ch.ExportConfig)
 			r.Get("/connections/{id}/qr", ch.ExportQR)
 
