@@ -27,6 +27,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/clientpki"
 	"github.com/goastian/midori-vpn-core/internal/config"
 	vpnCrypto "github.com/goastian/midori-vpn-core/internal/crypto"
+	"github.com/goastian/midori-vpn-core/internal/dataencryption"
 	"github.com/goastian/midori-vpn-core/internal/models"
 	"github.com/goastian/midori-vpn-core/internal/nodeauth"
 	"github.com/goastian/midori-vpn-core/internal/proxytoken"
@@ -134,12 +135,20 @@ func NewHandler(pool *pgxpool.Pool, cfg *config.Config) *Handler {
 }
 
 func NewHandlerWithMesh(pool *pgxpool.Pool, cfg *config.Config, wgMgr *wg.Manager, hub *WSHub) *Handler {
+	var dataCipher *dataencryption.Cipher
+	if len(cfg.ControlDataEncryptionKey) > 0 {
+		dataCipher, _ = dataencryption.New(cfg.ControlDataEncryptionKey)
+	}
+	return NewHandlerWithMeshAndDataEncryption(pool, cfg, wgMgr, hub, dataCipher)
+}
+
+func NewHandlerWithMeshAndDataEncryption(pool *pgxpool.Pool, cfg *config.Config, wgMgr *wg.Manager, hub *WSHub, dataCipher *dataencryption.Cipher) *Handler {
 	billingRedis := billingRedisClient(cfg)
 	h := &Handler{
 		userRepo:                repo.NewUserRepo(pool),
 		serverRepo:              repo.NewServerRepo(pool),
-		peerRepo:                repo.NewPeerRepo(pool),
-		peerOperationRepo:       repo.NewPeerOperationRepo(pool),
+		peerRepo:                repo.NewPeerRepo(pool, dataCipher),
+		peerOperationRepo:       repo.NewPeerOperationRepo(pool, dataCipher),
 		deviceRepo:              repo.NewDeviceRepo(pool),
 		meshRepo:                repo.NewMeshRepo(pool),
 		auditRepo:               repo.NewAuditRepo(pool),
@@ -846,14 +855,22 @@ func (h *Handler) ExportConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	peer, err := h.peerRepo.GetByID(r.Context(), peerID)
+	peer, err := h.peerRepo.GetByIDForPresharedKeyExport(r.Context(), peerID, user.ID, IsAdmin(user))
 	if err != nil {
-		respond.JsonError(w, "peer not found", http.StatusNotFound)
+		if errors.Is(err, pgx.ErrNoRows) {
+			respond.JsonError(w, "peer not found", http.StatusNotFound)
+		} else {
+			respond.SafeError(w, "failed to load connection material", err, http.StatusInternalServerError)
+		}
 		return
 	}
 
 	if peer.UserID != user.ID && !IsAdmin(user) {
 		respond.JsonError(w, "not your peer", http.StatusForbidden)
+		return
+	}
+	if !peer.IsActive {
+		respond.JsonError(w, "connection is inactive", http.StatusConflict)
 		return
 	}
 
@@ -883,14 +900,22 @@ func (h *Handler) ExportQR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	peer, err := h.peerRepo.GetByID(r.Context(), peerID)
+	peer, err := h.peerRepo.GetByIDForPresharedKeyExport(r.Context(), peerID, user.ID, IsAdmin(user))
 	if err != nil {
-		respond.JsonError(w, "peer not found", http.StatusNotFound)
+		if errors.Is(err, pgx.ErrNoRows) {
+			respond.JsonError(w, "peer not found", http.StatusNotFound)
+		} else {
+			respond.SafeError(w, "failed to load connection material", err, http.StatusInternalServerError)
+		}
 		return
 	}
 
 	if peer.UserID != user.ID && !IsAdmin(user) {
 		respond.JsonError(w, "not your peer", http.StatusForbidden)
+		return
+	}
+	if !peer.IsActive {
+		respond.JsonError(w, "connection is inactive", http.StatusConflict)
 		return
 	}
 

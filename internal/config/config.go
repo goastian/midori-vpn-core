@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/goastian/midori-vpn-core/internal/dataencryption"
 	"github.com/google/uuid"
 	"github.com/yosida95/uritemplate/v3"
 )
@@ -48,7 +49,8 @@ type Config struct {
 	Endpoint    string
 
 	// PostgreSQL
-	DatabaseURL string
+	DatabaseURL              string
+	ControlDataEncryptionKey []byte
 
 	// Redis
 	RedisURL string
@@ -237,6 +239,17 @@ func Load() *Config {
 	}
 	if cfg.AuthentikClientID != "" && (cfg.DatabaseURL == "" || cfg.RedisURL == "") {
 		log.Fatal("FATAL: PostgreSQL and Redis must be configured when the Control API is enabled")
+	}
+	encodedDataKey := env("CONTROL_DATA_ENCRYPTION_KEY")
+	if encodedDataKey != "" {
+		key, err := dataencryption.ParseKey(encodedDataKey)
+		if err != nil {
+			log.Fatal("FATAL: CONTROL_DATA_ENCRYPTION_KEY must be canonical base64 encoding of exactly 32 bytes")
+		}
+		cfg.ControlDataEncryptionKey = key
+	}
+	if cfg.AuthentikClientID != "" && len(cfg.ControlDataEncryptionKey) == 0 {
+		log.Fatal("FATAL: CONTROL_DATA_ENCRYPTION_KEY is required when the Control API is enabled")
 	}
 	if (cfg.AuthentikClientID != "" || cfg.ProxyEnabled || cfg.WSSTunnelEnabled || cfg.MasqueEnabled) && cfg.CredentialSigningSecret == "" {
 		log.Fatal("FATAL: CREDENTIAL_SIGNING_SECRET is required for scoped proxy and tunnel credentials")

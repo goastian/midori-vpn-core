@@ -15,6 +15,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/clientpki"
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/control"
+	"github.com/goastian/midori-vpn-core/internal/dataencryption"
 	"github.com/goastian/midori-vpn-core/internal/db"
 	"github.com/goastian/midori-vpn-core/internal/httpx"
 	"github.com/goastian/midori-vpn-core/internal/masque"
@@ -75,6 +76,18 @@ func main() {
 		if err := db.RunMigrations(cfg.DatabaseURL); err != nil {
 			log.Fatalf("failed to run migrations: %v", err)
 		}
+		dataCipher, err := dataencryption.New(cfg.ControlDataEncryptionKey)
+		if err != nil {
+			log.Fatalf("failed to initialize Control data encryption: %v", err)
+		}
+		backfill, err := db.BackfillPresharedKeys(shutdownCtx, pool, dataCipher)
+		if err != nil {
+			log.Fatalf("failed to encrypt legacy preshared keys: %v", err)
+		}
+		slog.Info("legacy preshared key encryption completed",
+			"peers", backfill.Peers,
+			"peer_operations", backfill.PeerOperations,
+			"mesh_members", backfill.MeshMembers)
 
 		jwks, err := auth.NewJWKSProviderWithContext(shutdownCtx, cfg)
 		if err != nil {
@@ -83,7 +96,7 @@ func main() {
 		defer jwks.Close()
 
 		slog.Info("Control API enabled", "auth", "PostgreSQL + Authentik")
-		router = api.NewRouterWithDB(cfg, manager, pool, jwks, verifier, clientCertificateAuthority)
+		router = api.NewRouterWithDB(cfg, manager, pool, jwks, verifier, clientCertificateAuthority, dataCipher)
 
 		// Start HTTP CONNECT proxy if enabled
 		if cfg.ProxyEnabled {

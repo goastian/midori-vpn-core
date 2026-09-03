@@ -167,6 +167,7 @@ func TestLoadAcceptsPublicPKCEClientWithoutSecret(t *testing.T) {
 		"PUBLIC_BASE_URL=https://vpn.example.test",
 		"EXTENSION_CALLBACK_PATH=/extension/callback",
 		"DATABASE_URL=postgres://user:password@db.example.test:5432/midori?sslmode=require",
+		"CONTROL_DATA_ENCRYPTION_KEY=MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
 		"REDIS_URL=redis://:password@redis.example.test:6379/0",
 		"AUTHENTIK_ISSUER=https://accounts.example.test/application/o/midori-vpn",
 		"AUTHENTIK_CLIENT_ID=public-client",

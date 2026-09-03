@@ -78,6 +78,7 @@ func TestRouterMatchesOpenAPIContract(t *testing.T) {
 		&auth.JWKSProvider{},
 		nil,
 		&clientpki.Authority{},
+		nil,
 		false,
 	)
 

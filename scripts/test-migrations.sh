@@ -65,6 +65,17 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000014_previous_peer_operation.up.sql >/dev/null
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000015_safe_admin_operations.up.sql >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000016_encrypt_preshared_keys.up.sql >/dev/null
+
+encrypted_psk_columns="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ('peers','peer_operations','mesh_members') AND column_name IN ('preshared_key_ciphertext','preshared_key_version')")"
+[ "${encrypted_psk_columns}" = "6" ] || { printf 'error: migration 16 created %s of 6 encrypted PSK columns\n' "${encrypted_psk_columns}" >&2; exit 1; }
+if podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c \
+  "UPDATE peers SET preshared_key = 'legacy', preshared_key_ciphertext = decode(repeat('ab', 40), 'hex'), preshared_key_version = 1 WHERE id = '30000000-0000-4000-8000-000000000001'" >/dev/null 2>&1; then
+  printf 'error: migration 16 allowed simultaneous plaintext and ciphertext\n' >&2
+  exit 1
+fi
 
 draining_column="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'vpn_servers' AND column_name = 'draining_at'")"
@@ -212,6 +223,23 @@ cascade_rows="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT (SELECT COUNT(*) FROM devices WHERE user_id = '10000000-0000-4000-8000-000000000002') + (SELECT COUNT(*) FROM peers WHERE user_id = '10000000-0000-4000-8000-000000000002') + (SELECT COUNT(*) FROM device_certificates WHERE user_id = '10000000-0000-4000-8000-000000000002')")"
 [ "${cascade_rows}" = "0" ] || { printf 'error: user cascade left %s device-related rows\n' "${cascade_rows}" >&2; exit 1; }
 
+# A rollback must refuse to discard ciphertext. Clearing the synthetic value
+# then proves that a safe, plaintext-only rollback remains available.
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c \
+  "UPDATE peers SET preshared_key_ciphertext = decode(repeat('ab', 40), 'hex'), preshared_key_version = 1 WHERE id = '30000000-0000-4000-8000-000000000001'" >/dev/null
+if podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000016_encrypt_preshared_keys.down.sql >/dev/null 2>&1; then
+  printf 'error: migration 16 rollback discarded encrypted PSK material\n' >&2
+  exit 1
+fi
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c \
+  "UPDATE peers SET preshared_key_ciphertext = NULL, preshared_key_version = NULL WHERE id = '30000000-0000-4000-8000-000000000001'" >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000016_encrypt_preshared_keys.down.sql >/dev/null
+encrypted_psk_columns="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ('peers','peer_operations','mesh_members') AND column_name IN ('preshared_key_ciphertext','preshared_key_version')")"
+[ "${encrypted_psk_columns}" = "0" ] || { printf 'error: migration 16 rollback left %s encrypted PSK columns\n' "${encrypted_psk_columns}" >&2; exit 1; }
+
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000015_safe_admin_operations.down.sql >/dev/null
 admin_artifacts="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
@@ -272,6 +300,8 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000014_previous_peer_operation.up.sql >/dev/null
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000015_safe_admin_operations.up.sql >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000016_encrypt_preshared_keys.up.sql >/dev/null
 
 # The device-based certificate key permits equal hostnames on distinct
 # registered installations without merging either device.
@@ -301,5 +331,8 @@ schema_operations="$(podman exec "${container}" psql -U midori -d midori_schema_
 schema_draining="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
   "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'vpn_servers' AND column_name = 'draining_at'")"
 [ "${schema_draining}" = "1" ] || { printf 'error: consolidated schema did not create draining_at\n' >&2; exit 1; }
+schema_encrypted_psk_columns="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
+  "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ('peers','peer_operations','mesh_members') AND column_name IN ('preshared_key_ciphertext','preshared_key_version')")"
+[ "${schema_encrypted_psk_columns}" = "6" ] || { printf 'error: consolidated schema created %s of 6 encrypted PSK columns\n' "${schema_encrypted_psk_columns}" >&2; exit 1; }
 
-printf 'Migration chain 1-15, migrations 9-15 rollback, and consolidated schema verified on PostgreSQL 18.\n'
+printf 'Migration chain 1-16, migrations 9-16 rollback, and consolidated schema verified on PostgreSQL 18.\n'

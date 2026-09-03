@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/goastian/midori-vpn-core/internal/dataencryption"
 	"github.com/goastian/midori-vpn-core/internal/models"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 )
@@ -300,8 +301,13 @@ func TestDeviceRepoRevocationBlocksAccessWithoutHidingPendingSession(t *testing.
 		t.Fatal(err)
 	}
 	peerID := insertDeviceTestPeer(t, pool, userID, serverID, device.ID, "revoke-host", "10.99.5.2/32", true)
+	cipher, _ := dataencryption.New([]byte("0123456789abcdef0123456789abcdef"))
+	ciphertext, version, err := cipher.SealPresharedKey(dataencryption.PeerPresharedKey, peerID, "recoverable-test-value")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pool.Exec(context.Background(), `
-		UPDATE peers SET preshared_key = 'recoverable-test-value' WHERE id = $1`, peerID); err != nil {
+		UPDATE peers SET preshared_key_ciphertext = $2, preshared_key_version = $3 WHERE id = $1`, peerID, ciphertext, version); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(context.Background(), `
@@ -327,11 +333,15 @@ func TestDeviceRepoRevocationBlocksAccessWithoutHidingPendingSession(t *testing.
 	}
 	var active bool
 	var psk string
-	if err := pool.QueryRow(context.Background(), `SELECT is_active, preshared_key FROM peers WHERE id = $1`, peerID).Scan(&active, &psk); err != nil {
+	var storedCiphertext []byte
+	var storedVersion *int16
+	if err := pool.QueryRow(context.Background(), `
+		SELECT is_active, preshared_key, preshared_key_ciphertext, preshared_key_version
+		FROM peers WHERE id = $1`, peerID).Scan(&active, &psk, &storedCiphertext, &storedVersion); err != nil {
 		t.Fatal(err)
 	}
-	if !active || psk != "" {
-		t.Fatalf("peer material remains: active=%v psk=%q", active, psk)
+	if !active || psk != "" || storedCiphertext != nil || storedVersion != nil {
+		t.Fatalf("peer material remains: active=%v plaintext=%q ciphertext_bytes=%d version=%v", active, psk, len(storedCiphertext), storedVersion)
 	}
 	var certificateRevoked bool
 	if err := pool.QueryRow(context.Background(), `

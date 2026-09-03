@@ -19,6 +19,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/control"
 	"github.com/goastian/midori-vpn-core/internal/core"
+	"github.com/goastian/midori-vpn-core/internal/dataencryption"
 	"github.com/goastian/midori-vpn-core/internal/nodeauth"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 	"github.com/goastian/midori-vpn-core/internal/tunnel"
@@ -29,13 +30,13 @@ func NewRouter(cfg *config.Config, mgr *wg.Manager, verifier *nodeauth.Verifier)
 	return NewRouterWithDB(cfg, mgr, nil, nil, verifier, nil)
 }
 
-func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *auth.JWKSProvider, verifier *nodeauth.Verifier, clientCertificateAuthority *clientpki.Authority) *chi.Mux {
-	return newRouter(cfg, mgr, pool, jwks, verifier, clientCertificateAuthority, true)
+func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *auth.JWKSProvider, verifier *nodeauth.Verifier, clientCertificateAuthority *clientpki.Authority, dataCipher ...*dataencryption.Cipher) *chi.Mux {
+	return newRouter(cfg, mgr, pool, jwks, verifier, clientCertificateAuthority, resolveDataCipher(cfg, dataCipher), true)
 }
 
 // newRouter keeps route registration independently testable without starting
 // long-lived workers. Production constructors always enable the workers.
-func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *auth.JWKSProvider, verifier *nodeauth.Verifier, clientCertificateAuthority *clientpki.Authority, startWorkers bool) *chi.Mux {
+func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *auth.JWKSProvider, verifier *nodeauth.Verifier, clientCertificateAuthority *clientpki.Authority, dataCipher *dataencryption.Cipher, startWorkers bool) *chi.Mux {
 	r := chi.NewRouter()
 	var trustedExtRepo *repo.TrustedExtensionRepo
 	var trustedExtensionOrigin ExtensionOriginChecker
@@ -112,7 +113,7 @@ func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *au
 		if startWorkers {
 			go wsHub.Run()
 		}
-		ch := control.NewHandlerWithMesh(pool, cfg, mgr, wsHub)
+		ch := control.NewHandlerWithMeshAndDataEncryption(pool, cfg, mgr, wsHub, dataCipher)
 		ch.SetNodeVerifier(verifier)
 		ch.SetClientCertificateAuthority(clientCertificateAuthority)
 		if clientCertificateAuthority != nil {
@@ -225,7 +226,7 @@ func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *au
 		if startWorkers {
 			// Start background jobs with cancellation support.
 			jobCtx, jobCancel := context.WithCancel(context.Background())
-			go control.StartStatsSync(jobCtx, pool, wsHub)
+			go control.StartStatsSync(jobCtx, pool, wsHub, dataCipher)
 			go control.StartTransportHealthSync(jobCtx, pool)
 			go control.StartPeerCleanup(jobCtx, pool)
 			go control.StartSessionMeshCleanup(jobCtx, pool)
@@ -234,6 +235,17 @@ func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *au
 	}
 
 	return r
+}
+
+func resolveDataCipher(cfg *config.Config, ciphers []*dataencryption.Cipher) *dataencryption.Cipher {
+	if len(ciphers) > 0 {
+		return ciphers[0]
+	}
+	if cfg != nil && len(cfg.ControlDataEncryptionKey) > 0 {
+		dataCipher, _ := dataencryption.New(cfg.ControlDataEncryptionKey)
+		return dataCipher
+	}
+	return nil
 }
 
 // sanitizedRequestLogger records enough request metadata for operations while

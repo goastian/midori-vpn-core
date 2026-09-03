@@ -4,6 +4,11 @@
 
 ### Security
 
+- WireGuard PSKs are now encrypted at rest with versioned
+  XChaCha20-Poly1305 records bound to their table and row. Control requires a
+  principal-only 32-byte data key, writes ciphertext exclusively, limits
+  decryption to reconciliation and authorized exports, and migrates legacy
+  plaintext through a verified, resumable backfill.
 - Added persistent per-installation device identities with UUID ownership,
   explicit client types and non-unique HMAC adapter references. Raw MAC
   addresses are rejected by the API contract and never stored.
@@ -59,7 +64,7 @@
 - Replaced the legacy backup and chaos helpers with fail-fast, environment-neutral staging tests. Backup validation restores into an isolated database and compares critical tables; network chaos applies bounded netem loss, verifies private metrics and probes, and always restores the original qdisc.
 - Pinned the Core builder, Alpine runtime and rootless analysis tools to exact supported versions and image digests. Staticcheck and govulncheck no longer resolve mutable `latest` releases during a rebuild.
 - Added rootless Podman development images for Go, Control and Desktop workflows.
-- Added immutable migrations through version 12, including billing/quotas, transport health, unique active peer addresses, Ed25519 identities, removal of retired transport columns, revocable per-device client certificates, persistent device identity and the missing Mesh exit-node protocol/capability fields.
+- Added immutable migrations through version 16, including billing/quotas, transport health, unique active peer addresses, Ed25519 identities, removal of retired transport columns, revocable per-device client certificates, persistent device identity, durable peer operations, safe administrative draining, encrypted PSKs and the missing Mesh exit-node protocol/capability fields.
 - Added migrations 13–14 and a durable PostgreSQL lifecycle for WireGuard connect
   and replacement operations. Quota and capacity are revalidated under locks,
   retries reuse the exact completed session, ambiguous failures remain

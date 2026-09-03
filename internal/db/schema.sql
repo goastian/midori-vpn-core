@@ -109,6 +109,8 @@ CREATE TABLE IF NOT EXISTS peers (
     server_id      UUID        NOT NULL REFERENCES vpn_servers(id) ON DELETE CASCADE,
     public_key     TEXT        NOT NULL,
     preshared_key  TEXT        NOT NULL DEFAULT '',
+    preshared_key_ciphertext BYTEA,
+    preshared_key_version SMALLINT,
     assigned_ip    TEXT        NOT NULL,
     is_active      BOOLEAN     NOT NULL DEFAULT TRUE,
     device_name    TEXT        NOT NULL DEFAULT '',
@@ -121,7 +123,14 @@ CREATE TABLE IF NOT EXISTS peers (
     CONSTRAINT fk_peers_device_owner
         FOREIGN KEY (device_id, user_id) REFERENCES devices(id, user_id)
         DEFERRABLE INITIALLY DEFERRED,
-    CONSTRAINT chk_peers_active_device CHECK (is_active = FALSE OR device_id IS NOT NULL)
+    CONSTRAINT chk_peers_active_device CHECK (is_active = FALSE OR device_id IS NOT NULL),
+    CONSTRAINT chk_peers_preshared_key_encryption CHECK (
+        (preshared_key_ciphertext IS NULL AND preshared_key_version IS NULL)
+        OR (preshared_key_ciphertext IS NOT NULL AND preshared_key_version = 1 AND octet_length(preshared_key_ciphertext) >= 40)
+    ),
+    CONSTRAINT chk_peers_preshared_key_single_representation CHECK (
+        preshared_key = '' OR preshared_key_ciphertext IS NULL
+    )
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_peers_active_server_assigned_ip ON peers (server_id, assigned_ip) WHERE is_active = TRUE;
@@ -146,6 +155,8 @@ CREATE TABLE IF NOT EXISTS peer_operations (
     server_id           UUID        NOT NULL REFERENCES vpn_servers(id) ON DELETE CASCADE,
     public_key          TEXT        NOT NULL CHECK (public_key ~ '^[A-Za-z0-9+/]{43}=$'),
     preshared_key       TEXT        NOT NULL DEFAULT '',
+    preshared_key_ciphertext BYTEA,
+    preshared_key_version SMALLINT,
     pq_kem_ciphertext   TEXT        NOT NULL DEFAULT '',
     previous_peer_id    UUID        REFERENCES peers(id) ON DELETE SET NULL,
     previous_operation_id UUID,
@@ -166,6 +177,13 @@ CREATE TABLE IF NOT EXISTS peer_operations (
     ),
     CONSTRAINT chk_peer_operations_completion CHECK (
         state NOT IN ('completed', 'cleanup_pending') OR completed_at IS NOT NULL
+    ),
+    CONSTRAINT chk_peer_operations_preshared_key_encryption CHECK (
+        (preshared_key_ciphertext IS NULL AND preshared_key_version IS NULL)
+        OR (preshared_key_ciphertext IS NOT NULL AND preshared_key_version = 1 AND octet_length(preshared_key_ciphertext) >= 40)
+    ),
+    CONSTRAINT chk_peer_operations_preshared_key_single_representation CHECK (
+        preshared_key = '' OR preshared_key_ciphertext IS NULL
     )
 );
 
@@ -300,13 +318,22 @@ CREATE TABLE IF NOT EXISTS mesh_members (
     user_id        UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     public_key     TEXT        NOT NULL,
     preshared_key  TEXT        NOT NULL DEFAULT '',
+    preshared_key_ciphertext BYTEA,
+    preshared_key_version SMALLINT,
     assigned_ip    TEXT        NOT NULL,
     endpoint       TEXT        NOT NULL DEFAULT '',
     is_active      BOOLEAN     NOT NULL DEFAULT TRUE,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_mesh_members_mesh_ip UNIQUE (mesh_id, assigned_ip),
-    CONSTRAINT uq_mesh_members_mesh_user UNIQUE (mesh_id, user_id)
+    CONSTRAINT uq_mesh_members_mesh_user UNIQUE (mesh_id, user_id),
+    CONSTRAINT chk_mesh_members_preshared_key_encryption CHECK (
+        (preshared_key_ciphertext IS NULL AND preshared_key_version IS NULL)
+        OR (preshared_key_ciphertext IS NOT NULL AND preshared_key_version = 1 AND octet_length(preshared_key_ciphertext) >= 40)
+    ),
+    CONSTRAINT chk_mesh_members_preshared_key_single_representation CHECK (
+        preshared_key = '' OR preshared_key_ciphertext IS NULL
+    )
 );
 
 CREATE INDEX IF NOT EXISTS idx_mesh_members_user_active ON mesh_members (user_id, is_active) WHERE is_active = TRUE;

@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/goastian/midori-vpn-core/internal/dataencryption"
 	"github.com/goastian/midori-vpn-core/internal/models"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 )
@@ -20,6 +23,7 @@ type peerOperationFixture struct {
 	serverID uuid.UUID
 	deviceID uuid.UUID
 	device   *models.Device
+	cipher   *dataencryption.Cipher
 }
 
 func newPeerOperationFixture(t *testing.T, maxPeers int) peerOperationFixture {
@@ -29,6 +33,7 @@ func newPeerOperationFixture(t *testing.T, maxPeers int) peerOperationFixture {
 
 	var fixture peerOperationFixture
 	fixture.pool = pool
+	fixture.cipher, _ = dataencryption.New([]byte("0123456789abcdef0123456789abcdef"))
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO users (authentik_uid, email, display_name)
 		VALUES ($1, $2, 'Operation Test User')
@@ -66,6 +71,10 @@ func newPeerOperationFixture(t *testing.T, maxPeers int) peerOperationFixture {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM vpn_servers WHERE id = $1`, fixture.serverID)
 	})
 	return fixture
+}
+
+func (f peerOperationFixture) operationRepo() *repo.PeerOperationRepo {
+	return repo.NewPeerOperationRepo(f.pool, f.cipher)
 }
 
 func operationKey(fill byte) string {
@@ -107,9 +116,22 @@ func completeFixtureConnect(t *testing.T, operationRepo *repo.PeerOperationRepo,
 
 func TestPeerOperationConnectPersistsAndRetriesExactly(t *testing.T) {
 	fixture := newPeerOperationFixture(t, 1)
-	operationRepo := repo.NewPeerOperationRepo(fixture.pool)
+	operationRepo := fixture.operationRepo()
 	key := operationKey(1)
 	result := beginFixtureConnect(t, fixture, operationRepo, key)
+	var operationLegacy string
+	var operationCiphertext []byte
+	var operationVersion *int16
+	if err := fixture.pool.QueryRow(context.Background(), `
+		SELECT preshared_key, preshared_key_ciphertext, preshared_key_version
+		FROM peer_operations WHERE id = $1`, result.Operation.ID).Scan(
+		&operationLegacy, &operationCiphertext, &operationVersion,
+	); err != nil {
+		t.Fatalf("load protected operation PSK: %v", err)
+	}
+	if operationLegacy != "" || len(operationCiphertext) == 0 || operationVersion == nil || *operationVersion != dataencryption.CurrentVersion {
+		t.Fatalf("operation PSK was not stored exclusively as versioned ciphertext")
+	}
 
 	var currentPeers int
 	if err := fixture.pool.QueryRow(context.Background(), `
@@ -131,6 +153,23 @@ func TestPeerOperationConnectPersistsAndRetriesExactly(t *testing.T) {
 	peer, previousPeer := completeFixtureConnect(t, operationRepo, result.Operation.ID, "10.90.0.2/32")
 	if previousPeer != nil || peer.ProvisionOperationID == nil || *peer.ProvisionOperationID != result.Operation.ID {
 		t.Fatalf("completed peer does not retain operation ownership: peer=%#v previous=%#v", peer, previousPeer)
+	}
+	ordinaryPeer, err := repo.NewPeerRepo(fixture.pool, fixture.cipher).GetByID(context.Background(), peer.ID)
+	if err != nil || ordinaryPeer.PresharedKey != "" {
+		t.Fatalf("ordinary peer read exposed PSK: peer=%#v err=%v", ordinaryPeer, err)
+	}
+	exportPeer, err := repo.NewPeerRepo(fixture.pool, fixture.cipher).GetByIDForPresharedKeyExport(context.Background(), peer.ID, fixture.userID, false)
+	if err != nil || exportPeer.PresharedKey != operationKey(200) {
+		t.Fatalf("authorized peer export did not decrypt PSK: peer=%#v err=%v", exportPeer, err)
+	}
+	wrongCipher, _ := dataencryption.New([]byte("abcdef0123456789abcdef0123456789"))
+	_, err = repo.NewPeerRepo(fixture.pool, wrongCipher).GetByIDForPresharedKeyExport(context.Background(), peer.ID, uuid.New(), false)
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("unauthorized export loaded encrypted material: %v", err)
+	}
+	_, err = repo.NewPeerRepo(fixture.pool, wrongCipher).GetByIDForPresharedKeyExport(context.Background(), peer.ID, fixture.userID, false)
+	if err == nil || strings.Contains(err.Error(), operationKey(200)) {
+		t.Fatalf("wrong-key export error was unsafe: %v", err)
 	}
 
 	completed, retryPeer, err := operationRepo.FindCurrentByKey(context.Background(), fixture.userID, key)
@@ -155,7 +194,7 @@ func TestPeerOperationConnectPersistsAndRetriesExactly(t *testing.T) {
 
 func TestPeerOperationReplacementWorksAtQuotaAndCapacityLimit(t *testing.T) {
 	fixture := newPeerOperationFixture(t, 1)
-	operationRepo := repo.NewPeerOperationRepo(fixture.pool)
+	operationRepo := fixture.operationRepo()
 	first := beginFixtureConnect(t, fixture, operationRepo, operationKey(2))
 	firstPeer, _ := completeFixtureConnect(t, operationRepo, first.Operation.ID, "10.90.0.3/32")
 
@@ -199,7 +238,7 @@ func TestPeerOperationReplacementWorksAtQuotaAndCapacityLimit(t *testing.T) {
 
 func TestPeerOperationPersistsObservedLegacyOwner(t *testing.T) {
 	fixture := newPeerOperationFixture(t, 1)
-	operationRepo := repo.NewPeerOperationRepo(fixture.pool)
+	operationRepo := fixture.operationRepo()
 	if _, err := fixture.pool.Exec(context.Background(), `
 		INSERT INTO peers (
 			user_id, server_id, public_key, assigned_ip, device_name, device_id
@@ -235,7 +274,7 @@ func TestPeerOperationPersistsObservedLegacyOwner(t *testing.T) {
 
 func TestPeerOperationCrossServerReplacementMovesCapacityAtomically(t *testing.T) {
 	fixture := newPeerOperationFixture(t, 1)
-	operationRepo := repo.NewPeerOperationRepo(fixture.pool)
+	operationRepo := fixture.operationRepo()
 	first := beginFixtureConnect(t, fixture, operationRepo, operationKey(30))
 	completeFixtureConnect(t, operationRepo, first.Operation.ID, "10.90.0.30/32")
 
@@ -310,7 +349,7 @@ func TestPeerOperationCrossServerReplacementMovesCapacityAtomically(t *testing.T
 
 func TestPeerOperationDefinitiveFailureReleasesReservation(t *testing.T) {
 	fixture := newPeerOperationFixture(t, 1)
-	operationRepo := repo.NewPeerOperationRepo(fixture.pool)
+	operationRepo := fixture.operationRepo()
 	result := beginFixtureConnect(t, fixture, operationRepo, operationKey(4))
 	if err := operationRepo.FailDefinitively(context.Background(), result.Operation.ID, errors.New("Core rejected key")); err != nil {
 		t.Fatalf("FailDefinitively: %v", err)
@@ -333,7 +372,7 @@ func TestPeerOperationDefinitiveFailureReleasesReservation(t *testing.T) {
 
 func TestPeerOperationPendingReservationCountsTowardDeviceQuota(t *testing.T) {
 	fixture := newPeerOperationFixture(t, 2)
-	operationRepo := repo.NewPeerOperationRepo(fixture.pool)
+	operationRepo := fixture.operationRepo()
 	pending := beginFixtureConnect(t, fixture, operationRepo, operationKey(40))
 
 	otherInstanceID := uuid.New()
@@ -359,7 +398,7 @@ func TestPeerOperationPendingReservationCountsTowardDeviceQuota(t *testing.T) {
 
 func TestPeerOperationConcurrentDeviceRequestsHaveOneWinner(t *testing.T) {
 	fixture := newPeerOperationFixture(t, 2)
-	operationRepo := repo.NewPeerOperationRepo(fixture.pool)
+	operationRepo := fixture.operationRepo()
 
 	results := make([]*repo.BeginConnectResult, 2)
 	errorsSeen := make([]error, 2)
@@ -404,7 +443,7 @@ func TestPeerOperationConcurrentDeviceRequestsHaveOneWinner(t *testing.T) {
 
 func TestPeerOperationRechecksQuotaBeforeCapacity(t *testing.T) {
 	fixture := newPeerOperationFixture(t, 1)
-	operationRepo := repo.NewPeerOperationRepo(fixture.pool)
+	operationRepo := fixture.operationRepo()
 	first := beginFixtureConnect(t, fixture, operationRepo, operationKey(20))
 	completeFixtureConnect(t, operationRepo, first.Operation.ID, "10.90.0.20/32")
 
@@ -442,7 +481,7 @@ func TestPeerOperationRechecksQuotaBeforeCapacity(t *testing.T) {
 
 func TestPeerOperationDisconnectIsDurableIdempotentAndRecounts(t *testing.T) {
 	fixture := newPeerOperationFixture(t, 1)
-	operationRepo := repo.NewPeerOperationRepo(fixture.pool)
+	operationRepo := fixture.operationRepo()
 	connect := beginFixtureConnect(t, fixture, operationRepo, operationKey(70))
 	peer, _ := completeFixtureConnect(t, operationRepo, connect.Operation.ID, "10.90.0.70/32")
 
@@ -488,7 +527,7 @@ func TestPeerOperationDisconnectIsDurableIdempotentAndRecounts(t *testing.T) {
 
 func TestCompletedConnectCannotCrossConcurrentAccessRevocation(t *testing.T) {
 	fixture := newPeerOperationFixture(t, 1)
-	operationRepo := repo.NewPeerOperationRepo(fixture.pool)
+	operationRepo := fixture.operationRepo()
 	pending := beginFixtureConnect(t, fixture, operationRepo, operationKey(71))
 	if err := operationRepo.MarkCoreApplied(context.Background(), pending.Operation.ID, "10.90.0.71/32"); err != nil {
 		t.Fatalf("MarkCoreApplied: %v", err)
@@ -519,7 +558,7 @@ func TestCompletedConnectCannotCrossConcurrentAccessRevocation(t *testing.T) {
 
 func TestAdministrativeDeletionRequiresConvergedAccess(t *testing.T) {
 	fixture := newPeerOperationFixture(t, 1)
-	operationRepo := repo.NewPeerOperationRepo(fixture.pool)
+	operationRepo := fixture.operationRepo()
 	connect := beginFixtureConnect(t, fixture, operationRepo, operationKey(72))
 	peer, _ := completeFixtureConnect(t, operationRepo, connect.Operation.ID, "10.90.0.72/32")
 	userRepo := repo.NewUserRepo(fixture.pool)
@@ -540,7 +579,7 @@ func TestAdministrativeDeletionRequiresConvergedAccess(t *testing.T) {
 
 func TestServerDrainPersistsUntilSessionsConverge(t *testing.T) {
 	fixture := newPeerOperationFixture(t, 1)
-	operationRepo := repo.NewPeerOperationRepo(fixture.pool)
+	operationRepo := fixture.operationRepo()
 	connect := beginFixtureConnect(t, fixture, operationRepo, operationKey(73))
 	peer, _ := completeFixtureConnect(t, operationRepo, connect.Operation.ID, "10.90.0.73/32")
 	serverRepo := repo.NewServerRepo(fixture.pool)

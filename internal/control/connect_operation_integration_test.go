@@ -62,7 +62,10 @@ func TestConnectPendingOperationReturnsRetryableConflict(t *testing.T) {
 			WHERE id = $1`, operationID)
 	})
 
-	handler := control.NewHandler(pool, &config.Config{MaxDevicesPerUser: 5})
+	handler := control.NewHandler(pool, &config.Config{
+		MaxDevicesPerUser:        5,
+		ControlDataEncryptionKey: []byte("0123456789abcdef0123456789abcdef"),
+	})
 	request := withUser(httptest.NewRequest(http.MethodPost, "/api/v1/control/connections", jsonBody(t, map[string]any{
 		"server_id":  serverID.String(),
 		"public_key": publicKey,

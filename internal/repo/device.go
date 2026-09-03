@@ -98,8 +98,9 @@ func (r *DeviceRepo) RevokeForCleanup(ctx context.Context, userID, deviceID uuid
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE peers
-		SET preshared_key = ''
-		WHERE user_id = $1 AND device_id = $2 AND preshared_key <> ''`, userID, deviceID); err != nil {
+		SET preshared_key = '', preshared_key_ciphertext = NULL, preshared_key_version = NULL
+		WHERE user_id = $1 AND device_id = $2
+		  AND (preshared_key <> '' OR preshared_key_ciphertext IS NOT NULL)`, userID, deviceID); err != nil {
 		return nil, fmt.Errorf("invalidate device session material: %w", err)
 	}
 

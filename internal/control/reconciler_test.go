@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/goastian/midori-vpn-core/internal/control"
+	"github.com/goastian/midori-vpn-core/internal/dataencryption"
 	"github.com/goastian/midori-vpn-core/internal/models"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 )
@@ -20,6 +21,7 @@ type reconciliationFixture struct {
 	userID   uuid.UUID
 	serverID uuid.UUID
 	device   *models.Device
+	cipher   *dataencryption.Cipher
 }
 
 func newReconciliationFixture(t *testing.T) reconciliationFixture {
@@ -27,6 +29,7 @@ func newReconciliationFixture(t *testing.T) reconciliationFixture {
 	pool := handlerTestPool(t)
 	ctx := context.Background()
 	fixture := reconciliationFixture{pool: pool}
+	fixture.cipher, _ = dataencryption.New([]byte("0123456789abcdef0123456789abcdef"))
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO users (authentik_uid, email, display_name)
 		VALUES ($1, $2, 'Reconciliation Test User') RETURNING id`,
@@ -62,7 +65,7 @@ func newReconciliationFixture(t *testing.T) reconciliationFixture {
 
 func (f reconciliationFixture) begin(t *testing.T, fill byte) *repo.BeginConnectResult {
 	t.Helper()
-	result, err := repo.NewPeerOperationRepo(f.pool).BeginConnect(context.Background(), repo.BeginConnectParams{
+	result, err := repo.NewPeerOperationRepo(f.pool, f.cipher).BeginConnect(context.Background(), repo.BeginConnectParams{
 		OperationID: uuid.New(), UserID: f.userID, Device: f.device,
 		ServerID: f.serverID, PublicKey: connectOperationKey(fill),
 		PresharedKey: connectOperationKey(fill + 100), MaxDevices: 1,
@@ -75,7 +78,7 @@ func (f reconciliationFixture) begin(t *testing.T, fill byte) *repo.BeginConnect
 
 func (f reconciliationFixture) complete(t *testing.T, result *repo.BeginConnectResult, assignedIP string) (*models.Peer, *models.Peer) {
 	t.Helper()
-	operations := repo.NewPeerOperationRepo(f.pool)
+	operations := repo.NewPeerOperationRepo(f.pool, f.cipher)
 	if err := operations.MarkCoreApplied(context.Background(), result.Operation.ID, assignedIP); err != nil {
 		t.Fatalf("MarkCoreApplied: %v", err)
 	}
@@ -159,7 +162,7 @@ func TestReconcilerRecoversStalePendingOperation(t *testing.T) {
 	fixture.makeStale(t, pending.Operation.ID)
 	core := newFakeReconciliationCore(fixture.serverID)
 
-	report := control.NewReconciler(fixture.pool, core).RunOnce(context.Background())
+	report := control.NewReconciler(fixture.pool, core, fixture.cipher).RunOnce(context.Background())
 
 	var state models.PeerOperationState
 	var activePeers, currentPeers, attempts int
@@ -189,7 +192,7 @@ func TestReconcilerCompletesAlreadyAppliedOperationWithoutAdding(t *testing.T) {
 		PublicKey: pending.Operation.PublicKey, OperationID: pending.Operation.ID.String(), AllowedIP: "10.99.0.12/32",
 	}}
 
-	control.NewReconciler(fixture.pool, core).RunOnce(context.Background())
+	control.NewReconciler(fixture.pool, core, fixture.cipher).RunOnce(context.Background())
 
 	var state models.PeerOperationState
 	if err := fixture.pool.QueryRow(context.Background(), `SELECT state FROM peer_operations WHERE id = $1`, pending.Operation.ID).Scan(&state); err != nil {
@@ -207,7 +210,7 @@ func TestReconcilerPreservesDatabaseStateWhenCoreObservationFails(t *testing.T) 
 	core := newFakeReconciliationCore(fixture.serverID)
 	core.listErrors[fixture.serverID] = errors.New("Core unavailable")
 
-	report := control.NewReconciler(fixture.pool, core).RunOnce(context.Background())
+	report := control.NewReconciler(fixture.pool, core, fixture.cipher).RunOnce(context.Background())
 
 	var active bool
 	var currentPeers int
@@ -233,7 +236,7 @@ func TestReconcilerDeactivatesAbsentPeerAndRemovesExactOrphan(t *testing.T) {
 		PublicKey: orphanKey, OperationID: orphanOperation, AllowedIP: "10.99.0.15/32",
 	}}
 
-	report := control.NewReconciler(fixture.pool, core).RunOnce(context.Background())
+	report := control.NewReconciler(fixture.pool, core, fixture.cipher).RunOnce(context.Background())
 
 	var active bool
 	var currentPeers int
@@ -267,7 +270,7 @@ func TestReconcilerCompletesPendingPreviousPeerCleanup(t *testing.T) {
 		{PublicKey: newPeer.PublicKey, OperationID: replacement.Operation.ID.String(), AllowedIP: newPeer.AssignedIP},
 	}
 
-	report := control.NewReconciler(fixture.pool, core).RunOnce(context.Background())
+	report := control.NewReconciler(fixture.pool, core, fixture.cipher).RunOnce(context.Background())
 
 	var state models.PeerOperationState
 	if err := fixture.pool.QueryRow(context.Background(), `SELECT state FROM peer_operations WHERE id = $1`, replacement.Operation.ID).Scan(&state); err != nil {
@@ -292,7 +295,7 @@ func TestReconcilerDoesNotDuplicateFailedDurableCleanupAsOrphan(t *testing.T) {
 		{PublicKey: newPeer.PublicKey, OperationID: replacement.Operation.ID.String(), AllowedIP: newPeer.AssignedIP},
 	}
 
-	report := control.NewReconciler(fixture.pool, core).RunOnce(context.Background())
+	report := control.NewReconciler(fixture.pool, core, fixture.cipher).RunOnce(context.Background())
 
 	var state models.PeerOperationState
 	if err := fixture.pool.QueryRow(context.Background(), `SELECT state FROM peer_operations WHERE id = $1`, replacement.Operation.ID).Scan(&state); err != nil {
@@ -324,7 +327,7 @@ func TestReconcilerCompletesDurableDisconnectWithExactOwner(t *testing.T) {
 	fixture := newReconciliationFixture(t)
 	connected := fixture.begin(t, 74)
 	peer, _ := fixture.complete(t, connected, "10.99.0.74/32")
-	operations := repo.NewPeerOperationRepo(fixture.pool)
+	operations := repo.NewPeerOperationRepo(fixture.pool, fixture.cipher)
 	disconnect, err := operations.BeginDisconnect(context.Background(), peer.ID)
 	if err != nil {
 		t.Fatalf("BeginDisconnect: %v", err)
@@ -335,7 +338,7 @@ func TestReconcilerCompletesDurableDisconnectWithExactOwner(t *testing.T) {
 		PublicKey: peer.PublicKey, OperationID: connected.Operation.ID.String(), AllowedIP: peer.AssignedIP,
 	}}
 
-	report := control.NewReconciler(fixture.pool, core).RunOnce(context.Background())
+	report := control.NewReconciler(fixture.pool, core, fixture.cipher).RunOnce(context.Background())
 
 	var state models.PeerOperationState
 	var active bool
@@ -359,7 +362,7 @@ func TestReconcilerCompletesDurableDisconnectWithExactOwner(t *testing.T) {
 func TestReconcilerCancelsCoreAppliedConnectAfterBan(t *testing.T) {
 	fixture := newReconciliationFixture(t)
 	pending := fixture.begin(t, 75)
-	if err := repo.NewPeerOperationRepo(fixture.pool).MarkCoreApplied(context.Background(), pending.Operation.ID, "10.99.0.75/32"); err != nil {
+	if err := repo.NewPeerOperationRepo(fixture.pool, fixture.cipher).MarkCoreApplied(context.Background(), pending.Operation.ID, "10.99.0.75/32"); err != nil {
 		t.Fatalf("MarkCoreApplied: %v", err)
 	}
 	if _, err := fixture.pool.Exec(context.Background(), `
@@ -372,7 +375,7 @@ func TestReconcilerCancelsCoreAppliedConnectAfterBan(t *testing.T) {
 		PublicKey: pending.Operation.PublicKey, OperationID: pending.Operation.ID.String(), AllowedIP: "10.99.0.75/32",
 	}}
 
-	control.NewReconciler(fixture.pool, core).RunOnce(context.Background())
+	control.NewReconciler(fixture.pool, core, fixture.cipher).RunOnce(context.Background())
 
 	var state models.PeerOperationState
 	var currentPeers int

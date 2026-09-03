@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/goastian/midori-vpn-core/internal/dataencryption"
 	"github.com/goastian/midori-vpn-core/internal/models"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 )
@@ -86,16 +87,23 @@ type Reconciler struct {
 	core          ReconciliationCore
 }
 
-func NewReconciler(pool *pgxpool.Pool, core ReconciliationCore) *Reconciler {
+func NewReconciler(pool *pgxpool.Pool, core ReconciliationCore, dataCipher ...*dataencryption.Cipher) *Reconciler {
 	if core == nil {
 		core = productionReconciliationCore{}
 	}
 	return &Reconciler{
 		serverRepo:    repo.NewServerRepo(pool),
 		peerRepo:      repo.NewPeerRepo(pool),
-		operationRepo: repo.NewPeerOperationRepo(pool),
+		operationRepo: repo.NewPeerOperationRepo(pool, firstReconcilerCipher(dataCipher)),
 		core:          core,
 	}
+}
+
+func firstReconcilerCipher(ciphers []*dataencryption.Cipher) *dataencryption.Cipher {
+	if len(ciphers) == 0 {
+		return nil
+	}
+	return ciphers[0]
 }
 
 type serverObservation struct {

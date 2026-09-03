@@ -90,11 +90,16 @@ Important security groups:
 - `CONTROL_NODE_ID`, `CONTROL_NODE_PRIVATE_KEY`, `NODE_AUTHORIZED_KEYS`: Ed25519 node identities.
 - `NODE_AUTH_REDIS_URL`: shared nonce/revocation state for signed requests.
 - `CREDENTIAL_SIGNING_SECRET`: short-lived proxy and tunnel credentials.
+- `CONTROL_DATA_ENCRYPTION_KEY`: principal-only, canonical base64 for exactly 32 random bytes; encrypts recoverable WireGuard PSKs in PostgreSQL and must be backed up separately.
 - `DATABASE_URL` / `POSTGRES_*` and authenticated `REDIS_URL` / `REDIS_*`.
 - `WSS_TUNNEL_*` and `MASQUE_*`: disabled explicitly unless their gateways are configured.
 - `CORE_ALLOWED_HOSTS`, `TRUSTED_PROXIES`, `CORS_ALLOWED_ORIGINS`: mandatory production boundaries.
 
-Do not place secrets in image build arguments, Git, logs or release artifacts.
+Do not place secrets in image build arguments, Git, logs or release artifacts. The
+first Control startup after migration 16 encrypts legacy PSKs in bounded,
+restart-safe batches and clears each plaintext value only after an authenticated
+round trip. Validate that migration on staging and back up both PostgreSQL and
+`CONTROL_DATA_ENCRYPTION_KEY` before migrating the principal.
 
 ## Rootless development and validation
 

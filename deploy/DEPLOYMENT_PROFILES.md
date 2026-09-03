@@ -61,6 +61,7 @@ The principal has the cluster signing identity:
 CONTROL_NODE_ID=<cluster-control-identity>
 CONTROL_NODE_PRIVATE_KEY=<private-ed25519-key>
 NODE_AUTHORIZED_KEYS=<cluster-control-identity>=<public-ed25519-key>
+CONTROL_DATA_ENCRYPTION_KEY=<canonical-base64-32-byte-key>
 ```
 
 The private key is present only on the principal. The local Core trusts its
@@ -76,6 +77,7 @@ Every additional server runs a rootless Core without `DATABASE_URL`,
 ```text
 CONTROL_NODE_ID=
 CONTROL_NODE_PRIVATE_KEY=
+CONTROL_DATA_ENCRYPTION_KEY=
 NODE_AUTHORIZED_KEYS=<cluster-control-identity>=<public-ed25519-key>
 NODE_AUTH_REDIS_URL=<node-local-authenticated-redis-url>
 ```
@@ -96,8 +98,8 @@ single-use nonce. “Connecting a Core to Control” therefore consists of:
 4. registering the server and its explicit transport rows in Control; and
 5. verifying signed add/remove-peer and statistics calls before activation.
 
-No database credential, Authentik secret or Control private signing key is
-copied to a regional node. Node management ports are reachable only through
+No database credential, Authentik secret, Control data-encryption key or Control
+private signing key is copied to a regional node. Node management ports are reachable only through
 TLS and an ingress allowlist restricted to the principal server.
 
 The current admin identity registry is local to the Redis instance used by its

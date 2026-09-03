@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/goastian/midori-vpn-core/internal/dataencryption"
 	"github.com/goastian/midori-vpn-core/internal/models"
 )
 
@@ -50,7 +51,8 @@ type BeginDisconnectResult struct {
 }
 
 type PeerOperationRepo struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	cipher *dataencryption.Cipher
 }
 
 type PendingCleanupTarget struct {
@@ -59,21 +61,29 @@ type PendingCleanupTarget struct {
 	OperationID string
 }
 
-func NewPeerOperationRepo(pool *pgxpool.Pool) *PeerOperationRepo {
-	return &PeerOperationRepo{pool: pool}
+func NewPeerOperationRepo(pool *pgxpool.Pool, cipher ...*dataencryption.Cipher) *PeerOperationRepo {
+	var dataCipher *dataencryption.Cipher
+	if len(cipher) > 0 {
+		dataCipher = cipher[0]
+	}
+	return &PeerOperationRepo{pool: pool, cipher: dataCipher}
 }
 
 const operationColumns = `id, action, state, user_id, device_id, server_id,
-	public_key, preshared_key, pq_kem_ciphertext, previous_peer_id,
+	public_key, preshared_key, preshared_key_ciphertext, COALESCE(preshared_key_version, 0),
+	pq_kem_ciphertext, previous_peer_id,
 	previous_operation_id, COALESCE(assigned_ip, ''), capacity_reserved, attempts, last_error,
 	core_applied_at, completed_at, created_at, updated_at`
 
-func scanPeerOperation(row interface{ Scan(...interface{}) error }) (*models.PeerOperation, error) {
+func (r *PeerOperationRepo) scanPeerOperation(row interface{ Scan(...interface{}) error }) (*models.PeerOperation, error) {
 	var operation models.PeerOperation
+	var legacyPresharedKey string
+	var ciphertext []byte
+	var version int16
 	if err := row.Scan(
 		&operation.ID, &operation.Action, &operation.State, &operation.UserID,
 		&operation.DeviceID, &operation.ServerID, &operation.PublicKey,
-		&operation.PresharedKey, &operation.PQKEMCiphertext,
+		&legacyPresharedKey, &ciphertext, &version, &operation.PQKEMCiphertext,
 		&operation.PreviousPeerID, &operation.PreviousOperationID, &operation.AssignedIP,
 		&operation.CapacityReserved, &operation.Attempts,
 		&operation.LastError, &operation.CoreAppliedAt, &operation.CompletedAt,
@@ -81,11 +91,16 @@ func scanPeerOperation(row interface{ Scan(...interface{}) error }) (*models.Pee
 	); err != nil {
 		return nil, err
 	}
+	presharedKey, err := openStoredPresharedKey(r.cipher, dataencryption.PeerOperationPresharedKey, operation.ID, legacyPresharedKey, ciphertext, version)
+	if err != nil {
+		return nil, err
+	}
+	operation.PresharedKey = presharedKey
 	return &operation, nil
 }
 
 const operationPeerColumns = `id, user_id, server_id, public_key,
-	COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
+	''::text, assigned_ip, is_active, device_name, device_id,
 	provision_operation_id, last_handshake, bytes_sent, bytes_received,
 	created_at, expires_at`
 
@@ -106,7 +121,7 @@ func scanOperationPeer(row interface{ Scan(...interface{}) error }) (*models.Pee
 // still owns the active peer. Historical completed operations do not block a
 // later reuse after their peer has been retired.
 func (r *PeerOperationRepo) FindCurrentByKey(ctx context.Context, userID uuid.UUID, publicKey string) (*models.PeerOperation, *models.Peer, error) {
-	operation, err := scanPeerOperation(r.pool.QueryRow(ctx, `
+	operation, err := r.scanPeerOperation(r.pool.QueryRow(ctx, `
 		SELECT `+operationColumns+`
 		FROM peer_operations operation
 		WHERE operation.user_id = $1 AND operation.public_key = $2
@@ -133,6 +148,7 @@ func (r *PeerOperationRepo) FindCurrentByKey(ctx context.Context, userID uuid.UU
 	if peerErr != nil {
 		return nil, nil, fmt.Errorf("load operation peer: %w", peerErr)
 	}
+	peer.PresharedKey = operation.PresharedKey
 	return operation, peer, nil
 }
 
@@ -142,6 +158,10 @@ func (r *PeerOperationRepo) FindCurrentByKey(ctx context.Context, userID uuid.UU
 func (r *PeerOperationRepo) BeginConnect(ctx context.Context, params BeginConnectParams) (*BeginConnectResult, error) {
 	if params.OperationID == uuid.Nil {
 		return nil, errors.New("connection operation ID is required")
+	}
+	ciphertext, version, err := sealStoredPresharedKey(r.cipher, dataencryption.PeerOperationPresharedKey, params.OperationID, params.PresharedKey)
+	if err != nil {
+		return nil, fmt.Errorf("protect connection operation PSK: %w", err)
 	}
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -174,11 +194,12 @@ func (r *PeerOperationRepo) BeginConnect(ctx context.Context, params BeginConnec
 		}
 		var operation *models.PeerOperation
 		if existingPeer.ProvisionOperationID != nil {
-			operation, err = scanPeerOperation(tx.QueryRow(ctx, `
+			operation, err = r.scanPeerOperation(tx.QueryRow(ctx, `
 				SELECT `+operationColumns+` FROM peer_operations WHERE id = $1`, *existingPeer.ProvisionOperationID))
 			if err != nil {
 				return nil, fmt.Errorf("load existing connection operation: %w", err)
 			}
+			existingPeer.PresharedKey = operation.PresharedKey
 		}
 		return &BeginConnectResult{Operation: operation, Device: params.Device, ExistingPeer: existingPeer}, nil
 	}
@@ -283,15 +304,16 @@ func (r *PeerOperationRepo) BeginConnect(ctx context.Context, params BeginConnec
 		previousPeerID = &previousPeer.ID
 		previousOperationID = previousPeer.ProvisionOperationID
 	}
-	operation, err := scanPeerOperation(tx.QueryRow(ctx, `
+	operation, err := r.scanPeerOperation(tx.QueryRow(ctx, `
 		INSERT INTO peer_operations (
 			id, action, state, user_id, device_id, server_id, public_key,
-			preshared_key, pq_kem_ciphertext, previous_peer_id,
+			preshared_key, preshared_key_ciphertext, preshared_key_version,
+			pq_kem_ciphertext, previous_peer_id,
 			previous_operation_id, capacity_reserved, attempts
-		) VALUES ($1, $2, 'pending', $3, $4, $5, $6, $7, $8, $9, $10, $11, 1)
+		) VALUES ($1, $2, 'pending', $3, $4, $5, $6, '', $7, $8, $9, $10, $11, $12, 1)
 		RETURNING `+operationColumns,
 		params.OperationID, action, params.UserID, device.ID, params.ServerID,
-		params.PublicKey, params.PresharedKey, params.PQKEMCiphertext,
+		params.PublicKey, ciphertext, nullableEncryptionVersion(version), params.PQKEMCiphertext,
 		previousPeerID, previousOperationID, capacityReserved))
 	if err != nil {
 		var pgError *pgconn.PgError
@@ -340,7 +362,7 @@ func (r *PeerOperationRepo) BeginDisconnect(ctx context.Context, peerID uuid.UUI
 	if peer.DeviceID == nil {
 		return nil, errors.New("active peer has no device identity")
 	}
-	existing, err := scanPeerOperation(tx.QueryRow(ctx, `
+	existing, err := r.scanPeerOperation(tx.QueryRow(ctx, `
 		SELECT `+operationColumns+` FROM peer_operations
 		WHERE action = 'disconnect' AND previous_peer_id = $1
 		  AND state IN ('pending', 'core_applied', 'cleanup_pending')
@@ -366,7 +388,7 @@ func (r *PeerOperationRepo) BeginDisconnect(ctx context.Context, peerID uuid.UUI
 	}
 
 	operationID := uuid.New()
-	operation, err := scanPeerOperation(tx.QueryRow(ctx, `
+	operation, err := r.scanPeerOperation(tx.QueryRow(ctx, `
 		INSERT INTO peer_operations (
 			id, action, state, user_id, device_id, server_id, public_key,
 			previous_peer_id, previous_operation_id, assigned_ip, attempts
@@ -449,7 +471,7 @@ func (r *PeerOperationRepo) CompleteConnect(ctx context.Context, operationID uui
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	operation, err := scanPeerOperation(tx.QueryRow(ctx, `
+	operation, err := r.scanPeerOperation(tx.QueryRow(ctx, `
 		SELECT `+operationColumns+` FROM peer_operations
 		WHERE id = $1 FOR UPDATE`, operationID))
 	if err != nil {
@@ -459,6 +481,9 @@ func (r *PeerOperationRepo) CompleteConnect(ctx context.Context, operationID uui
 		peer, peerErr := scanOperationPeer(tx.QueryRow(ctx, `
 			SELECT `+operationPeerColumns+` FROM peers
 			WHERE provision_operation_id = $1 AND is_active = TRUE`, operationID))
+		if peerErr == nil {
+			peer.PresharedKey = operation.PresharedKey
+		}
 		return peer, nil, peerErr
 	}
 	if operation.State != models.PeerOperationCoreApplied {
@@ -488,8 +513,20 @@ func (r *PeerOperationRepo) CompleteConnect(ctx context.Context, operationID uui
 			return nil, nil, fmt.Errorf("lock replaced peer: %w", err)
 		}
 		if previousPeer != nil && previousPeer.IsActive {
-			if _, err := tx.Exec(ctx, `UPDATE peers SET is_active = FALSE WHERE id = $1`, previousPeer.ID); err != nil {
+			if _, err := tx.Exec(ctx, `
+				UPDATE peers
+				SET is_active = FALSE, preshared_key = '',
+				    preshared_key_ciphertext = NULL, preshared_key_version = NULL
+				WHERE id = $1`, previousPeer.ID); err != nil {
 				return nil, nil, fmt.Errorf("retire previous peer: %w", err)
+			}
+			if previousPeer.ProvisionOperationID != nil {
+				if _, err := tx.Exec(ctx, `
+					UPDATE peer_operations
+					SET preshared_key = '', preshared_key_ciphertext = NULL, preshared_key_version = NULL
+					WHERE id = $1`, *previousPeer.ProvisionOperationID); err != nil {
+					return nil, nil, fmt.Errorf("retire previous operation PSK: %w", err)
+				}
 			}
 			if previousPeer.ServerID != operation.ServerID {
 				if _, err := tx.Exec(ctx, `
@@ -506,18 +543,25 @@ func (r *PeerOperationRepo) CompleteConnect(ctx context.Context, operationID uui
 	if err := tx.QueryRow(ctx, `SELECT reported_name FROM devices WHERE id = $1`, operation.DeviceID).Scan(&deviceName); err != nil {
 		return nil, nil, fmt.Errorf("load operation device name: %w", err)
 	}
+	peerID := uuid.New()
+	peerCiphertext, peerVersion, err := sealStoredPresharedKey(r.cipher, dataencryption.PeerPresharedKey, peerID, operation.PresharedKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("protect completed peer PSK: %w", err)
+	}
 	peer, err := scanOperationPeer(tx.QueryRow(ctx, `
 		INSERT INTO peers (
-			user_id, server_id, public_key, preshared_key, assigned_ip,
+			id, user_id, server_id, public_key, preshared_key,
+			preshared_key_ciphertext, preshared_key_version, assigned_ip,
 			device_name, device_id, provision_operation_id
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		) VALUES ($1, $2, $3, $4, '', $5, $6, $7, $8, $9, $10)
 		RETURNING `+operationPeerColumns,
-		operation.UserID, operation.ServerID, operation.PublicKey,
-		operation.PresharedKey, operation.AssignedIP, deviceName,
-		operation.DeviceID, operation.ID))
+		peerID, operation.UserID, operation.ServerID, operation.PublicKey,
+		peerCiphertext, nullableEncryptionVersion(peerVersion), operation.AssignedIP,
+		deviceName, operation.DeviceID, operation.ID))
 	if err != nil {
 		return nil, nil, fmt.Errorf("create completed peer: %w", err)
 	}
+	peer.PresharedKey = operation.PresharedKey
 	if _, err := tx.Exec(ctx, `
 		UPDATE peer_operations
 		SET state = CASE WHEN previous_peer_id IS NULL THEN 'completed' ELSE 'cleanup_pending' END,
@@ -541,7 +585,7 @@ func (r *PeerOperationRepo) CompleteDisconnect(ctx context.Context, operationID 
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	operation, err := scanPeerOperation(tx.QueryRow(ctx, `
+	operation, err := r.scanPeerOperation(tx.QueryRow(ctx, `
 		SELECT `+operationColumns+` FROM peer_operations WHERE id = $1 FOR UPDATE`, operationID))
 	if err != nil {
 		return nil, fmt.Errorf("lock disconnect operation: %w", err)
@@ -566,10 +610,23 @@ func (r *PeerOperationRepo) CompleteDisconnect(ctx context.Context, operationID 
 		return nil, fmt.Errorf("lock disconnect server: %w", err)
 	}
 	if peer.IsActive {
-		if _, err := tx.Exec(ctx, `UPDATE peers SET is_active = FALSE WHERE id = $1`, peer.ID); err != nil {
+		if _, err := tx.Exec(ctx, `
+			UPDATE peers
+			SET is_active = FALSE, preshared_key = '',
+			    preshared_key_ciphertext = NULL, preshared_key_version = NULL
+			WHERE id = $1`, peer.ID); err != nil {
 			return nil, fmt.Errorf("deactivate disconnected peer: %w", err)
 		}
 		peer.IsActive = false
+		peer.PresharedKey = ""
+	}
+	if peer.ProvisionOperationID != nil {
+		if _, err := tx.Exec(ctx, `
+			UPDATE peer_operations
+			SET preshared_key = '', preshared_key_ciphertext = NULL, preshared_key_version = NULL
+			WHERE id = $1`, *peer.ProvisionOperationID); err != nil {
+			return nil, fmt.Errorf("retire disconnected operation PSK: %w", err)
+		}
 	}
 	if _, err := tx.Exec(ctx, `UPDATE mesh_members SET peer_id = NULL WHERE peer_id = $1`, peer.ID); err != nil {
 		return nil, fmt.Errorf("detach disconnected peer from meshes: %w", err)
@@ -614,7 +671,7 @@ func (r *PeerOperationRepo) CancelDeniedConnect(ctx context.Context, operationID
 		return fmt.Errorf("begin denied connection cancellation: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	operation, err := scanPeerOperation(tx.QueryRow(ctx, `
+	operation, err := r.scanPeerOperation(tx.QueryRow(ctx, `
 		SELECT `+operationColumns+` FROM peer_operations WHERE id = $1 FOR UPDATE`, operationID))
 	if err != nil {
 		return fmt.Errorf("lock denied connection operation: %w", err)
@@ -624,13 +681,16 @@ func (r *PeerOperationRepo) CancelDeniedConnect(ctx context.Context, operationID
 		return ErrOperationState
 	}
 	if _, err := tx.Exec(ctx, `
-		UPDATE peers SET is_active = FALSE
+		UPDATE peers
+		SET is_active = FALSE, preshared_key = '',
+		    preshared_key_ciphertext = NULL, preshared_key_version = NULL
 		WHERE provision_operation_id = $1 AND is_active = TRUE`, operation.ID); err != nil {
 		return fmt.Errorf("retire denied connection peer: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE peer_operations
 		SET state = 'failed', capacity_reserved = FALSE,
+		    preshared_key = '', preshared_key_ciphertext = NULL, preshared_key_version = NULL,
 		    last_error = 'access revoked before completion', updated_at = NOW()
 		WHERE id = $1`, operation.ID); err != nil {
 		return fmt.Errorf("cancel denied connection operation: %w", err)
@@ -654,7 +714,7 @@ func (r *PeerOperationRepo) FailDefinitively(ctx context.Context, operationID uu
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	operation, err := scanPeerOperation(tx.QueryRow(ctx, `
+	operation, err := r.scanPeerOperation(tx.QueryRow(ctx, `
 		SELECT `+operationColumns+` FROM peer_operations WHERE id = $1 FOR UPDATE`, operationID))
 	if err != nil {
 		return err
@@ -673,6 +733,7 @@ func (r *PeerOperationRepo) FailDefinitively(ctx context.Context, operationID uu
 	if _, err := tx.Exec(ctx, `
 		UPDATE peer_operations
 		SET state = 'failed', capacity_reserved = FALSE,
+		    preshared_key = '', preshared_key_ciphertext = NULL, preshared_key_version = NULL,
 		    last_error = $2, updated_at = NOW()
 		WHERE id = $1`, operationID, message); err != nil {
 		return err
@@ -711,7 +772,7 @@ func (r *PeerOperationRepo) ListLiveByServer(ctx context.Context, serverID uuid.
 
 	operations := make([]models.PeerOperation, 0)
 	for rows.Next() {
-		operation, err := scanPeerOperation(rows)
+		operation, err := r.scanPeerOperation(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scan live peer operation: %w", err)
 		}
@@ -737,7 +798,7 @@ func (r *PeerOperationRepo) ListStaleLive(ctx context.Context, staleAfter time.D
 
 	operations := make([]models.PeerOperation, 0)
 	for rows.Next() {
-		operation, err := scanPeerOperation(rows)
+		operation, err := r.scanPeerOperation(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scan stale peer operation: %w", err)
 		}

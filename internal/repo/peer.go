@@ -9,49 +9,66 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/goastian/midori-vpn-core/internal/dataencryption"
 	"github.com/goastian/midori-vpn-core/internal/models"
 )
 
 type PeerRepo struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	cipher *dataencryption.Cipher
 }
 
-func NewPeerRepo(pool *pgxpool.Pool) *PeerRepo {
-	return &PeerRepo{pool: pool}
+func NewPeerRepo(pool *pgxpool.Pool, cipher ...*dataencryption.Cipher) *PeerRepo {
+	var dataCipher *dataencryption.Cipher
+	if len(cipher) > 0 {
+		dataCipher = cipher[0]
+	}
+	return &PeerRepo{pool: pool, cipher: dataCipher}
 }
 
 func (r *PeerRepo) Create(ctx context.Context, p *models.Peer) error {
+	if p.ID == uuid.Nil {
+		p.ID = uuid.New()
+	}
+	ciphertext, version, err := sealStoredPresharedKey(r.cipher, dataencryption.PeerPresharedKey, p.ID, p.PresharedKey)
+	if err != nil {
+		return fmt.Errorf("protect peer PSK: %w", err)
+	}
 	query := `
-		INSERT INTO peers (user_id, server_id, public_key, preshared_key, assigned_ip, device_name, device_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id, is_active, created_at
+		INSERT INTO peers (
+			id, user_id, server_id, public_key, preshared_key,
+			preshared_key_ciphertext, preshared_key_version,
+			assigned_ip, device_name, device_id
+		) VALUES ($1, $2, $3, $4, '', $5, $6, $7, $8, $9)
+		RETURNING is_active, created_at
 	`
 	return r.pool.QueryRow(ctx, query,
-		p.UserID, p.ServerID, p.PublicKey, p.PresharedKey, p.AssignedIP, p.DeviceName, p.DeviceID,
-	).Scan(&p.ID, &p.IsActive, &p.CreatedAt)
+		p.ID, p.UserID, p.ServerID, p.PublicKey, ciphertext,
+		nullableEncryptionVersion(version), p.AssignedIP, p.DeviceName, p.DeviceID,
+	).Scan(&p.IsActive, &p.CreatedAt)
 }
 
 func (r *PeerRepo) DeactivateByDeviceID(ctx context.Context, userID, deviceID uuid.UUID) error {
-	query := `UPDATE peers SET is_active = FALSE WHERE user_id = $1 AND device_id = $2 AND is_active = TRUE`
+	query := `UPDATE peers SET is_active = FALSE, preshared_key = '', preshared_key_ciphertext = NULL, preshared_key_version = NULL WHERE user_id = $1 AND device_id = $2 AND is_active = TRUE`
 	_, err := r.pool.Exec(ctx, query, userID, deviceID)
 	return err
 }
 
 func (r *PeerRepo) DeactivateByPublicKey(ctx context.Context, userID uuid.UUID, publicKey string) error {
-	query := `UPDATE peers SET is_active = FALSE WHERE user_id = $1 AND public_key = $2 AND is_active = TRUE`
+	query := `UPDATE peers SET is_active = FALSE, preshared_key = '', preshared_key_ciphertext = NULL, preshared_key_version = NULL WHERE user_id = $1 AND public_key = $2 AND is_active = TRUE`
 	_, err := r.pool.Exec(ctx, query, userID, publicKey)
 	return err
 }
 
 func (r *PeerRepo) DeactivateByServerAndIP(ctx context.Context, serverID uuid.UUID, assignedIP string) error {
-	query := `UPDATE peers SET is_active = FALSE WHERE server_id = $1 AND assigned_ip = $2 AND is_active = TRUE`
+	query := `UPDATE peers SET is_active = FALSE, preshared_key = '', preshared_key_ciphertext = NULL, preshared_key_version = NULL WHERE server_id = $1 AND assigned_ip = $2 AND is_active = TRUE`
 	_, err := r.pool.Exec(ctx, query, serverID, assignedIP)
 	return err
 }
 
 func (r *PeerRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.Peer, error) {
 	query := `
-		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
+		SELECT id, user_id, server_id, public_key, ''::text, assigned_ip, is_active, device_name, device_id,
 		       provision_operation_id, last_handshake, bytes_sent, bytes_received, created_at, expires_at
 		FROM peers WHERE id = $1
 	`
@@ -62,9 +79,41 @@ func (r *PeerRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.Peer, err
 	return p, nil
 }
 
+// GetByIDForPresharedKeyExport authorizes the owner (or an explicitly
+// privileged administrator) in PostgreSQL before recoverable key material is
+// loaded and decrypted. Ordinary peer reads never load it.
+func (r *PeerRepo) GetByIDForPresharedKeyExport(ctx context.Context, id, requesterID uuid.UUID, allowAnyUser bool) (*models.Peer, error) {
+	var peer models.Peer
+	var legacyPresharedKey string
+	var ciphertext []byte
+	var version int16
+	err := r.pool.QueryRow(ctx, `
+		SELECT id, user_id, server_id, public_key, preshared_key,
+		       preshared_key_ciphertext, COALESCE(preshared_key_version, 0),
+		       assigned_ip, is_active, device_name, device_id,
+		       provision_operation_id, last_handshake, bytes_sent, bytes_received,
+		       created_at, expires_at
+		FROM peers
+		WHERE id = $1 AND (user_id = $2 OR $3)`, id, requesterID, allowAnyUser).Scan(
+		&peer.ID, &peer.UserID, &peer.ServerID, &peer.PublicKey,
+		&legacyPresharedKey, &ciphertext, &version, &peer.AssignedIP,
+		&peer.IsActive, &peer.DeviceName, &peer.DeviceID,
+		&peer.ProvisionOperationID, &peer.LastHandshake, &peer.BytesSent,
+		&peer.BytesReceived, &peer.CreatedAt, &peer.ExpiresAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get peer for authorized export: %w", err)
+	}
+	peer.PresharedKey, err = openStoredPresharedKey(r.cipher, dataencryption.PeerPresharedKey, peer.ID, legacyPresharedKey, ciphertext, version)
+	if err != nil {
+		return nil, fmt.Errorf("open peer PSK for authorized export: %w", err)
+	}
+	return &peer, nil
+}
+
 func (r *PeerRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]models.Peer, error) {
 	query := `
-		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
+		SELECT id, user_id, server_id, public_key, ''::text, assigned_ip, is_active, device_name, device_id,
 		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
 		FROM peers WHERE user_id = $1 ORDER BY created_at DESC
 	`
@@ -93,7 +142,7 @@ func (r *PeerRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]models.P
 
 func (r *PeerRepo) ListActiveByUser(ctx context.Context, userID uuid.UUID) ([]models.Peer, error) {
 	query := `
-		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
+		SELECT id, user_id, server_id, public_key, ''::text, assigned_ip, is_active, device_name, device_id,
 		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
 		FROM peers
 		WHERE user_id = $1 AND is_active = TRUE
@@ -124,7 +173,10 @@ func (r *PeerRepo) ListActiveByUser(ctx context.Context, userID uuid.UUID) ([]mo
 // flags also cover a connection that completed concurrently with the action.
 func (r *PeerRepo) ListActiveWithDeniedAccess(ctx context.Context) ([]models.Peer, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT `+operationPeerColumns+`
+		SELECT peer.id, peer.user_id, peer.server_id, peer.public_key,
+		       ''::text, peer.assigned_ip, peer.is_active, peer.device_name,
+		       peer.device_id, peer.provision_operation_id, peer.last_handshake,
+		       peer.bytes_sent, peer.bytes_received, peer.created_at, peer.expires_at
 		FROM peers peer
 		JOIN users ON users.id = peer.user_id
 		JOIN devices ON devices.id = peer.device_id
@@ -151,7 +203,7 @@ func (r *PeerRepo) ListActiveWithDeniedAccess(ctx context.Context) ([]models.Pee
 
 func (r *PeerRepo) ListByDevice(ctx context.Context, userID, deviceID uuid.UUID, limit, offset int) ([]models.Peer, error) {
 	query := `
-		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
+		SELECT id, user_id, server_id, public_key, ''::text, assigned_ip, is_active, device_name, device_id,
 		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
 		FROM peers
 		WHERE user_id = $1 AND device_id = $2
@@ -189,7 +241,7 @@ func (r *PeerRepo) CountByDevice(ctx context.Context, userID, deviceID uuid.UUID
 
 func (r *PeerRepo) GetActiveByDevice(ctx context.Context, userID, deviceID uuid.UUID) (*models.Peer, error) {
 	peer, err := scanPeer(r.pool.QueryRow(ctx, `
-		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
+		SELECT id, user_id, server_id, public_key, ''::text, assigned_ip, is_active, device_name, device_id,
 		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
 		FROM peers
 		WHERE user_id = $1 AND device_id = $2 AND is_active = TRUE`, userID, deviceID))
@@ -213,7 +265,7 @@ func scanPeer(row interface{ Scan(...interface{}) error }) (*models.Peer, error)
 
 func (r *PeerRepo) ListByServer(ctx context.Context, serverID uuid.UUID) ([]models.Peer, error) {
 	query := `
-		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
+		SELECT id, user_id, server_id, public_key, ''::text, assigned_ip, is_active, device_name, device_id,
 		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
 		FROM peers WHERE server_id = $1 ORDER BY created_at DESC
 	`
@@ -242,7 +294,7 @@ func (r *PeerRepo) ListByServer(ctx context.Context, serverID uuid.UUID) ([]mode
 
 func (r *PeerRepo) ListAll(ctx context.Context, limit, offset int) ([]models.Peer, error) {
 	query := `
-		SELECT p.id, p.user_id, COALESCE(u.email, ''), p.server_id, p.public_key, COALESCE(p.preshared_key, ''), p.assigned_ip,
+		SELECT p.id, p.user_id, COALESCE(u.email, ''), p.server_id, p.public_key, ''::text, p.assigned_ip,
 		       p.is_active, p.device_name, p.device_id, p.last_handshake, p.bytes_sent, p.bytes_received,
 		       p.created_at, p.expires_at
 		FROM peers p
@@ -274,7 +326,7 @@ func (r *PeerRepo) ListAll(ctx context.Context, limit, offset int) ([]models.Pee
 
 func (r *PeerRepo) ListActiveByServer(ctx context.Context, serverID uuid.UUID) ([]models.Peer, error) {
 	query := `
-		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
+		SELECT id, user_id, server_id, public_key, ''::text, assigned_ip, is_active, device_name, device_id,
 		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
 		FROM peers WHERE server_id = $1 AND is_active = TRUE ORDER BY created_at DESC
 	`
@@ -303,7 +355,7 @@ func (r *PeerRepo) ListActiveByServer(ctx context.Context, serverID uuid.UUID) (
 
 func (r *PeerRepo) ListStale(ctx context.Context, noHandshakeSince time.Duration) ([]models.Peer, error) {
 	query := `
-		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
+		SELECT id, user_id, server_id, public_key, ''::text, assigned_ip, is_active, device_name, device_id,
 		       provision_operation_id, last_handshake, bytes_sent, bytes_received, created_at, expires_at
 		FROM peers
 		WHERE is_active = TRUE
@@ -351,7 +403,7 @@ func (r *PeerRepo) DeactivateAndRecount(ctx context.Context, peerID uuid.UUID) (
 		return false, fmt.Errorf("lock retiring peer server: %w", err)
 	}
 	if active {
-		if _, err := tx.Exec(ctx, `UPDATE peers SET is_active = FALSE WHERE id = $1`, peerID); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE peers SET is_active = FALSE, preshared_key = '', preshared_key_ciphertext = NULL, preshared_key_version = NULL WHERE id = $1`, peerID); err != nil {
 			return false, fmt.Errorf("retire peer: %w", err)
 		}
 	}
@@ -371,7 +423,7 @@ func (r *PeerRepo) UpdateStats(ctx context.Context, id uuid.UUID, bytesSent, byt
 }
 
 func (r *PeerRepo) Deactivate(ctx context.Context, id uuid.UUID) error {
-	_, err := r.pool.Exec(ctx, `UPDATE peers SET is_active = FALSE WHERE id = $1`, id)
+	_, err := r.pool.Exec(ctx, `UPDATE peers SET is_active = FALSE, preshared_key = '', preshared_key_ciphertext = NULL, preshared_key_version = NULL WHERE id = $1`, id)
 	return err
 }
 
@@ -453,7 +505,7 @@ func (r *PeerRepo) ReconcileServer(ctx context.Context, serverID uuid.UUID, obse
 				result.ActivePeers = append(result.ActivePeers, *peer)
 				continue
 			}
-			if _, err := tx.Exec(ctx, `UPDATE peers SET is_active = FALSE WHERE id = $1`, peer.ID); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE peers SET is_active = FALSE, preshared_key = '', preshared_key_ciphertext = NULL, preshared_key_version = NULL WHERE id = $1`, peer.ID); err != nil {
 				return nil, fmt.Errorf("deactivate absent server peer: %w", err)
 			}
 			result.DeactivatedPeers++
@@ -531,7 +583,7 @@ func (r *PeerRepo) CountByUser(ctx context.Context, userID uuid.UUID) (int, erro
 // we return the existing allocation instead of counting it as a new device.
 func (r *PeerRepo) GetActiveByUserAndPublicKey(ctx context.Context, userID uuid.UUID, publicKey string) (*models.Peer, error) {
 	query := `
-		SELECT id, user_id, server_id, public_key, COALESCE(preshared_key, ''), assigned_ip, is_active, device_name, device_id,
+		SELECT id, user_id, server_id, public_key, ''::text, assigned_ip, is_active, device_name, device_id,
 		       last_handshake, bytes_sent, bytes_received, created_at, expires_at
 		FROM peers
 		WHERE user_id = $1 AND public_key = $2 AND is_active = TRUE

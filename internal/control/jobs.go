@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/goastian/midori-vpn-core/internal/dataencryption"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 )
 
@@ -23,10 +24,10 @@ const (
 
 // StartStatsSync reconciles immediately and every 60 seconds, then broadcasts
 // the resulting aggregate statistics to WebSocket clients.
-func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub) {
+func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub, dataCipher ...*dataencryption.Cipher) {
 	serverRepo := repo.NewServerRepo(pool)
 	peerRepo := repo.NewPeerRepo(pool)
-	reconciler := NewReconciler(pool, nil)
+	reconciler := NewReconciler(pool, nil, firstReconcilerCipher(dataCipher))
 
 	slog.Info("job started", "job", "peer-reconciliation", "interval", statsSyncInterval.String())
 	ticker := time.NewTicker(statsSyncInterval)
