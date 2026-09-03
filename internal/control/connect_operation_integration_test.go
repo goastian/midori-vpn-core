@@ -30,8 +30,8 @@ func TestConnectPendingOperationReturnsRetryableConflict(t *testing.T) {
 
 	var serverID uuid.UUID
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO vpn_servers (name, host, current_peers)
-		VALUES ($1, 'pending-operation.test.invalid', 1)
+		INSERT INTO vpn_servers (name, host, current_peers, legacy_node_unbound)
+		VALUES ($1, 'pending-operation.test.invalid', 1, TRUE)
 		RETURNING id`, "Pending "+uuid.NewString()).Scan(&serverID); err != nil {
 		t.Fatalf("insert operation server: %v", err)
 	}

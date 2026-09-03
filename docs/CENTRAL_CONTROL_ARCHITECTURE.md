@@ -294,10 +294,25 @@ and `retired`. A node is eligible for a new placement only when it is active,
 its observed revision matches the desired revision, its report is fresh and at
 least one requested transport is healthy and certified.
 
-The current schema has `vpn_servers` and `vpn_server_transports` but no cluster,
-revision, version or durable last-seen model. Admin ping is an on-demand probe,
-not a heartbeat. Those additions require a future migration and API contract
-update; they are not silently emulated with transport metadata.
+Migration 17 adds the durable `clusters`, `core_nodes`,
+`node_enrollment_tokens`, `desired_revisions` and `node_observations` records,
+plus the one-to-one `vpn_servers.node_id` binding. Enrollment tokens are stored
+only by a 32-byte hash. The normal observation write path preserves history and
+updates the node's bounded last-seen/version summary transactionally.
+
+Placement now fails closed for a modeled node unless the cluster and node are
+active, heartbeat and transport checks are fresh, the latest desired and
+observed revisions match, Core reports a compatible version and the requested
+transport is healthy and certified. Existing server rows were explicitly
+marked `legacy_node_unbound` during the migration so the principal can remain
+available while enrollment is implemented. Newly created unbound servers do
+not receive placements, and the temporary historical exception must be removed
+before regional certification.
+
+Admin ping remains an on-demand probe, not a heartbeat. Signed enrollment,
+heartbeat ingestion, cryptographic desired-state issuance/activation and
+last-known-good behavior remain MCL-02 and MCL-03 work; the persistence layer
+does not emulate those protocols.
 
 ## Observability
 
@@ -358,10 +373,11 @@ upgrade; a migration requiring destructive rollback blocks the rollout.
 | TLS host allowlist and production fail-closed checks | Implemented |
 | Central server/transport inventory and capacity reservation | Implemented |
 | Per-host retries and circuit breaker | Implemented in memory |
-| Persistent cluster/node lifecycle model | Not implemented |
+| Persistent cluster/node lifecycle model | Implemented locally in migration 17; not deployed |
+| Desired/observed history and fail-closed placement gate | Implemented locally; heartbeat ingestion pending |
 | Signed desired revisions and last-known-good activation | Not implemented |
 | Automated enrollment and fleet trust rotation/revocation | Not implemented |
-| Durable heartbeat, version compatibility and revision drift | Not implemented |
+| Durable heartbeat, version compatibility and revision drift | Storage and placement checks implemented; reporting protocol pending |
 | Private central scrape of regional metrics | Designed, not deployed |
 | Cross-cluster-safe asymmetric transport credentials | Not implemented |
 | First regional acceptance and failure-isolation E2E | Paused; not certified |

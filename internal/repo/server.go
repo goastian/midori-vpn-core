@@ -30,7 +30,7 @@ type ServerRepo struct {
 	cacheTTL     time.Duration
 }
 
-const serverColumns = `id, name, host, endpoint, port, wg_port, public_key, location, country_code,
+const serverColumns = `id, node_id, legacy_node_unbound, name, host, endpoint, port, wg_port, public_key, location, country_code,
 	max_peers, current_peers, is_active, draining_at, created_at, updated_at`
 
 type rowScanner interface {
@@ -54,13 +54,13 @@ func (r *ServerRepo) InvalidateCache() {
 func (r *ServerRepo) Create(ctx context.Context, s *models.VPNServer) error {
 	defer r.InvalidateCache()
 	query := `
-		INSERT INTO vpn_servers (name, host, endpoint, port, wg_port, public_key, location, country_code, max_peers)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		INSERT INTO vpn_servers (node_id, legacy_node_unbound, name, host, endpoint, port, wg_port, public_key, location, country_code, max_peers)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id, created_at, updated_at
 	`
 	return r.pool.QueryRow(ctx, query,
-		s.Name, s.Host, s.Endpoint, s.Port, s.WGPort, s.PublicKey, s.Location,
-		s.CountryCode, s.MaxPeers,
+		s.NodeID, s.LegacyNodeUnbound, s.Name, s.Host, s.Endpoint, s.Port,
+		s.WGPort, s.PublicKey, s.Location, s.CountryCode, s.MaxPeers,
 	).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt)
 }
 
@@ -77,11 +77,12 @@ func (r *ServerRepo) CreateWithTransports(ctx context.Context, s *models.VPNServ
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO vpn_servers (name, host, endpoint, port, wg_port, public_key, location, country_code, max_peers, is_active, draining_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO vpn_servers (node_id, legacy_node_unbound, name, host, endpoint, port, wg_port, public_key, location, country_code, max_peers, is_active, draining_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING id, created_at, updated_at`,
-		s.Name, s.Host, s.Endpoint, s.Port, s.WGPort, s.PublicKey, s.Location,
-		s.CountryCode, s.MaxPeers, s.IsActive, s.DrainingAt,
+		s.NodeID, s.LegacyNodeUnbound, s.Name, s.Host, s.Endpoint, s.Port,
+		s.WGPort, s.PublicKey, s.Location, s.CountryCode, s.MaxPeers,
+		s.IsActive, s.DrainingAt,
 	).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt); err != nil {
 		return fmt.Errorf("create server: %w", err)
 	}
@@ -226,11 +227,11 @@ func (r *ServerRepo) LeastLoaded(ctx context.Context) (*models.VPNServer, error)
 	query := `
 		SELECT ` + serverColumns + `
 		FROM vpn_servers
-		WHERE is_active = TRUE AND current_peers < max_peers
+		WHERE vpn_server_placement_eligible(id, 'wireguard', $1::interval, TRUE)
 		ORDER BY (current_peers::float / GREATEST(max_peers, 1)) ASC
 		LIMIT 1
 	`
-	s, err := scanServer(r.pool.QueryRow(ctx, query))
+	s, err := scanServer(r.pool.QueryRow(ctx, query, DefaultNodeFreshness.String()))
 	if err != nil {
 		return nil, fmt.Errorf("no available server: %w", err)
 	}
@@ -557,7 +558,7 @@ func normalizeStoredTransportHost(host string, port int) string {
 func scanServer(row rowScanner) (*models.VPNServer, error) {
 	var s models.VPNServer
 	if err := row.Scan(
-		&s.ID, &s.Name, &s.Host, &s.Endpoint, &s.Port, &s.WGPort, &s.PublicKey,
+		&s.ID, &s.NodeID, &s.LegacyNodeUnbound, &s.Name, &s.Host, &s.Endpoint, &s.Port, &s.WGPort, &s.PublicKey,
 		&s.Location, &s.CountryCode, &s.MaxPeers, &s.CurrentPeers, &s.IsActive,
 		&s.DrainingAt, &s.CreatedAt, &s.UpdatedAt,
 	); err != nil {

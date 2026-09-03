@@ -37,8 +37,8 @@ func newReconciliationFixture(t *testing.T) reconciliationFixture {
 		t.Fatalf("insert reconciliation user: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO vpn_servers (name, host, max_peers, current_peers)
-		VALUES ($1, 'reconciliation.test.invalid', 10, 0) RETURNING id`,
+		INSERT INTO vpn_servers (name, host, max_peers, current_peers, legacy_node_unbound)
+		VALUES ($1, 'reconciliation.test.invalid', 10, 0, TRUE) RETURNING id`,
 		"Reconciliation "+uuid.NewString()).Scan(&fixture.serverID); err != nil {
 		t.Fatalf("insert reconciliation server: %v", err)
 	}

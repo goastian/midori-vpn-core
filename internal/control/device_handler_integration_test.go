@@ -37,8 +37,8 @@ func insertDeviceHandlerFixture(t *testing.T) (*control.Handler, *models.User, u
 
 	var serverID uuid.UUID
 	if err := pool.QueryRow(context.Background(), `
-		INSERT INTO vpn_servers (name, host, endpoint, public_key, location, country_code, current_peers)
-		VALUES ('Device handler', '', '', 'server-key', 'Test', 'TT', 1)
+		INSERT INTO vpn_servers (name, host, endpoint, public_key, location, country_code, current_peers, legacy_node_unbound)
+		VALUES ('Device handler', '', '', 'server-key', 'Test', 'TT', 1, TRUE)
 		RETURNING id`).Scan(&serverID); err != nil {
 		t.Fatalf("insert server: %v", err)
 	}

@@ -41,7 +41,7 @@ func TestBackfillPresharedKeysEncryptsEveryLegacyStoreAndIsResumable(t *testing.
 		args  []any
 	}{
 		{`INSERT INTO users (id, authentik_uid, email) VALUES ($1, $2, 'backfill@test.invalid')`, []any{userID, uuid.NewString()}},
-		{`INSERT INTO vpn_servers (id, name, host) VALUES ($1, $2, 'backfill.test.invalid')`, []any{serverID, "Backfill " + uuid.NewString()}},
+		{`INSERT INTO vpn_servers (id, name, host, legacy_node_unbound) VALUES ($1, $2, 'backfill.test.invalid', TRUE)`, []any{serverID, "Backfill " + uuid.NewString()}},
 		{`INSERT INTO devices (id, user_id, reported_name, device_type) VALUES ($1, $2, 'backfill-host', 'manual')`, []any{deviceID, userID}},
 		{`INSERT INTO peers (id, user_id, server_id, public_key, preshared_key, assigned_ip, device_id)
 		  VALUES ($1, $2, $3, $4, 'peer-legacy-secret', $5, $6)`, []any{peerID, userID, serverID, testWireGuardKey(1), "10.253.0.2/32", deviceID}},

@@ -41,8 +41,8 @@ func newPeerOperationFixture(t *testing.T, maxPeers int) peerOperationFixture {
 		t.Fatalf("insert operation user: %v", err)
 	}
 	if err := pool.QueryRow(ctx, `
-		INSERT INTO vpn_servers (name, host, max_peers, current_peers)
-		VALUES ($1, 'operation.test.invalid', $2, 0)
+		INSERT INTO vpn_servers (name, host, max_peers, current_peers, legacy_node_unbound)
+		VALUES ($1, 'operation.test.invalid', $2, 0, TRUE)
 		RETURNING id`, "Operation "+uuid.NewString(), maxPeers).Scan(&fixture.serverID); err != nil {
 		t.Fatalf("insert operation server: %v", err)
 	}
@@ -192,6 +192,39 @@ func TestPeerOperationConnectPersistsAndRetriesExactly(t *testing.T) {
 	}
 }
 
+func TestPeerOperationRejectsServerWithoutNodeOrLegacyException(t *testing.T) {
+	fixture := newPeerOperationFixture(t, 1)
+	if _, err := fixture.pool.Exec(context.Background(), `
+		UPDATE vpn_servers SET legacy_node_unbound = FALSE WHERE id = $1`, fixture.serverID); err != nil {
+		t.Fatalf("remove legacy placement exception: %v", err)
+	}
+
+	_, err := fixture.operationRepo().BeginConnect(context.Background(), repo.BeginConnectParams{
+		OperationID:  uuid.New(),
+		UserID:       fixture.userID,
+		Device:       fixture.device,
+		ServerID:     fixture.serverID,
+		PublicKey:    operationKey(201),
+		PresharedKey: operationKey(202),
+		MaxDevices:   1,
+	})
+	if !errors.Is(err, repo.ErrServerPlacement) {
+		t.Fatalf("BeginConnect error = %v, want ErrServerPlacement", err)
+	}
+
+	var operations, currentPeers int
+	if err := fixture.pool.QueryRow(context.Background(), `
+		SELECT
+			(SELECT COUNT(*) FROM peer_operations WHERE user_id = $1),
+			(SELECT current_peers FROM vpn_servers WHERE id = $2)`,
+		fixture.userID, fixture.serverID).Scan(&operations, &currentPeers); err != nil {
+		t.Fatalf("load rejected placement state: %v", err)
+	}
+	if operations != 0 || currentPeers != 0 {
+		t.Fatalf("rejected placement mutated durable state: operations=%d current_peers=%d", operations, currentPeers)
+	}
+}
+
 func TestPeerOperationReplacementWorksAtQuotaAndCapacityLimit(t *testing.T) {
 	fixture := newPeerOperationFixture(t, 1)
 	operationRepo := fixture.operationRepo()
@@ -280,8 +313,8 @@ func TestPeerOperationCrossServerReplacementMovesCapacityAtomically(t *testing.T
 
 	var targetServerID uuid.UUID
 	if err := fixture.pool.QueryRow(context.Background(), `
-		INSERT INTO vpn_servers (name, host, max_peers, current_peers)
-		VALUES ($1, 'replacement-target.test.invalid', 1, 0)
+		INSERT INTO vpn_servers (name, host, max_peers, current_peers, legacy_node_unbound)
+		VALUES ($1, 'replacement-target.test.invalid', 1, 0, TRUE)
 		RETURNING id`, "Replacement "+uuid.NewString()).Scan(&targetServerID); err != nil {
 		t.Fatalf("insert replacement target: %v", err)
 	}

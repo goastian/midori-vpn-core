@@ -26,6 +26,12 @@
 
 ### Operations
 
+- Added the migration 17 multicluster persistence model for clusters, Core
+  nodes, hashed one-use enrollment tokens, desired revisions, observed history
+  and one-to-one server bindings. New nodes fail closed for placement until
+  lifecycle, freshness, version, revision, capacity and certified transport
+  state all agree; historical unbound servers carry an explicit temporary
+  migration exception.
 - Made the unified Podman runner resolve nested or sibling component checkouts,
   preserve their container workdirs and caches, and reject unrelated working
   directories before invoking a toolchain. A container-free shell test covers
@@ -64,7 +70,7 @@
 - Replaced the legacy backup and chaos helpers with fail-fast, environment-neutral staging tests. Backup validation restores into an isolated database and compares critical tables; network chaos applies bounded netem loss, verifies private metrics and probes, and always restores the original qdisc.
 - Pinned the Core builder, Alpine runtime and rootless analysis tools to exact supported versions and image digests. Staticcheck and govulncheck no longer resolve mutable `latest` releases during a rebuild.
 - Added rootless Podman development images for Go, Control and Desktop workflows.
-- Added immutable migrations through version 16, including billing/quotas, transport health, unique active peer addresses, Ed25519 identities, removal of retired transport columns, revocable per-device client certificates, persistent device identity, durable peer operations, safe administrative draining, encrypted PSKs and the missing Mesh exit-node protocol/capability fields.
+- Added immutable migrations through version 17, including billing/quotas, transport health, unique active peer addresses, Ed25519 identities, removal of retired transport columns, revocable per-device client certificates, persistent device identity, durable peer operations, safe administrative draining, encrypted PSKs, the multicluster state model and the missing Mesh exit-node protocol/capability fields.
 - Added migrations 13–14 and a durable PostgreSQL lifecycle for WireGuard connect
   and replacement operations. Quota and capacity are revalidated under locks,
   retries reuse the exact completed session, ambiguous failures remain

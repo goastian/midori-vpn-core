@@ -20,6 +20,7 @@ var (
 	ErrConnectionInProgress  = errors.New("connection operation is already in progress")
 	ErrDeviceLimitReached    = errors.New("device limit reached")
 	ErrServerCapacity        = errors.New("server is full or inactive")
+	ErrServerPlacement       = errors.New("server node is not eligible for placement")
 	ErrOperationState        = errors.New("peer operation is in an invalid state")
 	ErrPeerOperationConflict = errors.New("public key belongs to another device")
 	ErrAccessRevoked         = errors.New("user or device access is revoked")
@@ -276,16 +277,22 @@ func (r *PeerOperationRepo) BeginConnect(ctx context.Context, params BeginConnec
 		return nil, ErrDeviceLimitReached
 	}
 
-	var active bool
+	capacityReserved := previousPeer == nil || previousPeer.ServerID != params.ServerID
+	var active, placementEligible bool
 	var currentPeers, maxPeers int
 	if err := tx.QueryRow(ctx, `
-		SELECT is_active, current_peers, max_peers
-		FROM vpn_servers WHERE id = $1 FOR UPDATE`, params.ServerID).Scan(&active, &currentPeers, &maxPeers); err != nil {
+		SELECT is_active, current_peers, max_peers,
+		       vpn_server_placement_eligible(id, 'wireguard', $2::interval, $3)
+		FROM vpn_servers WHERE id = $1 FOR UPDATE`, params.ServerID,
+		DefaultNodeFreshness.String(), capacityReserved,
+	).Scan(&active, &currentPeers, &maxPeers, &placementEligible); err != nil {
 		return nil, fmt.Errorf("lock connection server: %w", err)
 	}
-	capacityReserved := previousPeer == nil || previousPeer.ServerID != params.ServerID
 	if !active || (capacityReserved && currentPeers >= maxPeers) {
 		return nil, ErrServerCapacity
+	}
+	if !placementEligible {
+		return nil, ErrServerPlacement
 	}
 	if capacityReserved {
 		if _, err := tx.Exec(ctx, `

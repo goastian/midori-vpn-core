@@ -21,6 +21,8 @@ type User struct {
 
 type VPNServer struct {
 	ID                uuid.UUID             `json:"id"`
+	NodeID            *uuid.UUID            `json:"node_id,omitempty"`
+	LegacyNodeUnbound bool                  `json:"-"`
 	Name              string                `json:"name"`
 	Host              string                `json:"host"`
 	Endpoint          string                `json:"endpoint"`

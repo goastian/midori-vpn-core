@@ -672,6 +672,8 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 			respond.JsonErrorCode(w, fmt.Sprintf("device limit reached (%d devices on your %s)", userQuota.MaxDevices, userQuota.PlanName), "device_limit_reached", http.StatusConflict)
 		case errors.Is(err, repo.ErrServerCapacity):
 			respond.JsonError(w, "server is full or inactive", http.StatusConflict)
+		case errors.Is(err, repo.ErrServerPlacement):
+			respond.JsonError(w, "server node is not ready for new connections", http.StatusConflict)
 		case errors.Is(err, repo.ErrDeviceRevoked):
 			respond.JsonErrorCode(w, "device is revoked", "device_revoked", http.StatusConflict)
 		case errors.Is(err, repo.ErrPeerOperationConflict):

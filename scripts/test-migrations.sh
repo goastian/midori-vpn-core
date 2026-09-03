@@ -67,6 +67,21 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000015_safe_admin_operations.up.sql >/dev/null
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000016_encrypt_preshared_keys.up.sql >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000017_multicluster_model.up.sql >/dev/null
+
+multicluster_tables="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('clusters','core_nodes','node_enrollment_tokens','desired_revisions','node_observations')")"
+[ "${multicluster_tables}" = "5" ] || { printf 'error: migration 17 created %s of 5 multicluster tables\n' "${multicluster_tables}" >&2; exit 1; }
+server_node_columns="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'vpn_servers' AND column_name IN ('node_id','legacy_node_unbound')")"
+[ "${server_node_columns}" = "2" ] || { printf 'error: migration 17 created %s of 2 server-node columns\n' "${server_node_columns}" >&2; exit 1; }
+legacy_server_rows="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT COUNT(*) FROM vpn_servers WHERE node_id IS NULL AND legacy_node_unbound = TRUE")"
+[ "${legacy_server_rows}" = "1" ] || { printf 'error: migration 17 did not explicitly mark the historical server\n' >&2; exit 1; }
+placement_function="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT to_regprocedure('vpn_server_placement_eligible(uuid,text,interval,boolean)') IS NOT NULL")"
+[ "${placement_function}" = "t" ] || { printf 'error: migration 17 did not create the placement gate\n' >&2; exit 1; }
 
 encrypted_psk_columns="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ('peers','peer_operations','mesh_members') AND column_name IN ('preshared_key_ciphertext','preshared_key_version')")"
@@ -226,6 +241,21 @@ cascade_rows="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
 # A rollback must refuse to discard ciphertext. Clearing the synthetic value
 # then proves that a safe, plaintext-only rollback remains available.
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c \
+  "INSERT INTO clusters (id, name, region) VALUES ('80000000-0000-4000-8000-000000000017', 'Rollback guard', 'test')" >/dev/null
+if podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000017_multicluster_model.down.sql >/dev/null 2>&1; then
+  printf 'error: migration 17 rollback discarded durable multicluster state\n' >&2
+  exit 1
+fi
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c \
+  "DELETE FROM clusters WHERE id = '80000000-0000-4000-8000-000000000017'" >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000017_multicluster_model.down.sql >/dev/null
+multicluster_tables="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('clusters','core_nodes','node_enrollment_tokens','desired_revisions','node_observations')")"
+[ "${multicluster_tables}" = "0" ] || { printf 'error: migration 17 rollback left %s multicluster tables\n' "${multicluster_tables}" >&2; exit 1; }
+
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c \
   "UPDATE peers SET preshared_key_ciphertext = decode(repeat('ab', 40), 'hex'), preshared_key_version = 1 WHERE id = '30000000-0000-4000-8000-000000000001'" >/dev/null
 if podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000016_encrypt_preshared_keys.down.sql >/dev/null 2>&1; then
@@ -302,6 +332,8 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000015_safe_admin_operations.up.sql >/dev/null
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000016_encrypt_preshared_keys.up.sql >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000017_multicluster_model.up.sql >/dev/null
 
 # The device-based certificate key permits equal hostnames on distinct
 # registered installations without merging either device.
@@ -334,5 +366,11 @@ schema_draining="$(podman exec "${container}" psql -U midori -d midori_schema_te
 schema_encrypted_psk_columns="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
   "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ('peers','peer_operations','mesh_members') AND column_name IN ('preshared_key_ciphertext','preshared_key_version')")"
 [ "${schema_encrypted_psk_columns}" = "6" ] || { printf 'error: consolidated schema created %s of 6 encrypted PSK columns\n' "${schema_encrypted_psk_columns}" >&2; exit 1; }
+schema_multicluster_tables="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
+  "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('clusters','core_nodes','node_enrollment_tokens','desired_revisions','node_observations')")"
+[ "${schema_multicluster_tables}" = "5" ] || { printf 'error: consolidated schema created %s of 5 multicluster tables\n' "${schema_multicluster_tables}" >&2; exit 1; }
+schema_server_node_columns="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
+  "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'vpn_servers' AND column_name IN ('node_id','legacy_node_unbound')")"
+[ "${schema_server_node_columns}" = "2" ] || { printf 'error: consolidated schema created %s of 2 server-node columns\n' "${schema_server_node_columns}" >&2; exit 1; }
 
-printf 'Migration chain 1-16, migrations 9-16 rollback, and consolidated schema verified on PostgreSQL 18.\n'
+printf 'Migration chain 1-17, migrations 9-17 rollback, and consolidated schema verified on PostgreSQL 18.\n'

@@ -19,8 +19,8 @@ func insertDeviceTestServer(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 	t.Helper()
 	var id uuid.UUID
 	if err := pool.QueryRow(context.Background(), `
-		INSERT INTO vpn_servers (name, host)
-		VALUES ($1, $2)
+		INSERT INTO vpn_servers (name, host, legacy_node_unbound)
+		VALUES ($1, $2, TRUE)
 		RETURNING id`, "Device Test Server "+uuid.NewString(), "device.test.invalid").Scan(&id); err != nil {
 		t.Fatalf("insert device test server: %v", err)
 	}
