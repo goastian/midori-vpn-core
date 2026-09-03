@@ -37,6 +37,8 @@ var (
 	ErrPeerOperationConflict  = errors.New("peer is owned by another operation")
 	ErrPeerOperationUntracked = errors.New("peer operation identity is unavailable")
 	ErrPeerStateUnavailable   = errors.New("WireGuard peer state is unavailable")
+	ErrPeerCapacityReached    = errors.New("desired peer capacity is reached")
+	ErrPeerCapacityBelowUsage = errors.New("desired peer capacity is below current usage")
 )
 
 type wireGuardClient interface {
@@ -74,6 +76,7 @@ type Manager struct {
 	peerOps            map[string]uuid.UUID
 	meshIPs            map[string]string // pubkey -> mesh overlay IP  (e.g. "10.200.1.2")
 	peerStateAvailable bool
+	peerLimit          int
 	privateKey         wgtypes.Key
 }
 
@@ -89,12 +92,13 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 	}
 
 	m := &Manager{
-		cfg:     cfg,
-		client:  client,
-		pool:    pool,
-		peerIPs: make(map[string]string),
-		peerOps: make(map[string]uuid.UUID),
-		meshIPs: make(map[string]string),
+		cfg:       cfg,
+		client:    client,
+		pool:      pool,
+		peerIPs:   make(map[string]string),
+		peerOps:   make(map[string]uuid.UUID),
+		meshIPs:   make(map[string]string),
+		peerLimit: cfg.CoreNodeMaxPeers,
 	}
 
 	if err := m.ensureInterface(); err != nil {
@@ -112,6 +116,27 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 	}
 
 	return m, nil
+}
+
+// ApplyPeerLimit serializes a desired-state persistence callback with peer
+// mutation, so the durable bundle and effective admission limit change as one
+// local operation.
+func (m *Manager) ApplyPeerLimit(limit int, commit func() error) error {
+	if limit < 1 || limit > 65536 {
+		return errors.New("peer limit must be between 1 and 65536")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.peerIPs) > limit {
+		return ErrPeerCapacityBelowUsage
+	}
+	if commit != nil {
+		if err := commit(); err != nil {
+			return err
+		}
+	}
+	m.peerLimit = limit
+	return nil
 }
 
 func (m *Manager) Close() {
@@ -545,6 +570,9 @@ func (m *Manager) AddPeerWithPSK(pubkeyStr, operationID string, keepalive int, p
 		if existingKey != pubkeyStr && existingOperation == opID {
 			return "", false, ErrPeerOperationConflict
 		}
+	}
+	if m.peerLimit > 0 && len(m.peerIPs) >= m.peerLimit {
+		return "", false, ErrPeerCapacityReached
 	}
 
 	allocatedIP, err := m.pool.Allocate()

@@ -87,7 +87,9 @@ Copy `.env.example` to a private `0600` environment file and replace every `<req
 
 Important security groups:
 
-- `CONTROL_NODE_ID`, `CONTROL_NODE_PRIVATE_KEY`, `NODE_AUTHORIZED_KEYS`: Ed25519 node identities.
+- `CONTROL_NODE_ID`, `CONTROL_NODE_PRIVATE_KEY`, `NODE_AUTHORIZED_KEYS`: Ed25519 node identities. The same Control identity signs canonical desired-state revisions under a separate cryptographic domain; every enrolled Core trusts only the matching public-key entry.
+- `NODE_CONTROL_URL`, `CORE_NODE_ID`, `CORE_NODE_STATE_DIR`, `CORE_NODE_ENROLLMENT_TOKEN_FILE`, `CORE_NODE_MAX_PEERS`: enrolled node identity, signed 30-second desired-state polling with jitter, and private atomic last-known-good storage.
+- `NODE_SECRET_FINGERPRINTS`: optional `name=sha256` references that let a node reject desired transports whose local secret material does not match, without distributing the secret.
 - `NODE_AUTH_REDIS_URL`: shared nonce/revocation state for signed requests.
 - `CREDENTIAL_SIGNING_SECRET`: short-lived proxy and tunnel credentials.
 - `CONTROL_DATA_ENCRYPTION_KEY`: principal-only, canonical base64 for exactly 32 random bytes; encrypts recoverable WireGuard PSKs in PostgreSQL and must be backed up separately.

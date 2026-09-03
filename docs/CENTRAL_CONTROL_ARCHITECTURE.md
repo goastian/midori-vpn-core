@@ -328,11 +328,22 @@ before regional certification.
 
 Migration 18 binds an exact Ed25519 public key and enrollment timestamp to each
 node, with a database uniqueness constraint preventing one identity from being
-assigned to two nodes. Signed enrollment and heartbeat ingestion are now
-implemented. Heartbeats report bounded capacity, Core version and transport
-health every 30 seconds, but deliberately report no compatibility decision or
-certification claim. Cryptographic desired-state issuance/activation,
-compatibility evaluation and last-known-good behavior remain MCL-03 work.
+assigned to two nodes. Signed enrollment, heartbeat ingestion and desired-state
+queries are implemented. Control creates a strict canonical bundle, signs it
+with Ed25519 under the distinct `midorivpn-desired-state-v1` domain and persists
+an exact locked revision chain. The target node polls at a jittered 30-second
+interval, verifies target, time, version, signature and monotonic chain, then
+atomically replaces its private `0600` last-known-good file while applying the
+peer admission limit under the same local mutation lock. Invalid or stale
+revisions leave the last-known-good untouched, and an expired local copy may be
+restored after restart only to preserve established tunnels.
+
+Heartbeats report the applied revision and compatibility decision. Transport
+certification is deliberately absent from desired intent and remains false in
+observed state; MCL-05 must provide independent observed certification.
+WSS, MASQUE and proxy can be enabled by desired state only when already enabled
+locally. OpenVPN and IKEv2 desired activation remain unavailable until their
+regional local-capability boundary is implemented and certified.
 Admin ping remains an on-demand probe and is not treated as a heartbeat.
 
 ## Observability
@@ -398,9 +409,9 @@ upgrade; a migration requiring destructive rollback blocks the rollout.
 | Node-generated Ed25519 enrollment with hashed one-use token | Implemented locally; not deployed |
 | Signed node-to-Control heartbeat and replay rejection | Implemented locally; not deployed |
 | Desired/observed history and fail-closed placement gate | Implemented locally; desired-state activation pending |
-| Signed desired revisions and last-known-good activation | Not implemented |
+| Signed desired revisions and last-known-good activation | Implemented locally; not deployed |
 | Fleet identity revocation | Implemented for node-to-Control requests; Control-to-Core trust distribution remains MCL-03 |
-| Durable heartbeat, version compatibility and revision drift | Heartbeat persistence implemented; compatibility and revision application pending |
+| Durable heartbeat, version compatibility and revision drift | Implemented locally; deployment and regional certification pending |
 | Private central scrape of regional metrics | Designed, not deployed |
 | Cross-cluster-safe asymmetric transport credentials | Not implemented |
 | First regional acceptance and failure-isolation E2E | Paused; not certified |

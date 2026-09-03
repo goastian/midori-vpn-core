@@ -18,6 +18,17 @@ require_value() {
   [ -n "${!name:-}" ] || die "missing required environment variable: ${name}"
 }
 
+validate_secret_fingerprints() {
+  local entry
+  local -a entries
+  [[ -n "${NODE_SECRET_FINGERPRINTS:-}" ]] || return 0
+  IFS=',' read -ra entries <<< "${NODE_SECRET_FINGERPRINTS}"
+  for entry in "${entries[@]}"; do
+    [[ "${entry}" =~ ^[a-z0-9][a-z0-9._-]{0,63}=[a-f0-9]{64}$ ]] || \
+      die "NODE_SECRET_FINGERPRINTS must contain name=64-lowercase-hex entries"
+  done
+}
+
 wait_healthy() {
   local container="$1"
   local state
@@ -90,6 +101,8 @@ if [[ "${node_identity_configured}" == "true" ]]; then
     [[ "$(stat -c '%a' "${CORE_NODE_STATE_HOST_DIR}/enrollment-token")" == "600" ]] || die "enrollment-token must have mode 0600"
   fi
   [[ "${CORE_NODE_MAX_PEERS}" =~ ^[1-9][0-9]*$ ]] || die "CORE_NODE_MAX_PEERS must be positive"
+  (( CORE_NODE_MAX_PEERS <= 65536 )) || die "CORE_NODE_MAX_PEERS must not exceed 65536"
+  validate_secret_fingerprints
 fi
 
 case "${PROXY_ENABLED}" in

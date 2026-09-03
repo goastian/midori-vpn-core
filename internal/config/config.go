@@ -38,6 +38,8 @@ type Config struct {
 	CoreNodeStateDir            string
 	CoreNodeEnrollmentTokenFile string
 	CoreNodeMaxPeers            int
+	NodeSecretFingerprints      string
+	RuntimePolicy               RuntimePolicy
 
 	// HMAC secret used only for short-lived proxy and WSS credentials.
 	CredentialSigningSecret string
@@ -139,6 +141,10 @@ type Config struct {
 	AstianPaymentToken string // internal service token for API authentication
 }
 
+type RuntimePolicy interface {
+	WithWireGuardEndpoint(func(string, int) error) error
+}
+
 // wgInterfaceRe allows only safe characters for a WireGuard interface name.
 // Linux netdev names are limited to 15 characters, alphanumeric plus - and _.
 var wgInterfaceRe = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,15}$`)
@@ -167,6 +173,7 @@ func Load() *Config {
 		CoreNodeStateDir:            env("CORE_NODE_STATE_DIR"),
 		CoreNodeEnrollmentTokenFile: env("CORE_NODE_ENROLLMENT_TOKEN_FILE"),
 		CoreNodeMaxPeers:            envIntDefault("CORE_NODE_MAX_PEERS", 0),
+		NodeSecretFingerprints:      env("NODE_SECRET_FINGERPRINTS"),
 		CredentialSigningSecret:     env("CREDENTIAL_SIGNING_SECRET"),
 		WGInterface:                 requireEnv("WG_INTERFACE"),
 		WGPort:                      requireEnvInt("WG_PORT"),
@@ -252,14 +259,14 @@ func Load() *Config {
 		log.Fatal("FATAL: DEPLOYMENT_PROFILE must be principal or core-node")
 	}
 	nodeIdentityConfigured := cfg.NodeControlURL != "" || cfg.CoreNodeID != "" || cfg.CoreNodeStateDir != "" ||
-		cfg.CoreNodeEnrollmentTokenFile != "" || cfg.CoreNodeMaxPeers != 0
+		cfg.CoreNodeEnrollmentTokenFile != "" || cfg.CoreNodeMaxPeers != 0 || cfg.NodeSecretFingerprints != ""
 	if cfg.DeploymentProfile == "core-node" && !nodeIdentityConfigured {
 		log.Fatal("FATAL: regional Core nodes require enrolled node-to-Control identity settings")
 	}
 	if nodeIdentityConfigured {
 		if cfg.NodeControlURL == "" || cfg.CoreNodeID == "" || cfg.CoreNodeStateDir == "" ||
-			cfg.CoreNodeEnrollmentTokenFile == "" || cfg.CoreNodeMaxPeers < 1 {
-			log.Fatal("FATAL: NODE_CONTROL_URL, CORE_NODE_ID, CORE_NODE_STATE_DIR, CORE_NODE_ENROLLMENT_TOKEN_FILE and positive CORE_NODE_MAX_PEERS must be configured together")
+			cfg.CoreNodeEnrollmentTokenFile == "" || cfg.CoreNodeMaxPeers < 1 || cfg.CoreNodeMaxPeers > 65536 {
+			log.Fatal("FATAL: NODE_CONTROL_URL, CORE_NODE_ID, CORE_NODE_STATE_DIR, CORE_NODE_ENROLLMENT_TOKEN_FILE and CORE_NODE_MAX_PEERS from 1 through 65536 must be configured together")
 		}
 		if _, err := uuid.Parse(cfg.CoreNodeID); err != nil {
 			log.Fatal("FATAL: CORE_NODE_ID must be a UUID")

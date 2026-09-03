@@ -81,6 +81,7 @@ CORE_NODE_ID=<pre-created-node-uuid>
 CORE_NODE_STATE_DIR=/var/lib/midorivpn-node
 CORE_NODE_ENROLLMENT_TOKEN_FILE=/var/lib/midorivpn-node/enrollment-token
 CORE_NODE_MAX_PEERS=100
+NODE_SECRET_FINGERPRINTS=
 ```
 
 The host state directory must be `0700` and an initial token file must be a
@@ -109,7 +110,9 @@ Set `DEPLOYMENT_PROFILE=core-node`, choose a unique `CORE_NODE_NAME`, and run
 `scripts/VPN/deploy-core-node.sh` as the dedicated unprivileged service
 account. Configure `NODE_CONTROL_URL`, `CORE_NODE_ID`,
 `CORE_NODE_STATE_DIR`, `CORE_NODE_ENROLLMENT_TOKEN_FILE` and
-`CORE_NODE_MAX_PEERS` together. The script validates the UUID and HTTPS origin,
+`CORE_NODE_MAX_PEERS` together. `NODE_SECRET_FINGERPRINTS` is optional and uses
+comma-separated `name=64-lowercase-hex` references; it never contains the
+underlying secret. The script validates the UUID and HTTPS origin,
 requires the host state directory to be `0700`, accepts only a regular `0600`
 token file, and mounts the state directory at the exact configured container
 path. It fails closed if Control, database, Authentik or CA signing secrets are

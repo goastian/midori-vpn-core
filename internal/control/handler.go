@@ -28,6 +28,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/config"
 	vpnCrypto "github.com/goastian/midori-vpn-core/internal/crypto"
 	"github.com/goastian/midori-vpn-core/internal/dataencryption"
+	"github.com/goastian/midori-vpn-core/internal/desiredstate"
 	"github.com/goastian/midori-vpn-core/internal/models"
 	"github.com/goastian/midori-vpn-core/internal/nodeauth"
 	"github.com/goastian/midori-vpn-core/internal/proxytoken"
@@ -114,6 +115,7 @@ type Handler struct {
 	maxDevicesPerUser       int
 	appEnv                  string
 	coreAllowLoopback       bool
+	publicBaseURL           string
 	vpnDNS                  string
 	credentialSigningSecret string
 	connectLimiter          *userRateLimiter // per-user rate limit for the /connect endpoint
@@ -121,6 +123,7 @@ type Handler struct {
 	clientCertificateRepo   *repo.DeviceCertificateRepo
 	clientCertificateCA     *clientpki.Authority
 	multiclusterRepo        *repo.MulticlusterRepo
+	desiredStateSigner      *desiredstate.Signer
 }
 
 func (h *Handler) SetNodeVerifier(verifier *nodeauth.Verifier) {
@@ -162,8 +165,12 @@ func NewHandlerWithMeshAndDataEncryption(pool *pgxpool.Pool, cfg *config.Config,
 		maxDevicesPerUser:       cfg.MaxDevicesPerUser,
 		appEnv:                  cfg.AppEnv,
 		coreAllowLoopback:       cfg.CoreAllowHTTP,
+		publicBaseURL:           cfg.PublicBaseURL,
 		vpnDNS:                  cfg.VpnDNS,
 		credentialSigningSecret: cfg.CredentialSigningSecret,
+	}
+	if cfg.ControlNodeID != "" && cfg.ControlNodePrivateKey != "" {
+		h.desiredStateSigner, _ = desiredstate.NewSigner(cfg.ControlNodeID, cfg.ControlNodePrivateKey)
 	}
 	if cfg.ConnectRateLimitRPS > 0 {
 		h.connectLimiter = newUserRateLimiter(cfg.ConnectRateLimitRPS, cfg.ConnectRateLimitBurst)

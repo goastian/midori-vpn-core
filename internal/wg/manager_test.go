@@ -189,6 +189,31 @@ func TestPeerOperationsAreIdempotentAndConditional(t *testing.T) {
 	}
 }
 
+func TestDesiredPeerLimitIsAtomicAndPreservesIdempotentRetries(t *testing.T) {
+	manager := testManager(t, &fakeWireGuardClient{})
+	if err := manager.ApplyPeerLimit(1, nil); err != nil {
+		t.Fatal(err)
+	}
+	publicKey := testKey(21)
+	operationID := uuid.NewString()
+	if _, created, err := manager.AddPeer(publicKey, operationID, 25); err != nil || !created {
+		t.Fatalf("first peer: created=%v err=%v", created, err)
+	}
+	if _, created, err := manager.AddPeer(publicKey, operationID, 25); err != nil || created {
+		t.Fatalf("idempotent retry at capacity: created=%v err=%v", created, err)
+	}
+	if _, _, err := manager.AddPeer(testKey(22), uuid.NewString(), 25); !errors.Is(err, ErrPeerCapacityReached) {
+		t.Fatalf("capacity error = %v", err)
+	}
+	called := false
+	if err := manager.ApplyPeerLimit(1, func() error { called = true; return nil }); err != nil || !called {
+		t.Fatalf("atomic same limit: called=%v err=%v", called, err)
+	}
+	if err := manager.ApplyPeerLimit(0, func() error { t.Fatal("invalid limit committed"); return nil }); err == nil {
+		t.Fatal("invalid peer limit accepted")
+	}
+}
+
 func TestPeerMaterialAndKeepaliveValidation(t *testing.T) {
 	client := &fakeWireGuardClient{}
 	manager := testManager(t, client)

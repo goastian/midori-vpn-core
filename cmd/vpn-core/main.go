@@ -17,6 +17,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/control"
 	"github.com/goastian/midori-vpn-core/internal/dataencryption"
 	"github.com/goastian/midori-vpn-core/internal/db"
+	"github.com/goastian/midori-vpn-core/internal/desiredstate"
 	"github.com/goastian/midori-vpn-core/internal/fleetauth"
 	"github.com/goastian/midori-vpn-core/internal/httpx"
 	"github.com/goastian/midori-vpn-core/internal/masque"
@@ -57,6 +58,14 @@ func main() {
 		if err := control.InitCoreSigningIdentity(cfg.ControlNodeID, cfg.ControlNodePrivateKey); err != nil {
 			log.Fatalf("failed to initialize Control signing identity: %v", err)
 		}
+		desiredSigner, err := desiredstate.NewSigner(cfg.ControlNodeID, cfg.ControlNodePrivateKey)
+		if err != nil {
+			log.Fatalf("failed to initialize desired state signing identity: %v", err)
+		}
+		desiredVerifier, err := desiredstate.NewVerifier(cfg.NodeAuthorizedKeys)
+		if err != nil || !desiredVerifier.Trusts(cfg.ControlNodeID, desiredSigner.PublicKey()) {
+			log.Fatal("desired state signing identity must match its NODE_AUTHORIZED_KEYS trust entry")
+		}
 	}
 
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -82,6 +91,27 @@ func main() {
 		if err != nil {
 			log.Fatalf("failed to initialize node-to-Control client: %v", err)
 		}
+		secretFingerprints, err := desiredstate.ParseSecretFingerprints(cfg.NodeSecretFingerprints)
+		if err != nil {
+			log.Fatalf("failed to parse node secret fingerprints: %v", err)
+		}
+		localTransports := map[string]bool{
+			"wireguard": true,
+			"wss":       cfg.WSSTunnelEnabled,
+			"masque":    cfg.MasqueEnabled,
+			"proxy":     cfg.ProxyEnabled,
+		}
+		activator, err := desiredstate.NewActivator(
+			cfg.CoreNodeStateDir, nodeID, coreVersion, cfg.NodeAuthorizedKeys,
+			desiredstate.LocalCapabilities{Transports: localTransports, SecretFingerprints: secretFingerprints}, manager,
+		)
+		if err != nil {
+			log.Fatalf("failed to initialize signed desired state: %v", err)
+		}
+		if err := activator.LoadLastKnownGood(); err != nil {
+			log.Fatalf("failed to restore last-known-good desired state: %v", err)
+		}
+		cfg.RuntimePolicy = activator
 		nodeReporter, err = nodeplane.NewReporter(
 			nodeClient, manager, coreVersion, cfg.CoreNodeMaxPeers,
 			cfg.CoreNodeEnrollmentTokenFile,
@@ -96,6 +126,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("failed to initialize Core node reporter: %v", err)
 		}
+		nodeReporter.SetDesiredState(activator)
 	}
 
 	// Optional: connect to PostgreSQL + JWKS if DATABASE_URL is set

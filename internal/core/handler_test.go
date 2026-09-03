@@ -29,6 +29,18 @@ type fakePeerManager struct {
 	operation  string
 }
 
+type fakeRuntimePolicy struct{}
+
+func (fakeRuntimePolicy) WithWireGuardEndpoint(operation func(string, int) error) error {
+	return operation("signed-vpn.test", 51821)
+}
+
+type unavailableRuntimePolicy struct{}
+
+func (unavailableRuntimePolicy) WithWireGuardEndpoint(func(string, int) error) error {
+	return errors.New("no applied desired state")
+}
+
 func (f *fakePeerManager) AddPeerWithPSK(_, operationID string, _ int, _ string) (string, bool, error) {
 	f.operation = operationID
 	return f.addIP, f.addCreated, f.addErr
@@ -123,6 +135,45 @@ func TestPeerOperationConflictAndUnavailableStateAreExplicit(t *testing.T) {
 	handler.ListPeers(listRecorder, peerRequest(t, http.MethodGet, "/api/v1/peers", nil))
 	if listRecorder.Code != http.StatusServiceUnavailable || responseCode(t, listRecorder) != "core_peer_state_unavailable" {
 		t.Fatalf("list failure response status=%d", listRecorder.Code)
+	}
+}
+
+func TestAddPeerUsesSignedRuntimeEndpointAndReportsCapacity(t *testing.T) {
+	manager := &fakePeerManager{addIP: "10.77.0.2/32", addCreated: true}
+	handler := newHandler(&config.Config{
+		Endpoint: "static.test", WGPort: 51820, RuntimePolicy: fakeRuntimePolicy{},
+	}, manager)
+	body := map[string]any{"public_key": testCoreKey(9), "keepalive": 25, "operation_id": uuid.NewString()}
+	recorder := httptest.NewRecorder()
+	handler.AddPeer(recorder, peerRequest(t, http.MethodPost, "/api/v1/peers", body))
+	var response struct {
+		Data AddPeerResponse `json:"data"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Data.Endpoint != "signed-vpn.test:51821" {
+		t.Fatalf("endpoint = %q", response.Data.Endpoint)
+	}
+	manager.addErr = wg.ErrPeerCapacityReached
+	recorder = httptest.NewRecorder()
+	handler.AddPeer(recorder, peerRequest(t, http.MethodPost, "/api/v1/peers", body))
+	if recorder.Code != http.StatusConflict || responseCode(t, recorder) != "core_peer_capacity_reached" {
+		t.Fatalf("capacity response = %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestAddPeerFailsClosedWithoutAppliedDesiredWireGuard(t *testing.T) {
+	manager := &fakePeerManager{addIP: "10.77.0.2/32", addCreated: true}
+	handler := newHandler(&config.Config{RuntimePolicy: unavailableRuntimePolicy{}}, manager)
+	body := map[string]any{"public_key": testCoreKey(10), "keepalive": 25, "operation_id": uuid.NewString()}
+	recorder := httptest.NewRecorder()
+	handler.AddPeer(recorder, peerRequest(t, http.MethodPost, "/api/v1/peers", body))
+	if recorder.Code != http.StatusServiceUnavailable || responseCode(t, recorder) != "core_desired_state_unavailable" {
+		t.Fatalf("missing desired state response = %d %s", recorder.Code, recorder.Body.String())
+	}
+	if manager.operation != "" {
+		t.Fatal("peer manager was called without an applied desired state")
 	}
 }
 

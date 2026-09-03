@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -157,6 +158,70 @@ func TestMulticlusterEnrollmentRejectsExpiredRevokedAndDuplicateIdentity(t *test
 	}
 	if err := multicluster.RecordObservation(context.Background(), observation); !errors.Is(err, repo.ErrNodeRevoked) {
 		t.Fatalf("revoked observation error = %v; want ErrNodeRevoked", err)
+	}
+}
+
+func TestDesiredRevisionSequenceIsSerializedPerNode(t *testing.T) {
+	pool := testPool(t)
+	multicluster := repo.NewMulticlusterRepo(pool)
+	cluster := createEnrollmentCluster(t, pool, multicluster)
+	node := createEnrollmentNode(t, multicluster, cluster.ID)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM desired_revisions WHERE node_id = $1`, node.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM node_enrollment_tokens WHERE node_id = $1`, node.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM core_nodes WHERE id = $1`, node.ID)
+	})
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := multicluster.IssueEnrollmentToken(context.Background(), node.ID, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := multicluster.EnrollNode(context.Background(), node.ID, token.Token, publicKey); err != nil {
+		t.Fatal(err)
+	}
+	newRevision := func() *models.DesiredRevision {
+		issuedAt := time.Now().UTC().Truncate(time.Second)
+		return &models.DesiredRevision{
+			NodeID: node.ID, Revision: 1, SchemaVersion: 1, MinimumCoreVersion: "2.0.0",
+			Payload: []byte(`{"schema_version":1}`), PayloadSHA256: make([]byte, 32),
+			Signature: make([]byte, 64), SigningKeyID: "test-key",
+			IssuedAt: issuedAt, ExpiresAt: issuedAt.Add(10 * time.Minute),
+		}
+	}
+	start := make(chan struct{})
+	errorsByCall := make(chan error, 2)
+	var wait sync.WaitGroup
+	for range 2 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			errorsByCall <- multicluster.CreateDesiredRevision(context.Background(), newRevision())
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errorsByCall)
+	var succeeded, conflicted int
+	for err := range errorsByCall {
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, repo.ErrDesiredRevisionConflict):
+			conflicted++
+		default:
+			t.Fatalf("unexpected concurrent revision error: %v", err)
+		}
+	}
+	if succeeded != 1 || conflicted != 1 {
+		t.Fatalf("concurrent results: success=%d conflict=%d", succeeded, conflicted)
+	}
+	latest, err := multicluster.LatestDesiredRevision(context.Background(), node.ID)
+	if err != nil || latest.Revision != 1 {
+		t.Fatalf("latest desired revision = %#v, %v", latest, err)
 	}
 }
 

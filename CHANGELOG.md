@@ -4,6 +4,11 @@
 
 ### Security
 
+- Control now issues strict canonical desired-state revisions signed with
+  Ed25519 under a dedicated domain. Enrolled Core nodes verify target, time,
+  version, local capabilities and a contiguous anti-rollback chain before an
+  atomic private last-known-good activation; nodes without valid intent fail
+  closed for new peers while established tunnels remain intact.
 - Core nodes now generate and atomically retain a private Ed25519 identity,
   enroll through a short-lived one-use credential whose plaintext is never
   stored by Control, and sign domain-separated node-to-Control requests with a
@@ -31,6 +36,10 @@
 
 ### Operations
 
+- Added jittered 30-second desired-state polling, persisted desired/observed
+  revision reporting, runtime WireGuard endpoint selection and admission
+  capacity enforced under the same lock as local bundle activation. Desired
+  transport intent never creates an observed certification claim.
 - Added migration 18 and the operational node enrollment/heartbeat plane.
   Control binds one unique public key to each node, preserves token audit state,
   ingests bounded observed health every 30 seconds and never treats an

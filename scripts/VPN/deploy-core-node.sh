@@ -29,6 +29,17 @@ require_port() {
   (( value >= 1 && value <= 65535 )) || die "${name} must be between 1 and 65535"
 }
 
+validate_secret_fingerprints() {
+  local entry
+  local -a entries
+  [[ -n "${NODE_SECRET_FINGERPRINTS:-}" ]] || return 0
+  IFS=',' read -ra entries <<< "${NODE_SECRET_FINGERPRINTS}"
+  for entry in "${entries[@]}"; do
+    [[ "${entry}" =~ ^[a-z0-9][a-z0-9._-]{0,63}=[a-f0-9]{64}$ ]] || \
+      die "NODE_SECRET_FINGERPRINTS must contain name=64-lowercase-hex entries"
+  done
+}
+
 wait_healthy() {
   local container="$1" state
   for _ in {1..60}; do
@@ -88,6 +99,8 @@ if [[ -e "${CORE_NODE_STATE_HOST_DIR}/enrollment-token" ]]; then
   [[ "$(stat -c '%a' "${CORE_NODE_STATE_HOST_DIR}/enrollment-token")" == "600" ]] || die "enrollment-token must have mode 0600"
 fi
 [[ "${CORE_NODE_MAX_PEERS}" =~ ^[1-9][0-9]*$ ]] || die "CORE_NODE_MAX_PEERS must be positive"
+(( CORE_NODE_MAX_PEERS <= 65536 )) || die "CORE_NODE_MAX_PEERS must not exceed 65536"
+validate_secret_fingerprints
 require_port VPN_CORE_PORT
 require_port VPN_CORE_HOST_PORT
 require_port WG_PORT

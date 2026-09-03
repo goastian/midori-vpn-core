@@ -35,7 +35,14 @@ var (
 	ErrNodeIdentityUnavailable = errors.New("core node identity is unavailable")
 	ErrNodeIdentityConflict    = errors.New("core node identity is already assigned")
 	ErrNodeRevoked             = errors.New("core node or cluster is revoked")
+	ErrDesiredRevisionConflict = errors.New("desired state revision conflicts with the current sequence")
 )
+
+type DesiredRevisionContext struct {
+	ClusterID        uuid.UUID
+	NextRevision     int64
+	PreviousRevision *int64
+}
 
 type MulticlusterRepo struct {
 	pool *pgxpool.Pool
@@ -300,10 +307,49 @@ func (r *MulticlusterRepo) BindServer(ctx context.Context, serverID, nodeID uuid
 }
 
 func (r *MulticlusterRepo) CreateDesiredRevision(ctx context.Context, revision *models.DesiredRevision) error {
-	if revision == nil {
+	if revision == nil || revision.NodeID == uuid.Nil || revision.Revision < 1 {
 		return errors.New("desired revision is required")
 	}
-	return r.pool.QueryRow(ctx, `
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin desired revision creation: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var nodeState, clusterState models.ClusterState
+	var identitySize int
+	if err := tx.QueryRow(ctx, `
+		SELECT node.state, cluster.state, COALESCE(octet_length(node.identity_public_key), 0)
+		FROM core_nodes node
+		JOIN clusters cluster ON cluster.id = node.cluster_id
+		WHERE node.id = $1
+		FOR UPDATE OF node, cluster`, revision.NodeID).Scan(&nodeState, &clusterState, &identitySize); err != nil {
+		return fmt.Errorf("lock Core node for desired revision: %w", err)
+	}
+	if nodeState == models.ClusterStateRevoked || nodeState == models.ClusterStateRetired ||
+		clusterState == models.ClusterStateRevoked || clusterState == models.ClusterStateRetired {
+		return ErrNodeRevoked
+	}
+	if nodeState == models.ClusterStateEnrolling || identitySize != ed25519.PublicKeySize {
+		return ErrNodeIdentityUnavailable
+	}
+	var latest *int64
+	var latestValue int64
+	err = tx.QueryRow(ctx, `
+		SELECT revision FROM desired_revisions WHERE node_id = $1
+		ORDER BY revision DESC LIMIT 1`, revision.NodeID).Scan(&latestValue)
+	if err == nil {
+		latest = &latestValue
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("load latest desired revision: %w", err)
+	}
+	wantRevision := int64(1)
+	if latest != nil {
+		wantRevision = *latest + 1
+	}
+	if revision.Revision != wantRevision || !equalOptionalRevision(revision.PreviousRevision, latest) {
+		return ErrDesiredRevisionConflict
+	}
+	if err := tx.QueryRow(ctx, `
 		INSERT INTO desired_revisions (
 			node_id, revision, previous_revision, schema_version,
 			minimum_core_version, payload, payload_sha256, signature,
@@ -314,7 +360,92 @@ func (r *MulticlusterRepo) CreateDesiredRevision(ctx context.Context, revision *
 		revision.SchemaVersion, revision.MinimumCoreVersion, revision.Payload,
 		revision.PayloadSHA256, revision.Signature, revision.SigningKeyID,
 		revision.IssuedAt, revision.ExpiresAt,
-	).Scan(&revision.ID, &revision.CreatedAt)
+	).Scan(&revision.ID, &revision.CreatedAt); err != nil {
+		var pgError *pgconn.PgError
+		if errors.As(err, &pgError) && (pgError.Code == "23505" || pgError.Code == "23503" || pgError.Code == "23514") {
+			return ErrDesiredRevisionConflict
+		}
+		return fmt.Errorf("persist desired revision: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit desired revision: %w", err)
+	}
+	return nil
+}
+
+func (r *MulticlusterRepo) DesiredContext(ctx context.Context, nodeID uuid.UUID) (*DesiredRevisionContext, error) {
+	var result DesiredRevisionContext
+	var nodeState, clusterState models.ClusterState
+	var identitySize int
+	var previous *int64
+	if err := r.pool.QueryRow(ctx, `
+		SELECT node.cluster_id, node.state, cluster.state,
+		       COALESCE(octet_length(node.identity_public_key), 0), latest.revision
+		FROM core_nodes node
+		JOIN clusters cluster ON cluster.id = node.cluster_id
+		LEFT JOIN LATERAL (
+			SELECT revision FROM desired_revisions
+			WHERE node_id = node.id ORDER BY revision DESC LIMIT 1
+		) latest ON TRUE
+		WHERE node.id = $1`, nodeID).Scan(
+		&result.ClusterID, &nodeState, &clusterState,
+		&identitySize, &previous,
+	); err != nil {
+		return nil, fmt.Errorf("load desired revision context: %w", err)
+	}
+	if nodeState == models.ClusterStateRevoked || nodeState == models.ClusterStateRetired ||
+		clusterState == models.ClusterStateRevoked || clusterState == models.ClusterStateRetired {
+		return nil, ErrNodeRevoked
+	}
+	if nodeState == models.ClusterStateEnrolling || identitySize != ed25519.PublicKeySize {
+		return nil, ErrNodeIdentityUnavailable
+	}
+	result.PreviousRevision = previous
+	result.NextRevision = 1
+	if previous != nil {
+		result.NextRevision = *previous + 1
+	}
+	return &result, nil
+}
+
+func (r *MulticlusterRepo) LatestDesiredRevision(ctx context.Context, nodeID uuid.UUID) (*models.DesiredRevision, error) {
+	var revision models.DesiredRevision
+	var nodeState, clusterState models.ClusterState
+	var identitySize int
+	err := r.pool.QueryRow(ctx, `
+		SELECT desired.id, desired.node_id, desired.revision, desired.previous_revision, desired.schema_version,
+		       desired.minimum_core_version, desired.payload, desired.payload_sha256, desired.signature,
+		       desired.signing_key_id, desired.issued_at, desired.expires_at, desired.created_at,
+		       node.state, cluster.state, COALESCE(octet_length(node.identity_public_key), 0)
+		FROM desired_revisions desired
+		JOIN core_nodes node ON node.id = desired.node_id
+		JOIN clusters cluster ON cluster.id = node.cluster_id
+		WHERE desired.node_id = $1
+		ORDER BY desired.revision DESC LIMIT 1`, nodeID).Scan(
+		&revision.ID, &revision.NodeID, &revision.Revision, &revision.PreviousRevision,
+		&revision.SchemaVersion, &revision.MinimumCoreVersion, &revision.Payload,
+		&revision.PayloadSHA256, &revision.Signature, &revision.SigningKeyID,
+		&revision.IssuedAt, &revision.ExpiresAt, &revision.CreatedAt,
+		&nodeState, &clusterState, &identitySize,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load latest desired revision: %w", err)
+	}
+	if nodeState == models.ClusterStateRevoked || nodeState == models.ClusterStateRetired ||
+		clusterState == models.ClusterStateRevoked || clusterState == models.ClusterStateRetired {
+		return nil, ErrNodeRevoked
+	}
+	if nodeState == models.ClusterStateEnrolling || identitySize != ed25519.PublicKeySize {
+		return nil, ErrNodeIdentityUnavailable
+	}
+	return &revision, nil
+}
+
+func equalOptionalRevision(left, right *int64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 // RecordObservation appends observed state and updates only the node's bounded

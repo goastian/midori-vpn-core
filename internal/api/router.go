@@ -83,6 +83,7 @@ func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *au
 		nodePlaneHandler := control.NewNodePlaneHandler(pool, cfg)
 		r.Post("/api/v1/node/enroll", nodePlaneHandler.Enroll)
 		r.Post("/api/v1/node/heartbeat", nodePlaneHandler.Heartbeat)
+		r.Get("/api/v1/node/desired-state", nodePlaneHandler.DesiredState)
 	}
 
 	// WireGuard core API protected by signed Ed25519 node requests.
@@ -214,6 +215,7 @@ func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *au
 			r.Post("/clusters/{clusterID}/nodes", ch.AdminCreateCoreNode)
 			r.Post("/nodes/{nodeID}/enrollment-token", ch.AdminIssueNodeEnrollmentToken)
 			r.Post("/nodes/{nodeID}/revoke", ch.AdminRevokeCoreNode)
+			r.Post("/nodes/{nodeID}/desired-state", ch.AdminCreateDesiredState)
 
 			// Peers
 			r.Get("/peers", ch.AdminListPeers)

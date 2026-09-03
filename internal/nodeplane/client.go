@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/goastian/midori-vpn-core/internal/desiredstate"
 	"github.com/goastian/midori-vpn-core/internal/fleetauth"
 	"github.com/goastian/midori-vpn-core/internal/httpx"
 )
@@ -62,6 +64,45 @@ func (c *Client) EnrollFromTokenFile(ctx context.Context, tokenPath string) erro
 
 func (c *Client) Heartbeat(ctx context.Context, heartbeat HeartbeatRequest) error {
 	return c.send(ctx, HeartbeatPath, heartbeat, "")
+}
+
+func (c *Client) FetchDesiredState(ctx context.Context) (*desiredstate.SignedBundle, bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+DesiredStatePath, nil)
+	if err != nil {
+		return nil, false, fmt.Errorf("create desired state request: %w", err)
+	}
+	if err := c.identity.Sign(req, nil); err != nil {
+		return nil, false, fmt.Errorf("sign desired state request: %w", err)
+	}
+	response, err := c.client.Do(req)
+	if err != nil {
+		return nil, false, fmt.Errorf("fetch desired state: %w", err)
+	}
+	defer response.Body.Close()
+	responseBody, readErr := httpx.ReadBody(response.Body, 256<<10)
+	if readErr != nil {
+		return nil, false, fmt.Errorf("read desired state response: %w", readErr)
+	}
+	if response.StatusCode == http.StatusNoContent {
+		return nil, false, nil
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, false, &ResponseError{Status: response.StatusCode, Bytes: len(responseBody)}
+	}
+	decoder := json.NewDecoder(bytes.NewReader(responseBody))
+	decoder.DisallowUnknownFields()
+	var envelope struct {
+		OK   bool                      `json:"ok"`
+		Data desiredstate.SignedBundle `json:"data"`
+	}
+	if err := decoder.Decode(&envelope); err != nil || !envelope.OK {
+		return nil, false, errors.New("control plane returned an invalid desired state response")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return nil, false, errors.New("control plane returned trailing desired state data")
+	}
+	return &envelope.Data, true, nil
 }
 
 func (c *Client) send(ctx context.Context, path string, payload any, bearerToken string) error {

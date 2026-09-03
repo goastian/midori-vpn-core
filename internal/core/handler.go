@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -75,15 +76,35 @@ func (h *Handler) AddPeer(w http.ResponseWriter, r *http.Request) {
 		req.Keepalive = 25
 	}
 
-	ip, created, err := h.mgr.AddPeerWithPSK(req.PublicKey, req.OperationID, req.Keepalive, req.PresharedKey)
+	var ip string
+	var created bool
+	var endpoint string
+	mutate := func(endpointHost string, endpointPort int) error {
+		endpoint = ""
+		if endpointHost != "" {
+			endpoint = net.JoinHostPort(endpointHost, strconv.Itoa(endpointPort))
+		}
+		var err error
+		ip, created, err = h.mgr.AddPeerWithPSK(req.PublicKey, req.OperationID, req.Keepalive, req.PresharedKey)
+		return err
+	}
+	var err error
+	if h.cfg.RuntimePolicy != nil {
+		called := false
+		err = h.cfg.RuntimePolicy.WithWireGuardEndpoint(func(host string, port int) error {
+			called = true
+			return mutate(host, port)
+		})
+		if !called {
+			respond.JsonErrorCode(w, "WireGuard is unavailable in signed desired state", "core_desired_state_unavailable", http.StatusServiceUnavailable)
+			return
+		}
+	} else {
+		err = mutate(h.cfg.Endpoint, h.cfg.WGPort)
+	}
 	if err != nil {
 		respondPeerMutationError(w, "failed to add peer", err)
 		return
-	}
-
-	endpoint := h.cfg.Endpoint
-	if endpoint != "" {
-		endpoint = endpoint + ":" + strconv.Itoa(h.cfg.WGPort)
 	}
 
 	status := http.StatusOK
@@ -193,6 +214,8 @@ func respondPeerMutationError(w http.ResponseWriter, publicMessage string, err e
 		respond.JsonError(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, wg.ErrPeerOperationConflict):
 		respond.JsonErrorCode(w, "peer is owned by another operation", "peer_operation_conflict", http.StatusConflict)
+	case errors.Is(err, wg.ErrPeerCapacityReached):
+		respond.JsonErrorCode(w, "Core node peer capacity is reached", "core_peer_capacity_reached", http.StatusConflict)
 	case errors.Is(err, wg.ErrPeerStateUnavailable), errors.Is(err, wg.ErrPeerOperationUntracked):
 		respond.JsonErrorCode(w, "WireGuard peer state is unavailable", "core_peer_state_unavailable", http.StatusServiceUnavailable)
 	default:

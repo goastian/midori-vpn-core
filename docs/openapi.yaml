@@ -106,6 +106,20 @@ paths:
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/node/desired-state:
+    get:
+      operationId: getCoreNodeDesiredState
+      tags: [Node plane]
+      security:
+        - NodeID: []
+          NodeTimestamp: []
+          NodeNonce: []
+          NodeSignature: []
+      responses:
+        '200': {$ref: '#/components/responses/SignedDesiredState'}
+        '204': {description: No desired revision has been issued for this node.}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
 
   /api/v1/peers:
     parameters: []
@@ -796,6 +810,18 @@ paths:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/nodes/{nodeID}/desired-state:
+    parameters:
+      - {$ref: '#/components/parameters/NodeID'}
+    post:
+      operationId: createAdminNodeDesiredState
+      tags: [Administration, Node plane]
+      requestBody: {$ref: '#/components/requestBodies/DesiredStateCreate'}
+      responses:
+        '201': {$ref: '#/components/responses/SignedDesiredState'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/admin/peers:
     get:
       operationId: listAdminPeers
@@ -1410,7 +1436,7 @@ components:
     NodeHeartbeatRequest:
       type: object
       additionalProperties: false
-      required: [schema_version, core_version, health_status, current_peers, max_peers, transport_states, reported_at]
+      required: [schema_version, core_version, health_status, current_peers, max_peers, version_compatible, transport_states, reported_at]
       properties:
         schema_version: {type: integer, const: 1}
         applied_revision: {type: integer, format: int64, minimum: 1}
@@ -1418,6 +1444,7 @@ components:
         health_status: {type: string, enum: [unknown, healthy, degraded, error]}
         current_peers: {type: integer, minimum: 0}
         max_peers: {type: integer, minimum: 0}
+        version_compatible: {type: boolean}
         transport_states:
           type: object
           maxProperties: 6
@@ -1430,6 +1457,85 @@ components:
               certified: {type: boolean}
         last_error_code: {type: string, pattern: '^[a-z0-9_]{1,64}$'}
         reported_at: {type: string, format: date-time}
+    DesiredStateEndpoint:
+      type: object
+      additionalProperties: false
+      required: [name, host, port]
+      properties:
+        name: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'}
+        host: {type: string, minLength: 1, maxLength: 253}
+        port: {type: integer, minimum: 1, maximum: 65535}
+    DesiredStateCapacity:
+      type: object
+      additionalProperties: false
+      required: [max_peers]
+      properties:
+        max_peers: {type: integer, minimum: 1, maximum: 65536}
+    DesiredStateTransport:
+      type: object
+      additionalProperties: false
+      required: [protocol, enabled, priority, endpoint, secret_references]
+      properties:
+        protocol: {type: string, enum: [wireguard, wss, masque, openvpn, ikev2, proxy]}
+        enabled: {type: boolean}
+        priority: {type: integer, minimum: 0, maximum: 1000}
+        endpoint: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'}
+        secret_references:
+          type: array
+          uniqueItems: true
+          items: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'}
+    DesiredStateSecretReference:
+      type: object
+      additionalProperties: false
+      required: [name, fingerprint_sha256]
+      properties:
+        name: {type: string, pattern: '^[a-z0-9][a-z0-9._-]{0,63}$'}
+        fingerprint_sha256: {type: string, pattern: '^[a-f0-9]{64}$'}
+    DesiredStateBundle:
+      type: object
+      additionalProperties: false
+      required: [schema_version, cluster_id, node_id, revision, previous_revision, issued_at, expires_at, minimum_core_version, management_endpoint, public_endpoints, capacity, transports, secret_references]
+      properties:
+        schema_version: {type: integer, const: 1}
+        cluster_id: {type: string, format: uuid}
+        node_id: {type: string, format: uuid}
+        revision: {type: integer, format: int64, minimum: 1}
+        previous_revision: {type: [integer, 'null'], format: int64, minimum: 1}
+        issued_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        minimum_core_version: {type: string, pattern: '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'}
+        management_endpoint: {type: string, format: uri}
+        public_endpoints: {type: array, minItems: 1, maxItems: 16, items: {$ref: '#/components/schemas/DesiredStateEndpoint'}}
+        capacity: {$ref: '#/components/schemas/DesiredStateCapacity'}
+        transports: {type: array, maxItems: 6, items: {$ref: '#/components/schemas/DesiredStateTransport'}}
+        secret_references: {type: array, maxItems: 32, items: {$ref: '#/components/schemas/DesiredStateSecretReference'}}
+    SignedDesiredState:
+      type: object
+      additionalProperties: false
+      required: [bundle, signing_key_id, signature]
+      properties:
+        bundle: {$ref: '#/components/schemas/DesiredStateBundle'}
+        signing_key_id: {type: string, minLength: 1, maxLength: 128}
+        signature: {type: string, pattern: '^[A-Za-z0-9_-]{86}$'}
+    SignedDesiredStateEnvelope:
+      type: object
+      additionalProperties: false
+      required: [ok, data]
+      properties:
+        ok: {const: true}
+        data: {$ref: '#/components/schemas/SignedDesiredState'}
+    DesiredStateCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_previous_revision, minimum_core_version, public_endpoints, capacity, transports, secret_references]
+      properties:
+        expected_previous_revision: {type: [integer, 'null'], format: int64, minimum: 1}
+        expires_in_seconds: {type: integer, minimum: 60, maximum: 86400, default: 900}
+        minimum_core_version: {type: string, pattern: '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'}
+        public_endpoints: {type: array, minItems: 1, maxItems: 16, items: {$ref: '#/components/schemas/DesiredStateEndpoint'}}
+        capacity: {$ref: '#/components/schemas/DesiredStateCapacity'}
+        transports: {type: array, maxItems: 6, items: {$ref: '#/components/schemas/DesiredStateTransport'}}
+        secret_references: {type: array, maxItems: 32, items: {$ref: '#/components/schemas/DesiredStateSecretReference'}}
     ClusterCreateRequest:
       type: object
       additionalProperties: false
@@ -1501,6 +1607,7 @@ components:
     ClusterCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ClusterCreateRequest'}}}}
     CoreNodeCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CoreNodeCreateRequest'}}}}
     NodeEnrollmentTokenIssue: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/NodeEnrollmentTokenIssueRequest'}}}}
+    DesiredStateCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/DesiredStateCreateRequest'}}}}
     ExtensionOriginUpdate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ExtensionOriginUpdateRequest'}}}}
   responses:
     OK:
@@ -1533,6 +1640,11 @@ components:
       headers:
         Cache-Control: {schema: {type: string, const: no-store}}
       content: {application/json: {schema: {$ref: '#/components/schemas/NodeEnrollmentTokenEnvelope'}}}
+    SignedDesiredState:
+      description: Canonical desired state signed by Control with Ed25519 under a dedicated domain.
+      headers:
+        Cache-Control: {schema: {type: string, const: no-store}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/SignedDesiredStateEnvelope'}}}
     HealthOK:
       description: Core process health.
       content: {application/json: {schema: {$ref: '#/components/schemas/SuccessEnvelope'}}}
