@@ -127,9 +127,14 @@ Peer enumeration is fail-closed. If Core cannot observe the WireGuard device,
 it returns `503 core_peer_state_unavailable`; it never converts that failure
 into an empty list. Configurable IPv4 pools are limited to `/16` through `/30`,
 and the interface gateway retains the configured prefix. Control currently
-generates and propagates exact operation IDs for each add and its immediate
-compensations. Persisting Control-side operation lifecycle across process
-crashes remains the separate durable-operations phase.
+persists every connect or replacement in `peer_operations` before contacting
+Core. The row owns the exact operation UUID, device, key, target server,
+reserved capacity, prior peer, assigned address, retry count and transition
+timestamps. `peers.provision_operation_id` preserves the operation that owns
+each completed session. A pending retry returns
+`409 connection_in_progress` with `Retry-After`; a completed retry returns the
+same session and sensitive configuration rather than allocating again.
+Startup/periodic reconciliation of stalled rows remains a separate phase.
 
 ### Data plane
 
@@ -174,18 +179,24 @@ marks the device revoked without deleting audit history. Until durable cleanup
 operations are introduced, a failed Core removal returns an explicit retryable
 failure and leaves the device active.
 
-A successful connection follows this order:
+A successful connection or replacement follows this order:
 
-1. Control authenticates the user and checks quota and server capacity.
-2. Control reserves capacity in PostgreSQL.
-3. Control signs an add-peer request to the chosen Core.
-4. Core applies the peer and returns the assigned local address and endpoint.
-5. Control persists the active peer and returns only usable transports.
+1. Control authenticates the user, locks the user, device and key, then
+   revalidates quota and target capacity inside one database transaction.
+2. Control writes a pending operation and reserves target capacity atomically.
+3. Control signs an idempotent add-peer request using that operation UUID.
+4. Core applies or recognizes the operation and returns its stable address.
+5. Control records `core_applied`, creates the new peer, retires the previous
+   database session, adjusts cross-server counters and marks the operation
+   completed in one transaction.
+6. Control removes the exact previous Core operation. A failure becomes
+   `cleanup_pending` without losing either operation owner.
 
-Failures must compensate the capacity reservation and remove a partially
-created peer. Reconciliation compares central active peers with the signed
-Core peer list. It must be idempotent: retrying a completed operation cannot
-allocate another address or count the same peer twice.
+Only a definitive Core rejection releases a pending reservation immediately;
+ambiguous transport or persistence failures retain durable state for the
+reconciler. Reconciliation compares central active peers with a successfully
+observed signed Core peer list. It must be idempotent: retrying a completed
+operation cannot allocate another address or count the same peer twice.
 
 There is no cross-cluster replication of WireGuard runtime state. Moving a
 device to another server creates a new placement and removes the old one after

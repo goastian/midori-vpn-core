@@ -102,6 +102,7 @@ type Handler struct {
 	userRepo                *repo.UserRepo
 	serverRepo              *repo.ServerRepo
 	peerRepo                *repo.PeerRepo
+	peerOperationRepo       *repo.PeerOperationRepo
 	deviceRepo              *repo.DeviceRepo
 	meshRepo                *repo.MeshRepo
 	auditRepo               *repo.AuditRepo
@@ -138,6 +139,7 @@ func NewHandlerWithMesh(pool *pgxpool.Pool, cfg *config.Config, wgMgr *wg.Manage
 		userRepo:                repo.NewUserRepo(pool),
 		serverRepo:              repo.NewServerRepo(pool),
 		peerRepo:                repo.NewPeerRepo(pool),
+		peerOperationRepo:       repo.NewPeerOperationRepo(pool),
 		deviceRepo:              repo.NewDeviceRepo(pool),
 		meshRepo:                repo.NewMeshRepo(pool),
 		auditRepo:               repo.NewAuditRepo(pool),
@@ -450,6 +452,49 @@ type ConnectRequest struct {
 	PQKEMPublicKey string         `json:"pq_kem_public_key,omitempty"`
 }
 
+func (h *Handler) respondWithExistingConnection(w http.ResponseWriter, r *http.Request, peer *models.Peer, pqCiphertext string, status int) {
+	if peer.DeviceID == nil {
+		respond.JsonError(w, "active connection has no device identity", http.StatusInternalServerError)
+		return
+	}
+	server, err := h.serverRepo.GetByID(r.Context(), peer.ServerID)
+	if err != nil {
+		respond.SafeError(w, "failed to load connection server", err, http.StatusInternalServerError)
+		return
+	}
+	wireGuard, configured := enabledServerTransport(server, "wireguard")
+	if !configured {
+		respond.JsonError(w, "the existing server no longer has WireGuard enabled", http.StatusConflict)
+		return
+	}
+	serverPublicKey := server.PublicKey
+	if coreStats, statsErr := CallCoreServerStats(server); statsErr == nil && coreStats.PublicKey != "" {
+		serverPublicKey = coreStats.PublicKey
+		if server.PublicKey != coreStats.PublicKey {
+			server.PublicKey = coreStats.PublicKey
+			if updateErr := h.serverRepo.Update(r.Context(), server); updateErr != nil {
+				slog.Warn("failed to persist server public key", "server_id", server.ID, "error", updateErr)
+			}
+		}
+	}
+	peerIP := peer.AssignedIP
+	if index := strings.Index(peerIP, "/"); index != -1 {
+		peerIP = peerIP[:index]
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	respond.JsonOK(w, models.ConnectionConfig{
+		PeerID:          peer.ID,
+		DeviceID:        *peer.DeviceID,
+		PeerIP:          peerIP,
+		ServerPublicKey: serverPublicKey,
+		ServerEndpoint:  wireGuardEndpointForServerHost(wireGuard.Host, wireGuard.Port),
+		PresharedKey:    peer.PresharedKey,
+		PQKEMCiphertext: pqCiphertext,
+		DNS:             h.vpnDNS,
+		AllowedIPs:      "0.0.0.0/0, ::/0",
+	}, status)
+}
+
 func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r)
 
@@ -490,10 +535,27 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 1b. Idempotency: if the same public key is already active for this user,
-	// return the existing allocation instead of treating it as a new device.
-	// This prevents "device limit reached" errors caused by duplicate connect
-	// attempts (e.g. rapid retries, race conditions in the desktop client).
+	// Recognize durable retries before quota or capacity checks. An unfinished
+	// operation must be reconciled rather than duplicated; a finished operation
+	// returns the exact session and sensitive material already persisted for it.
+	if operation, existingPeer, findErr := h.peerOperationRepo.FindCurrentByKey(r.Context(), user.ID, req.PublicKey); findErr == nil {
+		if existingPeer == nil {
+			w.Header().Set("Retry-After", "5")
+			respond.JsonErrorCode(w, "connection operation is still in progress", "connection_in_progress", http.StatusConflict)
+			return
+		}
+		if device != nil && (existingPeer.DeviceID == nil || *existingPeer.DeviceID != device.ID) {
+			respond.JsonErrorCode(w, "public key belongs to another device", "peer_operation_conflict", http.StatusConflict)
+			return
+		}
+		h.respondWithExistingConnection(w, r, existingPeer, operation.PQKEMCiphertext, http.StatusOK)
+		return
+	} else if !errors.Is(findErr, pgx.ErrNoRows) {
+		respond.SafeError(w, "failed to inspect connection operation", findErr, http.StatusInternalServerError)
+		return
+	}
+
+	// Compatibility for active peers created before operation persistence.
 	if existingPeer, err := h.peerRepo.GetActiveByUserAndPublicKey(r.Context(), user.ID, req.PublicKey); err == nil {
 		if existingPeer.DeviceID == nil {
 			respond.JsonError(w, "active connection has no device identity", http.StatusInternalServerError)
@@ -503,37 +565,11 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 			respond.JsonErrorCode(w, "public key belongs to another device", "peer_operation_conflict", http.StatusConflict)
 			return
 		}
-		existingServer, sErr := h.serverRepo.GetByID(r.Context(), existingPeer.ServerID)
-		if sErr == nil {
-			wireGuard, configured := enabledServerTransport(existingServer, "wireguard")
-			if !configured {
-				respond.JsonError(w, "the existing server no longer has WireGuard enabled", http.StatusConflict)
-				return
-			}
-			serverPubKey := existingServer.PublicKey
-			if coreStats, statsErr := CallCoreServerStats(existingServer); statsErr == nil && coreStats.PublicKey != "" {
-				serverPubKey = coreStats.PublicKey
-			}
-			peerIPAddr := existingPeer.AssignedIP
-			if idx := strings.Index(peerIPAddr, "/"); idx != -1 {
-				peerIPAddr = peerIPAddr[:idx]
-			}
-			w.Header().Set("Cache-Control", "no-store")
-			respond.JsonOK(w, models.ConnectionConfig{
-				PeerID:          existingPeer.ID,
-				DeviceID:        *existingPeer.DeviceID,
-				PeerIP:          peerIPAddr,
-				ServerPublicKey: serverPubKey,
-				ServerEndpoint:  wireGuardEndpointForServerHost(wireGuard.Host, wireGuard.Port),
-				PresharedKey:    existingPeer.PresharedKey,
-				DNS:             h.vpnDNS,
-				AllowedIPs:      "0.0.0.0/0, ::/0",
-			}, http.StatusOK)
-			return
-		}
+		h.respondWithExistingConnection(w, r, existingPeer, "", http.StatusOK)
+		return
 	} else if !errors.Is(err, pgx.ErrNoRows) {
-		slog.Error("idempotency check error", "error", err)
-		// Non-fatal: continue to normal flow.
+		respond.SafeError(w, "failed to inspect active connection", err, http.StatusInternalServerError)
+		return
 	}
 
 	// 2. Enforce global user device limit based on plan/quota
@@ -582,30 +618,11 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		}
 		server = s
 	}
-	wireGuard, configured := enabledServerTransport(server, "wireguard")
+	_, configured := enabledServerTransport(server, "wireguard")
 	if !configured {
 		respond.JsonError(w, "selected server does not have WireGuard enabled", http.StatusConflict)
 		return
 	}
-
-	// 3b. Atomically reserve a slot (prevents TOCTOU race on capacity)
-	reserved, err := h.serverRepo.ReserveSlot(r.Context(), server.ID)
-	if err != nil {
-		slog.Error("reserve slot error", "error", err)
-		respond.JsonError(w, "failed to reserve server slot", http.StatusInternalServerError)
-		return
-	}
-	if !reserved {
-		respond.JsonError(w, "server is full or inactive", http.StatusConflict)
-		return
-	}
-	// Ensure slot is released if anything downstream fails
-	slotReleased := false
-	defer func() {
-		if !slotReleased {
-			_ = h.serverRepo.UpdatePeerCount(r.Context(), server.ID, -1)
-		}
-	}()
 
 	// 4. Generate post-quantum resistant Pre-Shared Key (PSK) or ML-KEM-768 encapsulation
 	var psk string
@@ -625,97 +642,109 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 4+5. Call vpn-core to add peer (core assigns IP from pool)
-	operationID := uuid.NewString()
-	coreResp, err := CallCoreAddPeer(server, req.PublicKey, operationID, psk)
+	operationID := uuid.New()
+	beginResult, err := h.peerOperationRepo.BeginConnect(r.Context(), repo.BeginConnectParams{
+		OperationID:      operationID,
+		UserID:           user.ID,
+		Device:           device,
+		LegacyDeviceName: deviceRequest.reportedName,
+		ServerID:         server.ID,
+		PublicKey:        req.PublicKey,
+		PresharedKey:     psk,
+		PQKEMCiphertext:  pqCiphertext,
+		MaxDevices:       userQuota.MaxDevices,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, repo.ErrConnectionInProgress):
+			w.Header().Set("Retry-After", "5")
+			respond.JsonErrorCode(w, "connection operation is still in progress", "connection_in_progress", http.StatusConflict)
+		case errors.Is(err, repo.ErrDeviceLimitReached):
+			respond.JsonErrorCode(w, fmt.Sprintf("device limit reached (%d devices on your %s)", userQuota.MaxDevices, userQuota.PlanName), "device_limit_reached", http.StatusConflict)
+		case errors.Is(err, repo.ErrServerCapacity):
+			respond.JsonError(w, "server is full or inactive", http.StatusConflict)
+		case errors.Is(err, repo.ErrDeviceRevoked):
+			respond.JsonErrorCode(w, "device is revoked", "device_revoked", http.StatusConflict)
+		case errors.Is(err, repo.ErrPeerOperationConflict):
+			respond.JsonErrorCode(w, "public key belongs to another device", "peer_operation_conflict", http.StatusConflict)
+		default:
+			respond.SafeError(w, "failed to start connection operation", err, http.StatusInternalServerError)
+		}
+		return
+	}
+	if beginResult.ExistingPeer != nil {
+		pqCiphertext := ""
+		if beginResult.Operation != nil {
+			pqCiphertext = beginResult.Operation.PQKEMCiphertext
+		}
+		h.respondWithExistingConnection(w, r, beginResult.ExistingPeer, pqCiphertext, http.StatusOK)
+		return
+	}
+	h.serverRepo.InvalidateCache()
+	device = beginResult.Device
+
+	coreResp, err := CallCoreAddPeer(server, req.PublicKey, operationID.String(), psk)
 	if err != nil {
 		slog.Error("core add peer error", "error", err)
 		var coreError *CoreAPIError
-		if errors.As(err, &coreError) && coreError.Code == "peer_operation_conflict" {
-			respond.JsonErrorCode(w, "peer is owned by another operation", "peer_operation_conflict", http.StatusConflict)
-			return
+		if errors.As(err, &coreError) && coreError.Status >= 400 && coreError.Status < 500 {
+			if failErr := h.peerOperationRepo.FailDefinitively(r.Context(), operationID, err); failErr != nil {
+				slog.Error("failed to finalize rejected peer operation", "operation_id", operationID, "error", failErr)
+			}
+			h.serverRepo.InvalidateCache()
+			if coreError.Code == "peer_operation_conflict" {
+				respond.JsonErrorCode(w, "peer is owned by another operation", "peer_operation_conflict", http.StatusConflict)
+				return
+			}
 		}
 		respond.JsonError(w, "failed to connect to VPN server", http.StatusBadGateway)
 		return
 	}
-	if device == nil {
-		device, err = h.deviceRepo.CreateLegacy(r.Context(), user.ID, deviceRequest.reportedName)
-		if err != nil {
-			_ = CallCoreRemovePeer(server, req.PublicKey, operationID)
-			respond.SafeError(w, "failed to create legacy device", err, http.StatusInternalServerError)
-			return
-		}
+	if err := h.peerOperationRepo.MarkCoreApplied(r.Context(), operationID, coreResp.AllowedIP); err != nil {
+		slog.Error("failed to persist applied Core operation", "operation_id", operationID, "error", err)
+		respond.JsonError(w, "failed to persist connection progress", http.StatusInternalServerError)
+		return
 	}
-
-	// 7. Clean up any previous active peers for this device, key or IP before saving
-	_ = h.peerRepo.DeactivateByDeviceID(r.Context(), user.ID, device.ID)
-	_ = h.peerRepo.DeactivateByPublicKey(r.Context(), user.ID, req.PublicKey)
-	_ = h.peerRepo.DeactivateByServerAndIP(r.Context(), server.ID, coreResp.AllowedIP)
-
-	peer := &models.Peer{
-		UserID:       user.ID,
-		ServerID:     server.ID,
-		PublicKey:    req.PublicKey,
-		PresharedKey: psk,
-		AssignedIP:   coreResp.AllowedIP,
-		DeviceName:   device.ReportedName,
-		DeviceID:     &device.ID,
-	}
-	if err := h.peerRepo.Create(r.Context(), peer); err != nil {
-		_ = CallCoreRemovePeer(server, req.PublicKey, operationID)
-		slog.Error("create peer error", "error", err)
+	peer, previousPeer, err := h.peerOperationRepo.CompleteConnect(r.Context(), operationID)
+	if err != nil {
+		slog.Error("failed to complete peer operation", "operation_id", operationID, "error", err)
 		respond.JsonError(w, "failed to save connection", http.StatusInternalServerError)
 		return
 	}
+	h.serverRepo.InvalidateCache()
 
-	slotReleased = true // slot is now owned by the peer record
-	h.attachPeerToMeshSessions(r.Context(), user.ID, peer)
-
-	h.auditRepo.Log(r.Context(), &user.ID, "peer.connect",
-		map[string]interface{}{
-			"peer_id":     peer.ID,
-			"device_id":   device.ID,
-			"server_id":   server.ID,
-			"ip":          peer.AssignedIP,
-			"device_name": device.ReportedName,
-			"psk_enabled": psk != "",
-		}, r.RemoteAddr)
-
-	// 8. Fetch the real WireGuard public key from the core
-	serverPubKey := server.PublicKey
-	coreStats, err := CallCoreServerStats(server)
-	if err != nil {
-		slog.Warn("could not fetch core stats for server public key", "server_id", server.ID, "error", err)
-	} else if coreStats.PublicKey != "" {
-		serverPubKey = coreStats.PublicKey
-		if server.PublicKey != coreStats.PublicKey {
-			server.PublicKey = coreStats.PublicKey
-			if updateErr := h.serverRepo.Update(r.Context(), server); updateErr != nil {
-				slog.Warn("failed to persist server public key", "server_id", server.ID, "error", updateErr)
+	if previousPeer != nil && previousPeer.IsActive {
+		previousServer, loadErr := h.serverRepo.GetByID(r.Context(), previousPeer.ServerID)
+		if loadErr != nil {
+			_ = h.peerOperationRepo.MarkCleanupPending(r.Context(), operationID, loadErr)
+		} else {
+			var cleanupErr error
+			if previousPeer.ProvisionOperationID != nil {
+				cleanupErr = CallCoreRemovePeer(previousServer, previousPeer.PublicKey, previousPeer.ProvisionOperationID.String())
+			} else {
+				cleanupErr = CallCoreRemoveCurrentPeer(previousServer, previousPeer.PublicKey)
+			}
+			if cleanupErr != nil {
+				slog.Error("replaced peer cleanup is pending", "operation_id", operationID, "peer_id", previousPeer.ID, "error", cleanupErr)
+				_ = h.peerOperationRepo.MarkCleanupPending(r.Context(), operationID, cleanupErr)
 			}
 		}
 	}
 
-	// 9. Return full WireGuard config
-	// PeerIP: strip CIDR mask so the frontend can safely append /32 without doubling.
-	peerIPAddr := coreResp.AllowedIP
-	if idx := strings.Index(peerIPAddr, "/"); idx != -1 {
-		peerIPAddr = peerIPAddr[:idx]
-	}
-	config := models.ConnectionConfig{
-		PeerID:          peer.ID,
-		DeviceID:        device.ID,
-		PeerIP:          peerIPAddr,
-		ServerPublicKey: serverPubKey,
-		ServerEndpoint:  wireGuardEndpointForServerHost(wireGuard.Host, wireGuard.Port),
-		PresharedKey:    peer.PresharedKey,
-		PQKEMCiphertext: pqCiphertext,
-		DNS:             h.vpnDNS,
-		AllowedIPs:      "0.0.0.0/0, ::/0",
-	}
+	h.attachPeerToMeshSessions(r.Context(), user.ID, peer)
 
-	w.Header().Set("Cache-Control", "no-store")
-	respond.JsonOK(w, config, http.StatusCreated)
+	h.auditRepo.Log(r.Context(), &user.ID, "peer.connect",
+		map[string]interface{}{
+			"operation_id": operationID,
+			"peer_id":      peer.ID,
+			"device_id":    device.ID,
+			"server_id":    server.ID,
+			"ip":           peer.AssignedIP,
+			"device_name":  device.ReportedName,
+			"psk_enabled":  psk != "",
+		}, r.RemoteAddr)
+
+	h.respondWithExistingConnection(w, r, peer, pqCiphertext, http.StatusCreated)
 }
 
 func (h *Handler) Disconnect(w http.ResponseWriter, r *http.Request) {

@@ -885,6 +885,7 @@ components:
             - oauth_unauthorized_client
             - oauth_unsupported_grant_type
             - client_pki_unavailable
+            - connection_in_progress
             - device_limit_reached
             - device_revoked
             - device_cleanup_pending
@@ -1385,7 +1386,15 @@ components:
     Unauthorized: {description: Missing or invalid authentication., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
     Forbidden: {description: Authenticated but not allowed., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
     NotFound: {description: Resource not found., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
-    Conflict: {description: Current state or quota conflicts with the request., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
+    Conflict:
+      description: Current state or quota conflicts with the request.
+      headers:
+        Retry-After:
+          description: Optional delay in seconds before retrying an operation that is still in progress.
+          schema: {type: integer, minimum: 1}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorEnvelope'}
     Gone: {description: Resource is no longer active., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
     UnprocessableEntity: {description: Semantically invalid operation., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
     TooManyRequests: {description: Rate limit exceeded., headers: {Retry-After: {schema: {type: integer}}}, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}

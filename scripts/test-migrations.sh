@@ -4,7 +4,7 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 POSTGRES_IMAGE="${POSTGRES_IMAGE:-docker.io/library/postgres:18-alpine}"
-container="midori-migration-test-$$"
+container="midori-migration-test-${BASHPID}-${RANDOM}-${RANDOM}"
 
 cleanup() {
   podman rm -f "${container}" >/dev/null 2>&1 || true
@@ -15,6 +15,7 @@ podman run -d --name "${container}" \
   -e POSTGRES_USER=midori \
   -e POSTGRES_PASSWORD=migration-test-only \
   -e POSTGRES_DB=midori_vpn \
+  --tmpfs /var/lib/postgresql:rw,size=512m \
   -v "${ROOT_DIR}/internal/db/migrations:/migrations:ro,Z" \
   -v "${ROOT_DIR}/internal/db/schema.sql:/schema.sql:ro,Z" \
   "${POSTGRES_IMAGE}" >/dev/null
@@ -58,6 +59,8 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c "
 
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000012_persistent_devices.up.sql >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000013_peer_operations.up.sql >/dev/null
 
 remaining="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT count(*) FROM information_schema.columns WHERE table_name = 'vpn_servers' AND column_name IN ('proxy_port','proxy_scheme','wss_tunnel_enabled','wss_host','wss_port')")"
@@ -96,6 +99,58 @@ if podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c
   printf 'error: migration 12 allowed an active peer without device_id\n' >&2
   exit 1
 fi
+
+operation_table="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT to_regclass('public.peer_operations') IS NOT NULL")"
+[ "${operation_table}" = "t" ] || { printf 'error: migration 13 did not create peer_operations\n' >&2; exit 1; }
+
+# Live operations are exclusive by device and key and block deletion of every
+# parent required to reconcile them.
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c "
+  INSERT INTO users (id, authentik_uid, email)
+  VALUES ('10000000-0000-4000-8000-000000000013', 'operation-user', 'operation@test.invalid');
+  INSERT INTO vpn_servers (id, name, host)
+  VALUES ('20000000-0000-4000-8000-000000000013', 'Operation Server', 'operation.test.invalid');
+  INSERT INTO vpn_server_transports (server_id, protocol, endpoint, port, enabled, priority)
+  VALUES ('20000000-0000-4000-8000-000000000013', 'wireguard', 'operation.test.invalid', 51820, FALSE, 100);
+  INSERT INTO devices (id, user_id, client_instance_id, reported_name, device_type)
+  VALUES ('50000000-0000-4000-8000-000000000013', '10000000-0000-4000-8000-000000000013',
+          '60000000-0000-4000-8000-000000000013', 'operation-host', 'desktop');
+  INSERT INTO peer_operations (
+    id, action, state, user_id, device_id, server_id, public_key,
+    capacity_reserved, attempts
+  ) VALUES (
+    '70000000-0000-4000-8000-000000000013', 'connect', 'pending',
+    '10000000-0000-4000-8000-000000000013', '50000000-0000-4000-8000-000000000013',
+    '20000000-0000-4000-8000-000000000013', repeat('A', 43) || '=', TRUE, 1
+  );
+" >/dev/null
+for parent_delete in \
+  "DELETE FROM users WHERE id = '10000000-0000-4000-8000-000000000013'" \
+  "DELETE FROM devices WHERE id = '50000000-0000-4000-8000-000000000013'" \
+  "DELETE FROM vpn_servers WHERE id = '20000000-0000-4000-8000-000000000013'"; do
+  if podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c "${parent_delete}" >/dev/null 2>&1; then
+    printf 'error: migration 13 allowed parent deletion with a live operation\n' >&2
+    exit 1
+  fi
+done
+if podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c "
+  INSERT INTO peer_operations (
+    id, action, state, user_id, device_id, server_id, public_key
+  ) VALUES (
+    '70000000-0000-4000-8000-000000000014', 'connect', 'pending',
+    '10000000-0000-4000-8000-000000000013', '50000000-0000-4000-8000-000000000013',
+    '20000000-0000-4000-8000-000000000013', repeat('B', 43) || '='
+  )" >/dev/null 2>&1; then
+  printf 'error: migration 13 allowed concurrent live operations for one device\n' >&2
+  exit 1
+fi
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c "
+  UPDATE peer_operations
+  SET state = 'failed', capacity_reserved = FALSE, last_error = 'test terminal state'
+  WHERE id = '70000000-0000-4000-8000-000000000013';
+  DELETE FROM users WHERE id = '10000000-0000-4000-8000-000000000013';
+" >/dev/null
 
 # Secondary adapter references are intentionally non-unique.
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c \
@@ -147,6 +202,12 @@ cascade_rows="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
 [ "${cascade_rows}" = "0" ] || { printf 'error: user cascade left %s device-related rows\n' "${cascade_rows}" >&2; exit 1; }
 
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000013_peer_operations.down.sql >/dev/null
+operation_artifacts="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT (to_regclass('public.peer_operations') IS NOT NULL)::int + COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'peers' AND column_name = 'provision_operation_id'")"
+[ "${operation_artifacts}" = "0" ] || { printf 'error: migration 13 rollback left %s operation artifacts\n' "${operation_artifacts}" >&2; exit 1; }
+
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000012_persistent_devices.down.sql >/dev/null
 device_columns="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND ((table_name = 'peers' AND column_name = 'device_id') OR (table_name = 'device_certificates' AND column_name = 'device_id'))")"
@@ -182,6 +243,8 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
 
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000012_persistent_devices.up.sql >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000013_peer_operations.up.sql >/dev/null
 
 # The device-based certificate key permits equal hostnames on distinct
 # registered installations without merging either device.
@@ -205,5 +268,8 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_schema_te
 schema_devices="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
   "SELECT to_regclass('public.devices') IS NOT NULL")"
 [ "${schema_devices}" = "t" ] || { printf 'error: consolidated schema did not create devices\n' >&2; exit 1; }
+schema_operations="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
+  "SELECT to_regclass('public.peer_operations') IS NOT NULL")"
+[ "${schema_operations}" = "t" ] || { printf 'error: consolidated schema did not create peer_operations\n' >&2; exit 1; }
 
-printf 'Migration chain 1-12, migrations 9-12 rollback, and consolidated schema verified on PostgreSQL 18.\n'
+printf 'Migration chain 1-13, migrations 9-13 rollback, and consolidated schema verified on PostgreSQL 18.\n'

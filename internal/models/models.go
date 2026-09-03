@@ -136,21 +136,61 @@ func (s *VPNServer) ApplyCapabilities() {
 }
 
 type Peer struct {
-	ID            uuid.UUID  `json:"id"`
-	UserID        uuid.UUID  `json:"user_id"`
-	UserEmail     string     `json:"user_email,omitempty"`
-	ServerID      uuid.UUID  `json:"server_id"`
-	PublicKey     string     `json:"public_key"`
-	PresharedKey  string     `json:"-"`
-	AssignedIP    string     `json:"assigned_ip"`
-	IsActive      bool       `json:"is_active"`
-	DeviceName    string     `json:"device_name"`
-	DeviceID      *uuid.UUID `json:"device_id,omitempty"`
-	LastHandshake *time.Time `json:"last_handshake,omitempty"`
-	BytesSent     int64      `json:"bytes_sent"`
-	BytesReceived int64      `json:"bytes_received"`
-	CreatedAt     time.Time  `json:"created_at"`
-	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
+	ID                   uuid.UUID  `json:"id"`
+	UserID               uuid.UUID  `json:"user_id"`
+	UserEmail            string     `json:"user_email,omitempty"`
+	ServerID             uuid.UUID  `json:"server_id"`
+	PublicKey            string     `json:"public_key"`
+	PresharedKey         string     `json:"-"`
+	AssignedIP           string     `json:"assigned_ip"`
+	IsActive             bool       `json:"is_active"`
+	DeviceName           string     `json:"device_name"`
+	DeviceID             *uuid.UUID `json:"device_id,omitempty"`
+	ProvisionOperationID *uuid.UUID `json:"-"`
+	LastHandshake        *time.Time `json:"last_handshake,omitempty"`
+	BytesSent            int64      `json:"bytes_sent"`
+	BytesReceived        int64      `json:"bytes_received"`
+	CreatedAt            time.Time  `json:"created_at"`
+	ExpiresAt            *time.Time `json:"expires_at,omitempty"`
+}
+
+type PeerOperationAction string
+
+const (
+	PeerOperationConnect    PeerOperationAction = "connect"
+	PeerOperationReplace    PeerOperationAction = "replace"
+	PeerOperationDisconnect PeerOperationAction = "disconnect"
+)
+
+type PeerOperationState string
+
+const (
+	PeerOperationPending        PeerOperationState = "pending"
+	PeerOperationCoreApplied    PeerOperationState = "core_applied"
+	PeerOperationCompleted      PeerOperationState = "completed"
+	PeerOperationCleanupPending PeerOperationState = "cleanup_pending"
+	PeerOperationFailed         PeerOperationState = "failed"
+)
+
+type PeerOperation struct {
+	ID               uuid.UUID           `json:"id"`
+	Action           PeerOperationAction `json:"action"`
+	State            PeerOperationState  `json:"state"`
+	UserID           uuid.UUID           `json:"user_id"`
+	DeviceID         uuid.UUID           `json:"device_id"`
+	ServerID         uuid.UUID           `json:"server_id"`
+	PublicKey        string              `json:"public_key"`
+	PresharedKey     string              `json:"-"`
+	PQKEMCiphertext  string              `json:"-"`
+	PreviousPeerID   *uuid.UUID          `json:"previous_peer_id,omitempty"`
+	AssignedIP       string              `json:"assigned_ip,omitempty"`
+	CapacityReserved bool                `json:"capacity_reserved"`
+	Attempts         int                 `json:"attempts"`
+	LastError        string              `json:"last_error,omitempty"`
+	CoreAppliedAt    *time.Time          `json:"core_applied_at,omitempty"`
+	CompletedAt      *time.Time          `json:"completed_at,omitempty"`
+	CreatedAt        time.Time           `json:"created_at"`
+	UpdatedAt        time.Time           `json:"updated_at"`
 }
 
 // DeviceCertificate is a client-authentication certificate issued from a CSR.
