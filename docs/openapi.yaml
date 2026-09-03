@@ -86,17 +86,21 @@ paths:
           NodeNonce: []
           NodeSignature: []
       responses:
-        '200': {$ref: '#/components/responses/OK'}
+        '200': {$ref: '#/components/responses/NodePeerList'}
         '401': {$ref: '#/components/responses/Unauthorized'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
     post:
       operationId: addNodePeer
       tags: [Node plane]
       security: *nodeSignatureSecurity
       requestBody: {$ref: '#/components/requestBodies/AddPeer'}
       responses:
-        '201': {$ref: '#/components/responses/Created'}
+        '200': {$ref: '#/components/responses/NodePeerProvision'}
+        '201': {$ref: '#/components/responses/NodePeerProvision'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/peers/{pubkey}:
     parameters:
@@ -115,10 +119,14 @@ paths:
       operationId: removeNodePeer
       tags: [Node plane]
       security: *nodeSignatureSecurity
+      parameters:
+        - {$ref: '#/components/parameters/ExpectedOperationID'}
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/peers/{pubkey}/stats:
     parameters:
@@ -128,10 +136,11 @@ paths:
       tags: [Node plane]
       security: *nodeSignatureSecurity
       responses:
-        '200': {$ref: '#/components/responses/OK'}
+        '200': {$ref: '#/components/responses/NodePeer'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/stats:
     get:
       operationId: getNodeStats
@@ -811,7 +820,13 @@ components:
       name: pubkey
       in: path
       required: true
-      schema: {type: string}
+      schema: {$ref: '#/components/schemas/WireGuardKey'}
+    ExpectedOperationID:
+      name: expected_operation_id
+      in: query
+      required: true
+      description: Operation that must still own the peer before it can be removed.
+      schema: {type: string, format: uuid}
     Limit:
       name: limit
       in: query
@@ -874,6 +889,7 @@ components:
             - device_revoked
             - device_cleanup_pending
             - peer_operation_conflict
+            - core_peer_state_unavailable
             - origin_country_unavailable
       additionalProperties: false
     TokenResponse:
@@ -910,15 +926,68 @@ components:
             redirect_uri: {type: string, format: uri}
     AddPeerRequest:
       type: object
-      required: [public_key]
+      additionalProperties: false
+      required: [public_key, operation_id]
       properties:
-        public_key: {type: string}
-        preshared_key: {type: string, writeOnly: true}
-        keepalive: {type: integer, default: 25}
+        public_key: {$ref: '#/components/schemas/WireGuardKey'}
+        operation_id: {type: string, format: uuid}
+        preshared_key:
+          allOf: [{$ref: '#/components/schemas/WireGuardKey'}]
+          writeOnly: true
+        keepalive: {type: integer, minimum: 1, maximum: 65535, default: 25}
     UpdatePeerRequest:
       type: object
+      additionalProperties: false
       properties:
-        keepalive: {type: integer}
+        keepalive: {type: integer, minimum: 0, maximum: 65535}
+    WireGuardKey:
+      type: string
+      minLength: 44
+      maxLength: 44
+      pattern: '^[A-Za-z0-9+/]{43}=$'
+      description: Canonical padded base64 encoding of exactly 32 bytes.
+    NodePeerProvision:
+      type: object
+      additionalProperties: false
+      required: [public_key, operation_id, allowed_ip, endpoint]
+      properties:
+        public_key: {$ref: '#/components/schemas/WireGuardKey'}
+        operation_id: {type: string, format: uuid}
+        allowed_ip: {type: string}
+        endpoint: {type: string}
+    NodePeer:
+      type: object
+      additionalProperties: false
+      required: [public_key, operation_id, allowed_ip, keepalive, tx_bytes, rx_bytes]
+      properties:
+        public_key: {$ref: '#/components/schemas/WireGuardKey'}
+        operation_id: {type: string, format: uuid}
+        allowed_ip: {type: string}
+        keepalive: {type: integer, minimum: 0, maximum: 65535}
+        last_handshake: {type: string, format: date-time}
+        tx_bytes: {type: integer, format: int64, minimum: 0}
+        rx_bytes: {type: integer, format: int64, minimum: 0}
+        endpoint: {type: string}
+    NodePeerProvisionEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {const: true}
+        data: {$ref: '#/components/schemas/NodePeerProvision'}
+    NodePeerEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {const: true}
+        data: {$ref: '#/components/schemas/NodePeer'}
+    NodePeerListEnvelope:
+      type: object
+      required: [ok, data]
+      properties:
+        ok: {const: true}
+        data:
+          type: array
+          items: {$ref: '#/components/schemas/NodePeer'}
     OAuthCallbackRequest:
       type: object
       required: [code, redirect_uri]
@@ -1250,6 +1319,15 @@ components:
     Created:
       description: Created JSON envelope.
       content: {application/json: {schema: {$ref: '#/components/schemas/SuccessEnvelope'}}}
+    NodePeerProvision:
+      description: Peer provisioning result. HTTP 201 is new; HTTP 200 is an idempotent replay.
+      content: {application/json: {schema: {$ref: '#/components/schemas/NodePeerProvisionEnvelope'}}}
+    NodePeer:
+      description: Observed peer state tied to its provisioning operation.
+      content: {application/json: {schema: {$ref: '#/components/schemas/NodePeerEnvelope'}}}
+    NodePeerList:
+      description: Complete observed peer list; observation failures return HTTP 503 instead of an empty array.
+      content: {application/json: {schema: {$ref: '#/components/schemas/NodePeerListEnvelope'}}}
     HealthOK:
       description: Core process health.
       content: {application/json: {schema: {$ref: '#/components/schemas/SuccessEnvelope'}}}

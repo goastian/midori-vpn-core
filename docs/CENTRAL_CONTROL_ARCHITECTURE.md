@@ -112,6 +112,25 @@ The current signed operations add, update, remove and inspect WireGuard peers
 and return node statistics. Retries and a per-host circuit breaker already
 exist in Control. These calls are the implemented management baseline.
 
+Every add request carries a non-zero `operation_id` UUID. Core durably binds
+that operation to the canonical 32-byte WireGuard public key before applying
+the peer to the kernel. Replaying the same operation and key returns the same
+address without another allocation; using either the key or operation for a
+different owner returns `peer_operation_conflict`. Removal requires
+`expected_operation_id`, so a delayed compensation cannot remove a peer that a
+later operation replaced. An already absent peer is a successful idempotent
+removal. The node stores this ownership map atomically beside its WireGuard
+configuration and assigns a stable legacy operation once to peers restored
+from pre-contract state.
+
+Peer enumeration is fail-closed. If Core cannot observe the WireGuard device,
+it returns `503 core_peer_state_unavailable`; it never converts that failure
+into an empty list. Configurable IPv4 pools are limited to `/16` through `/30`,
+and the interface gateway retains the configured prefix. Control currently
+generates and propagates exact operation IDs for each add and its immediate
+compensations. Persisting Control-side operation lifecycle across process
+crashes remains the separate durable-operations phase.
+
 ### Data plane
 
 Clients connect directly to the selected node's certified transport endpoint.

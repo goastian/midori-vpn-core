@@ -11,8 +11,11 @@ import (
 
 var (
 	ErrPoolExhausted = errors.New("IP pool exhausted")
+	ErrPoolTooLarge  = errors.New("IP pool exceeds 65,536 addresses")
+	ErrPoolTooSmall  = errors.New("IP pool must contain network, gateway, client, and broadcast addresses")
 	ErrIPAlreadyUsed = errors.New("IP already in use")
 	ErrIPNotFound    = errors.New("IP not found in pool")
+	ErrIPNotUsable   = errors.New("IP is reserved and cannot be assigned")
 )
 
 type Pool struct {
@@ -20,6 +23,7 @@ type Pool struct {
 	network *net.IPNet
 	baseIP  uint32
 	maxHost uint32
+	prefix  int
 	bitset  []uint64 // 1 bit per host offset; bit set = assigned
 	count   uint32   // number of assigned IPs
 	next    uint32   // next candidate host offset for fast scan
@@ -36,11 +40,20 @@ func New(cidr string) (*Pool, error) {
 		return nil, fmt.Errorf("only IPv4 supported")
 	}
 
+	hostBits := b - ones
+	if hostBits > 16 {
+		return nil, ErrPoolTooLarge
+	}
+	if hostBits < 2 {
+		return nil, ErrPoolTooSmall
+	}
+
+	addressCount := uint32(1) << hostBits
 	baseIP := binary.BigEndian.Uint32(network.IP.To4())
-	maxHost := uint32(1<<(b-ones)) - 1 // broadcast = maxHost
+	maxHost := addressCount - 1 // broadcast = maxHost
 
 	// Allocate bitset: one bit per possible host offset (0..maxHost)
-	words := (maxHost + 64) / 64
+	words := (addressCount + 63) / 64
 	bs := make([]uint64, words)
 
 	// Reserve .0 (network) and .1 (gateway)
@@ -50,6 +63,7 @@ func New(cidr string) (*Pool, error) {
 		network: network,
 		baseIP:  baseIP,
 		maxHost: maxHost,
+		prefix:  ones,
 		bitset:  bs,
 		count:   2, // network + gateway
 		next:    2,
@@ -60,8 +74,9 @@ func (p *Pool) Allocate() (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	usable := p.maxHost - 1 // exclude network (.0) and broadcast (.maxHost)
-	if p.count > usable {
+	// At most maxHost slots may be marked because the broadcast address is
+	// never assignable. count already includes network and gateway.
+	if p.count >= p.maxHost {
 		return "", ErrPoolExhausted
 	}
 
@@ -95,6 +110,9 @@ func (p *Pool) Release(ip string) error {
 	if !ok {
 		return ErrIPNotFound
 	}
+	if offset < 2 || offset >= p.maxHost {
+		return ErrIPNotUsable
+	}
 
 	word := offset / 64
 	bit := offset % 64
@@ -120,6 +138,9 @@ func (p *Pool) Reserve(ip string) error {
 	if !ok {
 		return fmt.Errorf("IP %s not in pool network", cleanIP)
 	}
+	if offset < 2 || offset >= p.maxHost {
+		return ErrIPNotUsable
+	}
 
 	word := offset / 64
 	bit := offset % 64
@@ -132,7 +153,7 @@ func (p *Pool) Reserve(ip string) error {
 }
 
 func (p *Pool) GatewayIP() string {
-	return p.offsetToIP(1) + "/16"
+	return fmt.Sprintf("%s/%d", p.offsetToIP(1), p.prefix)
 }
 
 // AssignedCount returns the number of assigned IPs (including network+gateway).
@@ -152,10 +173,9 @@ func (p *Pool) FreeCount() int {
 	for _, w := range p.bitset {
 		assigned += bits.OnesCount64(w)
 	}
-	// usable = maxHost - 1 slots (offsets 2 .. maxHost-1 inclusive)
-	// free  = usable - (assigned - 2)  where 2 = pre-reserved network+gateway
-	usable := int(p.maxHost) - 1
-	return usable - (assigned - 2)
+	// Peer slots cover offsets 2..maxHost-1. Since assigned includes the two
+	// permanently reserved slots, free peer slots are maxHost-assigned.
+	return int(p.maxHost) - assigned
 }
 
 func (p *Pool) offsetToIP(offset uint32) string {

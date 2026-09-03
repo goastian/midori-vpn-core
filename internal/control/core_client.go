@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -272,13 +273,15 @@ func coreDoWithRetry(req *http.Request, bodyBytes []byte, host string) (*http.Re
 // --- Response types ---
 
 type CoreAddPeerResponse struct {
-	PublicKey string `json:"public_key"`
-	AllowedIP string `json:"allowed_ip"`
-	Endpoint  string `json:"endpoint"`
+	PublicKey   string `json:"public_key"`
+	OperationID string `json:"operation_id"`
+	AllowedIP   string `json:"allowed_ip"`
+	Endpoint    string `json:"endpoint"`
 }
 
 type CorePeerStatsResponse struct {
 	PublicKey     string `json:"public_key"`
+	OperationID   string `json:"operation_id"`
 	AllowedIP     string `json:"allowed_ip"`
 	LastHandshake string `json:"last_handshake"`
 	BytesSent     int64  `json:"tx_bytes"`
@@ -289,14 +292,47 @@ type coreAPIResponse struct {
 	OK   bool            `json:"ok"`
 	Data json.RawMessage `json:"data"`
 	Err  string          `json:"error"`
+	Code string          `json:"code"`
+}
+
+type CoreAPIError struct {
+	Status  int
+	Code    string
+	Message string
+}
+
+func (e *CoreAPIError) Error() string {
+	return fmt.Sprintf("core returned %d (%s): %s", e.Status, e.Code, e.Message)
+}
+
+func parseCoreAPIError(status int, body []byte) error {
+	var response coreAPIResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return &CoreAPIError{Status: status, Code: "invalid_core_response", Message: "Core returned an invalid error response"}
+	}
+	code := response.Code
+	if code == "" {
+		code = "core_request_failed"
+	}
+	message := response.Err
+	if message == "" {
+		message = "Core request failed"
+	}
+	return &CoreAPIError{Status: status, Code: code, Message: message}
+}
+
+func coreErrorHasStatus(err error, status int) bool {
+	var coreError *CoreAPIError
+	return errors.As(err, &coreError) && coreError.Status == status
 }
 
 // --- Core API calls ---
 
-func CallCoreAddPeer(server *models.VPNServer, pubkey string, presharedKey ...string) (*CoreAddPeerResponse, error) {
+func CallCoreAddPeer(server *models.VPNServer, pubkey, operationID string, presharedKey ...string) (*CoreAddPeerResponse, error) {
 	reqMap := map[string]interface{}{
-		"public_key": pubkey,
-		"keepalive":  25,
+		"public_key":   pubkey,
+		"operation_id": operationID,
+		"keepalive":    25,
 	}
 	if len(presharedKey) > 0 && presharedKey[0] != "" {
 		reqMap["preshared_key"] = presharedKey[0]
@@ -320,6 +356,9 @@ func CallCoreAddPeer(server *models.VPNServer, pubkey string, presharedKey ...st
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, parseCoreAPIError(resp.StatusCode, body)
+	}
 
 	var apiResp coreAPIResponse
 	if err := json.Unmarshal(body, &apiResp); err != nil {
@@ -327,25 +366,35 @@ func CallCoreAddPeer(server *models.VPNServer, pubkey string, presharedKey ...st
 	}
 
 	if !apiResp.OK {
-		return nil, fmt.Errorf("core error: %s", apiResp.Err)
+		return nil, parseCoreAPIError(resp.StatusCode, body)
 	}
 
 	var result CoreAddPeerResponse
 	if err := json.Unmarshal(apiResp.Data, &result); err != nil {
 		return nil, fmt.Errorf("parse core data: %w", err)
 	}
+	if result.OperationID != operationID {
+		return nil, fmt.Errorf("core response operation_id %q does not match request", result.OperationID)
+	}
 
 	return &result, nil
 }
 
-func CallCoreRemovePeer(server *models.VPNServer, pubkey string) error {
+func CallCoreRemovePeer(server *models.VPNServer, pubkey, expectedOperationID string) error {
 	encodedKey := url.PathEscape(pubkey)
 	fullURL, cbKey, err := coreURL(server, "/api/v1/peers/"+encodedKey)
 	if err != nil {
 		return err
 	}
 
-	req, err := http.NewRequest(http.MethodDelete, fullURL, nil)
+	parsedURL, err := url.Parse(fullURL)
+	if err != nil {
+		return err
+	}
+	query := parsedURL.Query()
+	query.Set("expected_operation_id", expectedOperationID)
+	parsedURL.RawQuery = query.Encode()
+	req, err := http.NewRequest(http.MethodDelete, parsedURL.String(), nil)
 	if err != nil {
 		return err
 	}
@@ -358,10 +407,27 @@ func CallCoreRemovePeer(server *models.VPNServer, pubkey string) error {
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("core returned %d: %s", resp.StatusCode, string(body))
+		return parseCoreAPIError(resp.StatusCode, body)
 	}
 
 	return nil
+}
+
+// CallCoreRemoveCurrentPeer observes the operation currently owning a key and
+// removes only that exact operation. A concurrent replacement turns the delete
+// into a conflict instead of removing the replacement.
+func CallCoreRemoveCurrentPeer(server *models.VPNServer, pubkey string) error {
+	peer, err := CallCoreGetPeerStats(server, pubkey)
+	if coreErrorHasStatus(err, http.StatusNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if peer.OperationID == "" {
+		return fmt.Errorf("core peer operation identity is unavailable")
+	}
+	return CallCoreRemovePeer(server, pubkey, peer.OperationID)
 }
 
 func CallCoreGetPeerStats(server *models.VPNServer, pubkey string) (*CorePeerStatsResponse, error) {
@@ -383,13 +449,16 @@ func CallCoreGetPeerStats(server *models.VPNServer, pubkey string) (*CorePeerSta
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, parseCoreAPIError(resp.StatusCode, body)
+	}
 
 	var apiResp coreAPIResponse
 	if err := json.Unmarshal(body, &apiResp); err != nil {
 		return nil, fmt.Errorf("invalid core response: %s", string(body))
 	}
 	if !apiResp.OK {
-		return nil, fmt.Errorf("core error: %s", apiResp.Err)
+		return nil, parseCoreAPIError(resp.StatusCode, body)
 	}
 
 	var result CorePeerStatsResponse
@@ -429,13 +498,16 @@ func CallCoreServerStats(server *models.VPNServer) (*CoreServerStatsResponse, er
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, parseCoreAPIError(resp.StatusCode, body)
+	}
 
 	var apiResp coreAPIResponse
 	if err := json.Unmarshal(body, &apiResp); err != nil {
 		return nil, fmt.Errorf("invalid core response: %s", string(body))
 	}
 	if !apiResp.OK {
-		return nil, fmt.Errorf("core error: %s", apiResp.Err)
+		return nil, parseCoreAPIError(resp.StatusCode, body)
 	}
 
 	var result CoreServerStatsResponse
@@ -463,13 +535,16 @@ func CallCoreListPeers(server *models.VPNServer) ([]CorePeerStatsResponse, error
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= http.StatusBadRequest {
+		return nil, parseCoreAPIError(resp.StatusCode, body)
+	}
 
 	var apiResp coreAPIResponse
 	if err := json.Unmarshal(body, &apiResp); err != nil {
 		return nil, fmt.Errorf("invalid core response: %s", string(body))
 	}
 	if !apiResp.OK {
-		return nil, fmt.Errorf("core error: %s", apiResp.Err)
+		return nil, parseCoreAPIError(resp.StatusCode, body)
 	}
 
 	var result []CorePeerStatsResponse

@@ -4,6 +4,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +14,38 @@ import (
 
 	"github.com/goastian/midori-vpn-core/internal/models"
 	"github.com/goastian/midori-vpn-core/internal/nodeauth"
+	"github.com/google/uuid"
 )
+
+func useTestCoreServer(t *testing.T, handler http.Handler) (*models.VPNServer, func()) {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	previousClient := coreHTTP
+	previousAllowInsecureHTTP := coreAllowInsecureHTTP
+	previousAllowedHosts := coreAllowedHosts
+	previousSigner := coreSigner
+
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		server.Close()
+		t.Fatal(err)
+	}
+	if err := InitCoreSigningIdentity("control-contract-test", base64.RawURLEncoding.EncodeToString(privateKey)); err != nil {
+		server.Close()
+		t.Fatal(err)
+	}
+	InitCoreClient(false, true, "")
+	coreHTTP = server.Client()
+
+	cleanup := func() {
+		server.Close()
+		coreHTTP = previousClient
+		coreAllowInsecureHTTP = previousAllowInsecureHTTP
+		coreAllowedHosts = previousAllowedHosts
+		coreSigner = previousSigner
+	}
+	return &models.VPNServer{Host: server.URL, Port: 1}, cleanup
+}
 
 func TestCoreURLAllowedHostsAcceptsOrigins(t *testing.T) {
 	InitCoreClient(false, false, "https://vpn.astian.org,https://de.vpn.astian.org")
@@ -101,5 +134,89 @@ func TestNormalizeCoreAllowedHost(t *testing.T) {
 		if got := normalizeCoreAllowedHost(input); got != want {
 			t.Fatalf("normalizeCoreAllowedHost(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestCallCoreAddPeerCarriesAndVerifiesOperationID(t *testing.T) {
+	operationID := uuid.NewString()
+	publicKey := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	server, cleanup := useTestCoreServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/peers" {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		var body struct {
+			PublicKey   string `json:"public_key"`
+			OperationID string `json:"operation_id"`
+			Keepalive   int    `json:"keepalive"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if body.PublicKey != publicKey || body.OperationID != operationID || body.Keepalive != 25 {
+			t.Errorf("unexpected request body: %#v", body)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": true,
+			"data": map[string]any{
+				"public_key": publicKey, "operation_id": operationID,
+				"allowed_ip": "10.8.0.2/32", "endpoint": "vpn.test:51820",
+			},
+		})
+	}))
+	defer cleanup()
+
+	response, err := CallCoreAddPeer(server, publicKey, operationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.OperationID != operationID || response.AllowedIP != "10.8.0.2/32" {
+		t.Fatalf("unexpected response: %#v", response)
+	}
+}
+
+func TestCallCoreRemoveCurrentPeerUsesObservedOperation(t *testing.T) {
+	operationID := uuid.NewString()
+	publicKey := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	var deleteCount int
+	server, cleanup := useTestCoreServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":   true,
+				"data": map[string]any{"public_key": publicKey, "operation_id": operationID},
+			})
+		case http.MethodDelete:
+			deleteCount++
+			if got := r.URL.Query().Get("expected_operation_id"); got != operationID {
+				t.Errorf("expected_operation_id = %q", got)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "data": map[string]string{"removed": publicKey}})
+		default:
+			t.Errorf("unexpected method %s", r.Method)
+		}
+	}))
+	defer cleanup()
+
+	if err := CallCoreRemoveCurrentPeer(server, publicKey); err != nil {
+		t.Fatal(err)
+	}
+	if deleteCount != 1 {
+		t.Fatalf("delete count = %d", deleteCount)
+	}
+}
+
+func TestCoreConflictRemainsTyped(t *testing.T) {
+	server, cleanup := useTestCoreServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": false, "code": "peer_operation_conflict", "error": "peer is owned by another operation",
+		})
+	}))
+	defer cleanup()
+
+	err := CallCoreRemovePeer(server, base64.StdEncoding.EncodeToString(make([]byte, 32)), uuid.NewString())
+	var coreError *CoreAPIError
+	if !errors.As(err, &coreError) || coreError.Status != http.StatusConflict || coreError.Code != "peer_operation_conflict" {
+		t.Fatalf("error = %#v", err)
 	}
 }

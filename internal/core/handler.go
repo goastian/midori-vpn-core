@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -16,10 +17,23 @@ import (
 
 type Handler struct {
 	cfg *config.Config
-	mgr *wg.Manager
+	mgr peerManager
+}
+
+type peerManager interface {
+	AddPeerWithPSK(string, string, int, string) (string, bool, error)
+	RemovePeer(string, string) error
+	UpdatePeer(string, int) error
+	PeerStats(string) (*wg.PeerInfo, error)
+	ListPeers() ([]wg.PeerInfo, error)
+	ServerStats() (*wg.ServerStatsResponse, error)
 }
 
 func NewHandler(cfg *config.Config, mgr *wg.Manager) *Handler {
+	return newHandler(cfg, mgr)
+}
+
+func newHandler(cfg *config.Config, mgr peerManager) *Handler {
 	return &Handler{cfg: cfg, mgr: mgr}
 }
 
@@ -35,12 +49,14 @@ type AddPeerRequest struct {
 	PublicKey    string `json:"public_key"`
 	PresharedKey string `json:"preshared_key,omitempty"`
 	Keepalive    int    `json:"keepalive"`
+	OperationID  string `json:"operation_id"`
 }
 
 type AddPeerResponse struct {
-	PublicKey string `json:"public_key"`
-	AllowedIP string `json:"allowed_ip"`
-	Endpoint  string `json:"endpoint"`
+	PublicKey   string `json:"public_key"`
+	OperationID string `json:"operation_id"`
+	AllowedIP   string `json:"allowed_ip"`
+	Endpoint    string `json:"endpoint"`
 }
 
 func (h *Handler) AddPeer(w http.ResponseWriter, r *http.Request) {
@@ -59,9 +75,9 @@ func (h *Handler) AddPeer(w http.ResponseWriter, r *http.Request) {
 		req.Keepalive = 25
 	}
 
-	ip, err := h.mgr.AddPeerWithPSK(req.PublicKey, req.Keepalive, req.PresharedKey)
+	ip, created, err := h.mgr.AddPeerWithPSK(req.PublicKey, req.OperationID, req.Keepalive, req.PresharedKey)
 	if err != nil {
-		respond.SafeError(w, "failed to add peer", err, http.StatusInternalServerError)
+		respondPeerMutationError(w, "failed to add peer", err)
 		return
 	}
 
@@ -70,11 +86,16 @@ func (h *Handler) AddPeer(w http.ResponseWriter, r *http.Request) {
 		endpoint = endpoint + ":" + strconv.Itoa(h.cfg.WGPort)
 	}
 
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
 	respond.JsonOK(w, AddPeerResponse{
-		PublicKey: req.PublicKey,
-		AllowedIP: ip,
-		Endpoint:  endpoint,
-	}, http.StatusCreated)
+		PublicKey:   req.PublicKey,
+		OperationID: req.OperationID,
+		AllowedIP:   ip,
+		Endpoint:    endpoint,
+	}, status)
 }
 
 func (h *Handler) RemovePeer(w http.ResponseWriter, r *http.Request) {
@@ -84,8 +105,14 @@ func (h *Handler) RemovePeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.mgr.RemovePeer(pubkey); err != nil {
-		respond.SafeError(w, "failed to remove peer", err, http.StatusInternalServerError)
+	expectedOperationID := r.URL.Query().Get("expected_operation_id")
+	if expectedOperationID == "" {
+		respond.JsonError(w, "expected_operation_id is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.mgr.RemovePeer(pubkey, expectedOperationID); err != nil {
+		respondPeerMutationError(w, "failed to remove peer", err)
 		return
 	}
 
@@ -115,7 +142,7 @@ func (h *Handler) UpdatePeer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.mgr.UpdatePeer(pubkey, keepalive); err != nil {
-		respond.SafeError(w, "failed to update peer", err, http.StatusInternalServerError)
+		respondPeerMutationError(w, "failed to update peer", err)
 		return
 	}
 
@@ -131,6 +158,14 @@ func (h *Handler) PeerStats(w http.ResponseWriter, r *http.Request) {
 
 	stats, err := h.mgr.PeerStats(pubkey)
 	if err != nil {
+		if errors.Is(err, wg.ErrInvalidPublicKey) {
+			respond.JsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, wg.ErrPeerStateUnavailable) || errors.Is(err, wg.ErrPeerOperationUntracked) {
+			respond.JsonErrorCode(w, "WireGuard peer state is unavailable", "core_peer_state_unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		respond.SafeError(w, "peer not found", err, http.StatusNotFound)
 		return
 	}
@@ -141,12 +176,28 @@ func (h *Handler) PeerStats(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {
 	peers, err := h.mgr.ListPeers()
 	if err != nil {
-		slog.Warn("failed to list peers", "error", err)
-		respond.JsonOK(w, []any{}, http.StatusOK)
+		slog.Error("failed to list peers", "error", err)
+		respond.JsonErrorCode(w, "WireGuard peer state is unavailable", "core_peer_state_unavailable", http.StatusServiceUnavailable)
 		return
 	}
 
 	respond.JsonOK(w, peers, http.StatusOK)
+}
+
+func respondPeerMutationError(w http.ResponseWriter, publicMessage string, err error) {
+	switch {
+	case errors.Is(err, wg.ErrInvalidPublicKey),
+		errors.Is(err, wg.ErrInvalidPresharedKey),
+		errors.Is(err, wg.ErrInvalidOperationID),
+		errors.Is(err, wg.ErrInvalidKeepalive):
+		respond.JsonError(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, wg.ErrPeerOperationConflict):
+		respond.JsonErrorCode(w, "peer is owned by another operation", "peer_operation_conflict", http.StatusConflict)
+	case errors.Is(err, wg.ErrPeerStateUnavailable), errors.Is(err, wg.ErrPeerOperationUntracked):
+		respond.JsonErrorCode(w, "WireGuard peer state is unavailable", "core_peer_state_unavailable", http.StatusServiceUnavailable)
+	default:
+		respond.SafeError(w, publicMessage, err, http.StatusInternalServerError)
+	}
 }
 
 // --- Stats ---

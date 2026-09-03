@@ -2,6 +2,7 @@ package wg
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -17,13 +18,36 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/crypto"
 	"github.com/goastian/midori-vpn-core/internal/ippool"
+	"github.com/google/uuid"
 
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
+const (
+	maxKeepaliveSeconds  = 65535
+	operationStateSchema = 1
+)
+
+var (
+	ErrInvalidPublicKey       = errors.New("public key must be canonical base64 encoding of exactly 32 bytes")
+	ErrInvalidPresharedKey    = errors.New("preshared key must be canonical base64 encoding of exactly 32 bytes")
+	ErrInvalidOperationID     = errors.New("operation_id must be a non-zero UUID")
+	ErrInvalidKeepalive       = errors.New("keepalive is outside the supported range")
+	ErrPeerOperationConflict  = errors.New("peer is owned by another operation")
+	ErrPeerOperationUntracked = errors.New("peer operation identity is unavailable")
+	ErrPeerStateUnavailable   = errors.New("WireGuard peer state is unavailable")
+)
+
+type wireGuardClient interface {
+	Device(string) (*wgtypes.Device, error)
+	ConfigureDevice(string, wgtypes.Config) error
+	Close() error
+}
+
 type PeerInfo struct {
 	PublicKey     string     `json:"public_key"`
+	OperationID   uuid.UUID  `json:"operation_id"`
 	AllowedIP     string     `json:"allowed_ip"`
 	Keepalive     int        `json:"keepalive"`
 	LastHandshake *time.Time `json:"last_handshake,omitempty"`
@@ -42,13 +66,15 @@ type ServerStatsResponse struct {
 }
 
 type Manager struct {
-	mu         sync.Mutex
-	cfg        *config.Config
-	client     *wgctrl.Client
-	pool       *ippool.Pool
-	peerIPs    map[string]string // pubkey -> allocated VPN pool IP (e.g. "10.8.0.5/32")
-	meshIPs    map[string]string // pubkey -> mesh overlay IP  (e.g. "10.200.1.2")
-	privateKey wgtypes.Key
+	mu                 sync.Mutex
+	cfg                *config.Config
+	client             wireGuardClient
+	pool               *ippool.Pool
+	peerIPs            map[string]string // pubkey -> allocated VPN pool IP (e.g. "10.8.0.5/32")
+	peerOps            map[string]uuid.UUID
+	meshIPs            map[string]string // pubkey -> mesh overlay IP  (e.g. "10.200.1.2")
+	peerStateAvailable bool
+	privateKey         wgtypes.Key
 }
 
 func NewManager(cfg *config.Config) (*Manager, error) {
@@ -67,6 +93,7 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		client:  client,
 		pool:    pool,
 		peerIPs: make(map[string]string),
+		peerOps: make(map[string]uuid.UUID),
 		meshIPs: make(map[string]string),
 	}
 
@@ -77,13 +104,18 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 
 	if err := m.loadExistingPeers(); err != nil {
 		slog.Warn("could not load existing peers", "error", err)
+	} else if err := m.loadOperationState(); err != nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("load peer operation state: %w", err)
+	} else {
+		m.peerStateAvailable = true
 	}
 
 	return m, nil
 }
 
 func (m *Manager) Close() {
-	m.client.Close()
+	_ = m.client.Close()
 }
 
 // PublicKey returns the server's WireGuard public key in base64.
@@ -414,19 +446,33 @@ func (m *Manager) ensureNATRules() error {
 func (m *Manager) loadExistingPeers() error {
 	dev, err := m.client.Device(m.cfg.WGInterface)
 	if err != nil {
-		return err
+		return fmt.Errorf("observe WireGuard device: %w", err)
 	}
 
 	for _, peer := range dev.Peers {
 		pubkey := base64.StdEncoding.EncodeToString(peer.PublicKey[:])
+		vpnAddresses := 0
 		for _, aip := range peer.AllowedIPs {
 			ip := aip.IP.String()
 			if meshIPNet != nil && meshIPNet.Contains(aip.IP) {
 				m.meshIPs[pubkey] = ip
 			} else {
+				ones, bits := aip.Mask.Size()
+				if bits != 32 || ones != 32 || aip.IP.To4() == nil {
+					return fmt.Errorf("peer %s has invalid VPN address %s", pubkey, aip.String())
+				}
+				vpnAddresses++
+				if vpnAddresses > 1 {
+					return fmt.Errorf("peer %s has multiple VPN pool addresses", pubkey)
+				}
 				m.peerIPs[pubkey] = ip + "/32"
-				_ = m.pool.Reserve(ip)
+				if err := m.pool.Reserve(ip); err != nil {
+					return fmt.Errorf("reserve observed peer address %s: %w", ip, err)
+				}
 			}
+		}
+		if vpnAddresses != 1 {
+			return fmt.Errorf("peer %s has no VPN pool address", pubkey)
 		}
 	}
 
@@ -434,36 +480,82 @@ func (m *Manager) loadExistingPeers() error {
 	return nil
 }
 
-// --- Public API ---
-
-func (m *Manager) AddPeer(pubkeyStr string, keepalive int) (string, error) {
-	return m.AddPeerWithPSK(pubkeyStr, keepalive, "")
+func decodeWireGuardKey(value string, invalidError error) (wgtypes.Key, error) {
+	var key wgtypes.Key
+	raw, err := base64.StdEncoding.Strict().DecodeString(value)
+	if err != nil || len(raw) != len(key) || base64.StdEncoding.EncodeToString(raw) != value {
+		return key, invalidError
+	}
+	copy(key[:], raw)
+	return key, nil
 }
 
-func (m *Manager) AddPeerWithPSK(pubkeyStr string, keepalive int, pskStr string) (string, error) {
+func parseOperationID(value string) (uuid.UUID, error) {
+	operationID, err := uuid.Parse(value)
+	if err != nil || operationID == uuid.Nil {
+		return uuid.Nil, ErrInvalidOperationID
+	}
+	return operationID, nil
+}
+
+// --- Public API ---
+
+func (m *Manager) AddPeer(pubkeyStr, operationID string, keepalive int) (string, bool, error) {
+	return m.AddPeerWithPSK(pubkeyStr, operationID, keepalive, "")
+}
+
+// AddPeerWithPSK applies one exact provisioning operation. Repeating the same
+// operation for the same public key returns the original address without
+// touching WireGuard. A key or operation already owned by another request is a
+// conflict rather than an implicit replacement.
+func (m *Manager) AddPeerWithPSK(pubkeyStr, operationID string, keepalive int, pskStr string) (string, bool, error) {
+	pubKey, err := decodeWireGuardKey(pubkeyStr, ErrInvalidPublicKey)
+	if err != nil {
+		return "", false, err
+	}
+	opID, err := parseOperationID(operationID)
+	if err != nil {
+		return "", false, err
+	}
+	if keepalive < 1 || keepalive > maxKeepaliveSeconds {
+		return "", false, ErrInvalidKeepalive
+	}
+	var presharedKey *wgtypes.Key
+	if pskStr != "" {
+		psk, err := decodeWireGuardKey(pskStr, ErrInvalidPresharedKey)
+		if err != nil {
+			return "", false, err
+		}
+		presharedKey = &psk
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	if _, exists := m.peerIPs[pubkeyStr]; exists {
-		return "", errors.New("peer already exists")
+	if !m.peerStateAvailable {
+		return "", false, ErrPeerStateUnavailable
 	}
 
-	pubKeyBytes, err := base64.StdEncoding.DecodeString(pubkeyStr)
-	if err != nil {
-		return "", fmt.Errorf("invalid public key: %w", err)
+	if existingIP, exists := m.peerIPs[pubkeyStr]; exists {
+		if existingOperation, tracked := m.peerOps[pubkeyStr]; tracked && existingOperation == opID {
+			return existingIP, false, nil
+		}
+		return "", false, ErrPeerOperationConflict
 	}
-	var pubKey wgtypes.Key
-	copy(pubKey[:], pubKeyBytes)
+	for existingKey, existingOperation := range m.peerOps {
+		if existingKey != pubkeyStr && existingOperation == opID {
+			return "", false, ErrPeerOperationConflict
+		}
+	}
 
 	allocatedIP, err := m.pool.Allocate()
 	if err != nil {
-		return "", fmt.Errorf("IP allocation: %w", err)
+		return "", false, fmt.Errorf("IP allocation: %w", err)
 	}
 
 	_, ipNet, err := net.ParseCIDR(allocatedIP)
 	if err != nil {
 		_ = m.pool.Release(allocatedIP)
-		return "", fmt.Errorf("internal: invalid allocated IP %q: %w", allocatedIP, err)
+		return "", false, fmt.Errorf("internal: invalid allocated IP %q: %w", allocatedIP, err)
 	}
 
 	ka := time.Duration(keepalive) * time.Second
@@ -472,39 +564,64 @@ func (m *Manager) AddPeerWithPSK(pubkeyStr string, keepalive int, pskStr string)
 		AllowedIPs:                  []net.IPNet{*ipNet},
 		PersistentKeepaliveInterval: &ka,
 	}
-
-	if pskStr != "" {
-		pskBytes, err := base64.StdEncoding.DecodeString(pskStr)
-		if err == nil && len(pskBytes) == 32 {
-			var psk wgtypes.Key
-			copy(psk[:], pskBytes)
-			peerCfg.PresharedKey = &psk
-		}
+	if presharedKey != nil {
+		peerCfg.PresharedKey = presharedKey
 	}
 
+	m.peerIPs[pubkeyStr] = allocatedIP
+	m.peerOps[pubkeyStr] = opID
+	if err := m.persistOperationStateLocked(); err != nil {
+		_ = m.pool.Release(allocatedIP)
+		delete(m.peerIPs, pubkeyStr)
+		delete(m.peerOps, pubkeyStr)
+		return "", false, fmt.Errorf("persist peer operation: %w", err)
+	}
+
+	// Persist the ownership before changing WireGuard. This closes the crash
+	// window where the kernel contained a peer whose original operation ID had
+	// never reached durable storage. An entry without an observed kernel peer is
+	// discarded safely during startup.
 	if err := m.client.ConfigureDevice(m.cfg.WGInterface, wgtypes.Config{
 		Peers: []wgtypes.PeerConfig{peerCfg},
 	}); err != nil {
 		_ = m.pool.Release(allocatedIP)
-		return "", fmt.Errorf("configure peer: %w", err)
+		delete(m.peerIPs, pubkeyStr)
+		delete(m.peerOps, pubkeyStr)
+		if rollbackErr := m.persistOperationStateLocked(); rollbackErr != nil {
+			m.peerStateAvailable = false
+			return "", false, errors.Join(fmt.Errorf("configure peer: %w", err), fmt.Errorf("rollback peer operation: %w", rollbackErr))
+		}
+		return "", false, fmt.Errorf("configure peer: %w", err)
 	}
-
-	m.peerIPs[pubkeyStr] = allocatedIP
 	m.persistConfig()
 
-	return allocatedIP, nil
+	return allocatedIP, true, nil
 }
 
-func (m *Manager) RemovePeer(pubkeyStr string) error {
+func (m *Manager) RemovePeer(pubkeyStr, expectedOperationID string) error {
+	pubKey, err := decodeWireGuardKey(pubkeyStr, ErrInvalidPublicKey)
+	if err != nil {
+		return err
+	}
+	expectedID, err := parseOperationID(expectedOperationID)
+	if err != nil {
+		return err
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	pubKeyBytes, err := base64.StdEncoding.DecodeString(pubkeyStr)
-	if err != nil {
-		return fmt.Errorf("invalid public key: %w", err)
+	if !m.peerStateAvailable {
+		return ErrPeerStateUnavailable
 	}
-	var pubKey wgtypes.Key
-	copy(pubKey[:], pubKeyBytes)
+
+	ip, exists := m.peerIPs[pubkeyStr]
+	if !exists {
+		return nil
+	}
+	operationID, tracked := m.peerOps[pubkeyStr]
+	if !tracked || operationID != expectedID {
+		return ErrPeerOperationConflict
+	}
 
 	peerCfg := wgtypes.PeerConfig{
 		PublicKey: pubKey,
@@ -517,9 +634,11 @@ func (m *Manager) RemovePeer(pubkeyStr string) error {
 		return fmt.Errorf("remove peer: %w", err)
 	}
 
-	if ip, ok := m.peerIPs[pubkeyStr]; ok {
-		_ = m.pool.Release(ip)
-		delete(m.peerIPs, pubkeyStr)
+	_ = m.pool.Release(ip)
+	delete(m.peerIPs, pubkeyStr)
+	delete(m.peerOps, pubkeyStr)
+	if err := m.persistOperationStateLocked(); err != nil {
+		return fmt.Errorf("persist peer removal: %w", err)
 	}
 
 	m.persistConfig()
@@ -527,15 +646,19 @@ func (m *Manager) RemovePeer(pubkeyStr string) error {
 }
 
 func (m *Manager) UpdatePeer(pubkeyStr string, keepalive int) error {
+	pubKey, err := decodeWireGuardKey(pubkeyStr, ErrInvalidPublicKey)
+	if err != nil {
+		return err
+	}
+	if keepalive < 0 || keepalive > maxKeepaliveSeconds {
+		return ErrInvalidKeepalive
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	pubKeyBytes, err := base64.StdEncoding.DecodeString(pubkeyStr)
-	if err != nil {
-		return fmt.Errorf("invalid public key: %w", err)
+	if !m.peerStateAvailable {
+		return ErrPeerStateUnavailable
 	}
-	var pubKey wgtypes.Key
-	copy(pubKey[:], pubKeyBytes)
 
 	ip, ok := m.peerIPs[pubkeyStr]
 	if !ok {
@@ -566,22 +689,32 @@ func (m *Manager) UpdatePeer(pubkeyStr string, keepalive int) error {
 }
 
 func (m *Manager) PeerStats(pubkeyStr string) (*PeerInfo, error) {
-	dev, err := m.client.Device(m.cfg.WGInterface)
+	pubKey, err := decodeWireGuardKey(pubkeyStr, ErrInvalidPublicKey)
 	if err != nil {
 		return nil, err
 	}
 
-	pubKeyBytes, err := base64.StdEncoding.DecodeString(pubkeyStr)
-	if err != nil {
-		return nil, fmt.Errorf("invalid public key: %w", err)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.peerStateAvailable {
+		return nil, ErrPeerStateUnavailable
 	}
-	var pubKey wgtypes.Key
-	copy(pubKey[:], pubKeyBytes)
+
+	dev, err := m.client.Device(m.cfg.WGInterface)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrPeerStateUnavailable, err)
+	}
 
 	for _, peer := range dev.Peers {
 		if peer.PublicKey == pubKey {
+			operationID, ok := m.peerOps[pubkeyStr]
+			if !ok {
+				return nil, ErrPeerOperationUntracked
+			}
 			info := &PeerInfo{
 				PublicKey:     pubkeyStr,
+				OperationID:   operationID,
+				Keepalive:     int(peer.PersistentKeepaliveInterval / time.Second),
 				TransmitBytes: peer.TransmitBytes,
 				ReceiveBytes:  peer.ReceiveBytes,
 			}
@@ -603,6 +736,12 @@ func (m *Manager) PeerStats(pubkeyStr string) (*PeerInfo, error) {
 }
 
 func (m *Manager) ListPeers() ([]PeerInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.peerStateAvailable {
+		return nil, ErrPeerStateUnavailable
+	}
+
 	dev, err := m.client.Device(m.cfg.WGInterface)
 	if err != nil {
 		return nil, err
@@ -610,8 +749,15 @@ func (m *Manager) ListPeers() ([]PeerInfo, error) {
 
 	peers := make([]PeerInfo, 0, len(dev.Peers))
 	for _, peer := range dev.Peers {
+		publicKey := base64.StdEncoding.EncodeToString(peer.PublicKey[:])
+		operationID, ok := m.peerOps[publicKey]
+		if !ok {
+			return nil, ErrPeerOperationUntracked
+		}
 		info := PeerInfo{
-			PublicKey:     base64.StdEncoding.EncodeToString(peer.PublicKey[:]),
+			PublicKey:     publicKey,
+			OperationID:   operationID,
+			Keepalive:     int(peer.PersistentKeepaliveInterval / time.Second),
 			TransmitBytes: peer.TransmitBytes,
 			ReceiveBytes:  peer.ReceiveBytes,
 		}
@@ -656,6 +802,125 @@ func (m *Manager) ServerStats() (*ServerStatsResponse, error) {
 }
 
 // --- Persistence ---
+
+type peerOperationState struct {
+	Schema int               `json:"schema"`
+	Peers  map[string]string `json:"peers"`
+}
+
+func (m *Manager) operationStatePath() string {
+	return filepath.Join(m.cfg.ConfigDir, m.cfg.WGInterface+".peer-operations.json")
+}
+
+// loadOperationState binds every observed peer to a stable operation UUID.
+// Peers from pre-2.0 state receive a generated legacy owner exactly once and
+// the result is persisted before the Core starts serving requests.
+func (m *Manager) loadOperationState() error {
+	state := peerOperationState{Schema: operationStateSchema, Peers: make(map[string]string)}
+	statePath := m.operationStatePath()
+	data, err := os.ReadFile(statePath)
+	stateExists := err == nil
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", statePath, err)
+	}
+	if stateExists {
+		if err := json.Unmarshal(data, &state); err != nil {
+			return fmt.Errorf("decode %s: %w", statePath, err)
+		}
+		if state.Schema != operationStateSchema || state.Peers == nil {
+			return fmt.Errorf("unsupported peer operation state schema %d", state.Schema)
+		}
+	}
+
+	loaded := make(map[string]uuid.UUID, len(m.peerIPs))
+	operationOwners := make(map[uuid.UUID]string, len(m.peerIPs))
+	changed := len(state.Peers) != len(m.peerIPs)
+	for publicKey, operationID := range state.Peers {
+		if _, err := decodeWireGuardKey(publicKey, ErrInvalidPublicKey); err != nil {
+			return fmt.Errorf("invalid persisted peer key: %w", err)
+		}
+		parsed, err := parseOperationID(operationID)
+		if err != nil {
+			return fmt.Errorf("invalid persisted operation for peer %s: %w", publicKey, err)
+		}
+		if _, observed := m.peerIPs[publicKey]; observed {
+			if existingKey, duplicate := operationOwners[parsed]; duplicate && existingKey != publicKey {
+				return fmt.Errorf("operation %s is assigned to multiple peers", parsed)
+			}
+			loaded[publicKey] = parsed
+			operationOwners[parsed] = publicKey
+		}
+	}
+	for publicKey := range m.peerIPs {
+		if _, ok := loaded[publicKey]; !ok {
+			loaded[publicKey] = uuid.New()
+			changed = true
+		}
+	}
+	m.peerOps = loaded
+	if changed || (!stateExists && len(loaded) > 0) {
+		if err := m.persistOperationStateLocked(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *Manager) persistOperationStateLocked() error {
+	if err := os.MkdirAll(m.cfg.ConfigDir, 0700); err != nil {
+		return fmt.Errorf("create operation state directory: %w", err)
+	}
+	state := peerOperationState{Schema: operationStateSchema, Peers: make(map[string]string, len(m.peerOps))}
+	for publicKey, operationID := range m.peerOps {
+		state.Peers[publicKey] = operationID.String()
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return fmt.Errorf("encode peer operation state: %w", err)
+	}
+	data = append(data, '\n')
+
+	statePath := m.operationStatePath()
+	temporaryPath := statePath + ".tmp"
+	file, err := os.OpenFile(temporaryPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("open peer operation state: %w", err)
+	}
+	if err := file.Chmod(0600); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("protect peer operation state: %w", err)
+	}
+	removeTemporary := true
+	defer func() {
+		if removeTemporary {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write peer operation state: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("sync peer operation state: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close peer operation state: %w", err)
+	}
+	if err := os.Rename(temporaryPath, statePath); err != nil {
+		return fmt.Errorf("activate peer operation state: %w", err)
+	}
+	removeTemporary = false
+	directory, err := os.Open(m.cfg.ConfigDir)
+	if err != nil {
+		return fmt.Errorf("open operation state directory: %w", err)
+	}
+	defer directory.Close()
+	if err := directory.Sync(); err != nil {
+		return fmt.Errorf("sync operation state directory: %w", err)
+	}
+	return nil
+}
 
 func (m *Manager) persistConfig() {
 	confPath := filepath.Join(m.cfg.ConfigDir, m.cfg.WGInterface+".conf")

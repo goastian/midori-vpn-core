@@ -189,7 +189,7 @@ func StartPeerCleanup(parentCtx context.Context, pool *pgxpool.Pool) {
 		for _, peer := range stalePeers {
 			server, err := serverRepo.GetByID(ctx, peer.ServerID)
 			if err == nil {
-				if err := CallCoreRemovePeer(server, peer.PublicKey); err != nil {
+				if err := CallCoreRemoveCurrentPeer(server, peer.PublicKey); err != nil {
 					slog.Error("peer-cleanup core remove error", "peer_id", peer.ID, "error", err)
 				}
 				if err := serverRepo.UpdatePeerCount(ctx, peer.ServerID, -1); err != nil {

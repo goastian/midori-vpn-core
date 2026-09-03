@@ -246,7 +246,7 @@ func (h *Handler) DeleteMyDevice(w http.ResponseWriter, r *http.Request) {
 			respond.SafeError(w, "failed to load device server", err, http.StatusInternalServerError)
 			return
 		}
-		if err := CallCoreRemovePeer(server, active.PublicKey); err != nil {
+		if err := CallCoreRemoveCurrentPeer(server, active.PublicKey); err != nil {
 			slog.Error("device cleanup did not converge", "device_id", deviceID, "peer_id", active.ID, "error", err)
 			w.Header().Set("Retry-After", "5")
 			respond.JsonErrorCode(w, "device cleanup did not converge; retry is required", "device_cleanup_pending", http.StatusServiceUnavailable)

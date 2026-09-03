@@ -626,16 +626,22 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4+5. Call vpn-core to add peer (core assigns IP from pool)
-	coreResp, err := CallCoreAddPeer(server, req.PublicKey, psk)
+	operationID := uuid.NewString()
+	coreResp, err := CallCoreAddPeer(server, req.PublicKey, operationID, psk)
 	if err != nil {
 		slog.Error("core add peer error", "error", err)
+		var coreError *CoreAPIError
+		if errors.As(err, &coreError) && coreError.Code == "peer_operation_conflict" {
+			respond.JsonErrorCode(w, "peer is owned by another operation", "peer_operation_conflict", http.StatusConflict)
+			return
+		}
 		respond.JsonError(w, "failed to connect to VPN server", http.StatusBadGateway)
 		return
 	}
 	if device == nil {
 		device, err = h.deviceRepo.CreateLegacy(r.Context(), user.ID, deviceRequest.reportedName)
 		if err != nil {
-			_ = CallCoreRemovePeer(server, req.PublicKey)
+			_ = CallCoreRemovePeer(server, req.PublicKey, operationID)
 			respond.SafeError(w, "failed to create legacy device", err, http.StatusInternalServerError)
 			return
 		}
@@ -656,7 +662,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		DeviceID:     &device.ID,
 	}
 	if err := h.peerRepo.Create(r.Context(), peer); err != nil {
-		_ = CallCoreRemovePeer(server, req.PublicKey)
+		_ = CallCoreRemovePeer(server, req.PublicKey, operationID)
 		slog.Error("create peer error", "error", err)
 		respond.JsonError(w, "failed to save connection", http.StatusInternalServerError)
 		return
@@ -734,7 +740,7 @@ func (h *Handler) Disconnect(w http.ResponseWriter, r *http.Request) {
 
 	server, err := h.serverRepo.GetByID(r.Context(), peer.ServerID)
 	if err == nil {
-		_ = CallCoreRemovePeer(server, peer.PublicKey)
+		_ = CallCoreRemoveCurrentPeer(server, peer.PublicKey)
 		_ = h.serverRepo.UpdatePeerCount(r.Context(), peer.ServerID, -1)
 	}
 
@@ -1172,7 +1178,7 @@ func (h *Handler) AdminBanUser(w http.ResponseWriter, r *http.Request) {
 		}
 		server, err := h.serverRepo.GetByID(r.Context(), p.ServerID)
 		if err == nil {
-			_ = CallCoreRemovePeer(server, p.PublicKey)
+			_ = CallCoreRemoveCurrentPeer(server, p.PublicKey)
 			_ = h.serverRepo.UpdatePeerCount(r.Context(), p.ServerID, -1)
 		}
 		h.detachPeerFromMeshSessions(r.Context(), &p)
@@ -1554,7 +1560,7 @@ func (h *Handler) AdminForceDisconnectPeer(w http.ResponseWriter, r *http.Reques
 
 	server, err := h.serverRepo.GetByID(r.Context(), peer.ServerID)
 	if err == nil {
-		_ = CallCoreRemovePeer(server, peer.PublicKey)
+		_ = CallCoreRemoveCurrentPeer(server, peer.PublicKey)
 		_ = h.serverRepo.UpdatePeerCount(r.Context(), peer.ServerID, -1)
 	}
 

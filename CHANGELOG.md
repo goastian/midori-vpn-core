@@ -85,6 +85,11 @@
 
 ### API contract
 
+- Made Core WireGuard provisioning idempotent through mandatory operation UUIDs,
+  durable node-local ownership, conditional removal and explicit conflict or
+  unavailable-state responses. Peer keys and PSKs now require canonical 32-byte
+  base64, keepalive is bounded, and address pools preserve their configured
+  prefix while rejecting ranges larger than 65,536 addresses.
 - Added user device list, alias, revocation and paginated session-history
   endpoints. The primary connection list now returns active sessions only;
   revocation preserves audit history, invalidates recoverable material and
