@@ -683,6 +683,45 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	h.serverRepo.InvalidateCache()
 	device = beginResult.Device
 
+	// Peers created before Control persisted operations still have an exact
+	// owner in Core (assigned during Core's legacy-state adoption). Capture that
+	// owner before applying the replacement so delayed cleanup can never target
+	// whichever operation happens to own the key later.
+	if beginResult.PreviousPeer != nil && beginResult.Operation.PreviousOperationID == nil {
+		previousServer, loadErr := h.serverRepo.GetByID(r.Context(), beginResult.PreviousPeer.ServerID)
+		if loadErr != nil {
+			_ = h.peerOperationRepo.FailDefinitively(r.Context(), operationID, loadErr)
+			h.serverRepo.InvalidateCache()
+			respond.SafeError(w, "failed to load previous connection server", loadErr, http.StatusInternalServerError)
+			return
+		}
+		previousStats, observeErr := CallCoreGetPeerStats(previousServer, beginResult.PreviousPeer.PublicKey)
+		if coreErrorHasStatus(observeErr, http.StatusNotFound) {
+			// The database row is stale and there is no Core peer to clean up.
+		} else if observeErr != nil {
+			_ = h.peerOperationRepo.FailDefinitively(r.Context(), operationID, observeErr)
+			h.serverRepo.InvalidateCache()
+			respond.JsonError(w, "failed to verify previous VPN session", http.StatusBadGateway)
+			return
+		} else {
+			previousOperationID, parseErr := uuid.Parse(previousStats.OperationID)
+			if parseErr != nil || previousOperationID == uuid.Nil {
+				identityErr := errors.New("previous Core peer has an invalid operation identity")
+				_ = h.peerOperationRepo.FailDefinitively(r.Context(), operationID, identityErr)
+				h.serverRepo.InvalidateCache()
+				respond.JsonError(w, "failed to verify previous VPN session", http.StatusBadGateway)
+				return
+			}
+			if setErr := h.peerOperationRepo.SetPreviousOperationID(r.Context(), operationID, previousOperationID); setErr != nil {
+				_ = h.peerOperationRepo.FailDefinitively(r.Context(), operationID, setErr)
+				h.serverRepo.InvalidateCache()
+				respond.SafeError(w, "failed to persist previous connection owner", setErr, http.StatusInternalServerError)
+				return
+			}
+			beginResult.Operation.PreviousOperationID = &previousOperationID
+		}
+	}
+
 	coreResp, err := CallCoreAddPeer(server, req.PublicKey, operationID.String(), psk)
 	if err != nil {
 		slog.Error("core add peer error", "error", err)
@@ -713,17 +752,12 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	}
 	h.serverRepo.InvalidateCache()
 
-	if previousPeer != nil && previousPeer.IsActive {
+	if previousPeer != nil && previousPeer.IsActive && beginResult.Operation.PreviousOperationID != nil {
 		previousServer, loadErr := h.serverRepo.GetByID(r.Context(), previousPeer.ServerID)
 		if loadErr != nil {
 			_ = h.peerOperationRepo.MarkCleanupPending(r.Context(), operationID, loadErr)
 		} else {
-			var cleanupErr error
-			if previousPeer.ProvisionOperationID != nil {
-				cleanupErr = CallCoreRemovePeer(previousServer, previousPeer.PublicKey, previousPeer.ProvisionOperationID.String())
-			} else {
-				cleanupErr = CallCoreRemoveCurrentPeer(previousServer, previousPeer.PublicKey)
-			}
+			cleanupErr := CallCoreRemovePeer(previousServer, previousPeer.PublicKey, beginResult.Operation.PreviousOperationID.String())
 			if cleanupErr != nil {
 				slog.Error("replaced peer cleanup is pending", "operation_id", operationID, "peer_id", previousPeer.ID, "error", cleanupErr)
 				_ = h.peerOperationRepo.MarkCleanupPending(r.Context(), operationID, cleanupErr)

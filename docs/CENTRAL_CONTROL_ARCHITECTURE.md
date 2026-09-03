@@ -130,8 +130,9 @@ and the interface gateway retains the configured prefix. Control currently
 persists every connect or replacement in `peer_operations` before contacting
 Core. The row owns the exact operation UUID, device, key, target server,
 reserved capacity, prior peer, assigned address, retry count and transition
-timestamps. `peers.provision_operation_id` preserves the operation that owns
-each completed session. A pending retry returns
+timestamps. The exact prior Core operation is captured before replacement,
+including for adopted legacy peers. `peers.provision_operation_id` preserves
+the operation that owns each completed session. A pending retry returns
 `409 connection_in_progress` with `Retry-After`; a completed retry returns the
 same session and sensitive configuration rather than allocating again.
 Startup/periodic reconciliation of stalled rows remains a separate phase.

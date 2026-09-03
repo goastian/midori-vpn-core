@@ -1,5 +1,5 @@
 -- Midori VPN v2.0.0 Canonical Consolidated PostgreSQL Schema
--- Generated from migrations 000001 - 000013
+-- Generated from migrations 000001 - 000014
 
 BEGIN;
 
@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS peer_operations (
     preshared_key       TEXT        NOT NULL DEFAULT '',
     pq_kem_ciphertext   TEXT        NOT NULL DEFAULT '',
     previous_peer_id    UUID        REFERENCES peers(id) ON DELETE SET NULL,
+    previous_operation_id UUID,
     assigned_ip         TEXT,
     capacity_reserved   BOOLEAN     NOT NULL DEFAULT FALSE,
     attempts            INTEGER     NOT NULL DEFAULT 0 CHECK (attempts >= 0),

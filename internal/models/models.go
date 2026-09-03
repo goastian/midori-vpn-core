@@ -173,24 +173,25 @@ const (
 )
 
 type PeerOperation struct {
-	ID               uuid.UUID           `json:"id"`
-	Action           PeerOperationAction `json:"action"`
-	State            PeerOperationState  `json:"state"`
-	UserID           uuid.UUID           `json:"user_id"`
-	DeviceID         uuid.UUID           `json:"device_id"`
-	ServerID         uuid.UUID           `json:"server_id"`
-	PublicKey        string              `json:"public_key"`
-	PresharedKey     string              `json:"-"`
-	PQKEMCiphertext  string              `json:"-"`
-	PreviousPeerID   *uuid.UUID          `json:"previous_peer_id,omitempty"`
-	AssignedIP       string              `json:"assigned_ip,omitempty"`
-	CapacityReserved bool                `json:"capacity_reserved"`
-	Attempts         int                 `json:"attempts"`
-	LastError        string              `json:"last_error,omitempty"`
-	CoreAppliedAt    *time.Time          `json:"core_applied_at,omitempty"`
-	CompletedAt      *time.Time          `json:"completed_at,omitempty"`
-	CreatedAt        time.Time           `json:"created_at"`
-	UpdatedAt        time.Time           `json:"updated_at"`
+	ID                  uuid.UUID           `json:"id"`
+	Action              PeerOperationAction `json:"action"`
+	State               PeerOperationState  `json:"state"`
+	UserID              uuid.UUID           `json:"user_id"`
+	DeviceID            uuid.UUID           `json:"device_id"`
+	ServerID            uuid.UUID           `json:"server_id"`
+	PublicKey           string              `json:"public_key"`
+	PresharedKey        string              `json:"-"`
+	PQKEMCiphertext     string              `json:"-"`
+	PreviousPeerID      *uuid.UUID          `json:"previous_peer_id,omitempty"`
+	PreviousOperationID *uuid.UUID          `json:"previous_operation_id,omitempty"`
+	AssignedIP          string              `json:"assigned_ip,omitempty"`
+	CapacityReserved    bool                `json:"capacity_reserved"`
+	Attempts            int                 `json:"attempts"`
+	LastError           string              `json:"last_error,omitempty"`
+	CoreAppliedAt       *time.Time          `json:"core_applied_at,omitempty"`
+	CompletedAt         *time.Time          `json:"completed_at,omitempty"`
+	CreatedAt           time.Time           `json:"created_at"`
+	UpdatedAt           time.Time           `json:"updated_at"`
 }
 
 // DeviceCertificate is a client-authentication certificate issued from a CSR.

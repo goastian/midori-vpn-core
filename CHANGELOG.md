@@ -60,11 +60,11 @@
 - Pinned the Core builder, Alpine runtime and rootless analysis tools to exact supported versions and image digests. Staticcheck and govulncheck no longer resolve mutable `latest` releases during a rebuild.
 - Added rootless Podman development images for Go, Control and Desktop workflows.
 - Added immutable migrations through version 12, including billing/quotas, transport health, unique active peer addresses, Ed25519 identities, removal of retired transport columns, revocable per-device client certificates, persistent device identity and the missing Mesh exit-node protocol/capability fields.
-- Added migration 13 and a durable PostgreSQL lifecycle for WireGuard connect
+- Added migrations 13–14 and a durable PostgreSQL lifecycle for WireGuard connect
   and replacement operations. Quota and capacity are revalidated under locks,
   retries reuse the exact completed session, ambiguous failures remain
-  recoverable, and cleanup can only target the operation that owned the prior
-  peer.
+  recoverable, and the exact previous Core owner is captured before replacement
+  so cleanup cannot target a later operation, including for legacy peers.
 - Deployment scripts reject default credentials and publish proxy upstream only on loopback.
 - Added reversible Quadlet configuration for MASQUE, Redis 8.10.1 migration with volume export, PostgreSQL 18 migration-chain tests, Certbot reload hook and Redis persistence sysctl.
 - Updated CI to Go 1.27, Node 24/npm 12 and current stable action majors; Linux releases are signed RPMs built entirely with rootless Podman.

@@ -163,6 +163,9 @@ func TestPeerOperationReplacementWorksAtQuotaAndCapacityLimit(t *testing.T) {
 	if second.Operation.Action != models.PeerOperationReplace || second.Operation.CapacityReserved {
 		t.Fatalf("same-server replacement reserved a second slot: %#v", second.Operation)
 	}
+	if second.Operation.PreviousOperationID == nil || *second.Operation.PreviousOperationID != first.Operation.ID {
+		t.Fatalf("replacement did not persist the exact previous operation: %#v", second.Operation)
+	}
 	secondPeer, previousPeer := completeFixtureConnect(t, operationRepo, second.Operation.ID, "10.90.0.4/32")
 	if previousPeer == nil || previousPeer.ID != firstPeer.ID || !previousPeer.IsActive {
 		t.Fatalf("replacement lost exact previous peer: %#v", previousPeer)
@@ -180,6 +183,42 @@ func TestPeerOperationReplacementWorksAtQuotaAndCapacityLimit(t *testing.T) {
 	}
 	if activePeers != 1 || currentPeers != 1 {
 		t.Fatalf("replacement counters diverged: active=%d current=%d", activePeers, currentPeers)
+	}
+}
+
+func TestPeerOperationPersistsObservedLegacyOwner(t *testing.T) {
+	fixture := newPeerOperationFixture(t, 1)
+	operationRepo := repo.NewPeerOperationRepo(fixture.pool)
+	if _, err := fixture.pool.Exec(context.Background(), `
+		INSERT INTO peers (
+			user_id, server_id, public_key, assigned_ip, device_name, device_id
+		) VALUES ($1, $2, $3, '10.90.0.50/32', $4, $5)`,
+		fixture.userID, fixture.serverID, operationKey(50), fixture.device.ReportedName, fixture.deviceID); err != nil {
+		t.Fatalf("insert legacy peer: %v", err)
+	}
+	if _, err := fixture.pool.Exec(context.Background(), `
+		UPDATE vpn_servers SET current_peers = 1 WHERE id = $1`, fixture.serverID); err != nil {
+		t.Fatalf("set legacy server capacity: %v", err)
+	}
+
+	replacement := beginFixtureConnect(t, fixture, operationRepo, operationKey(51))
+	if replacement.Operation.PreviousOperationID != nil {
+		t.Fatalf("legacy replacement unexpectedly had an owner: %#v", replacement.Operation)
+	}
+	observedOwner := uuid.New()
+	if err := operationRepo.SetPreviousOperationID(context.Background(), replacement.Operation.ID, observedOwner); err != nil {
+		t.Fatalf("SetPreviousOperationID: %v", err)
+	}
+	var persistedOwner uuid.UUID
+	if err := fixture.pool.QueryRow(context.Background(), `
+		SELECT previous_operation_id FROM peer_operations WHERE id = $1`, replacement.Operation.ID).Scan(&persistedOwner); err != nil {
+		t.Fatalf("load previous operation owner: %v", err)
+	}
+	if persistedOwner != observedOwner {
+		t.Fatalf("previous operation owner = %s, want %s", persistedOwner, observedOwner)
+	}
+	if err := operationRepo.FailDefinitively(context.Background(), replacement.Operation.ID, errors.New("test cleanup")); err != nil {
+		t.Fatalf("release legacy replacement: %v", err)
 	}
 }
 

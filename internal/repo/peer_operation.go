@@ -51,7 +51,7 @@ func NewPeerOperationRepo(pool *pgxpool.Pool) *PeerOperationRepo {
 
 const operationColumns = `id, action, state, user_id, device_id, server_id,
 	public_key, preshared_key, pq_kem_ciphertext, previous_peer_id,
-	COALESCE(assigned_ip, ''), capacity_reserved, attempts, last_error,
+	previous_operation_id, COALESCE(assigned_ip, ''), capacity_reserved, attempts, last_error,
 	core_applied_at, completed_at, created_at, updated_at`
 
 func scanPeerOperation(row interface{ Scan(...interface{}) error }) (*models.PeerOperation, error) {
@@ -60,7 +60,7 @@ func scanPeerOperation(row interface{ Scan(...interface{}) error }) (*models.Pee
 		&operation.ID, &operation.Action, &operation.State, &operation.UserID,
 		&operation.DeviceID, &operation.ServerID, &operation.PublicKey,
 		&operation.PresharedKey, &operation.PQKEMCiphertext,
-		&operation.PreviousPeerID, &operation.AssignedIP,
+		&operation.PreviousPeerID, &operation.PreviousOperationID, &operation.AssignedIP,
 		&operation.CapacityReserved, &operation.Attempts,
 		&operation.LastError, &operation.CoreAppliedAt, &operation.CompletedAt,
 		&operation.CreatedAt, &operation.UpdatedAt,
@@ -263,20 +263,22 @@ func (r *PeerOperationRepo) BeginConnect(ctx context.Context, params BeginConnec
 
 	action := models.PeerOperationConnect
 	var previousPeerID *uuid.UUID
+	var previousOperationID *uuid.UUID
 	if previousPeer != nil {
 		action = models.PeerOperationReplace
 		previousPeerID = &previousPeer.ID
+		previousOperationID = previousPeer.ProvisionOperationID
 	}
 	operation, err := scanPeerOperation(tx.QueryRow(ctx, `
 		INSERT INTO peer_operations (
 			id, action, state, user_id, device_id, server_id, public_key,
 			preshared_key, pq_kem_ciphertext, previous_peer_id,
-			capacity_reserved, attempts
-		) VALUES ($1, $2, 'pending', $3, $4, $5, $6, $7, $8, $9, $10, 1)
+			previous_operation_id, capacity_reserved, attempts
+		) VALUES ($1, $2, 'pending', $3, $4, $5, $6, $7, $8, $9, $10, $11, 1)
 		RETURNING `+operationColumns,
 		params.OperationID, action, params.UserID, device.ID, params.ServerID,
 		params.PublicKey, params.PresharedKey, params.PQKEMCiphertext,
-		previousPeerID, capacityReserved))
+		previousPeerID, previousOperationID, capacityReserved))
 	if err != nil {
 		var pgError *pgconn.PgError
 		if errors.As(err, &pgError) && pgError.Code == "23505" {
@@ -288,6 +290,23 @@ func (r *PeerOperationRepo) BeginConnect(ctx context.Context, params BeginConnec
 		return nil, fmt.Errorf("commit connection operation: %w", err)
 	}
 	return &BeginConnectResult{Operation: operation, Device: device, PreviousPeer: previousPeer}, nil
+}
+
+func (r *PeerOperationRepo) SetPreviousOperationID(ctx context.Context, operationID, previousOperationID uuid.UUID) error {
+	if previousOperationID == uuid.Nil {
+		return errors.New("previous operation ID is required")
+	}
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE peer_operations
+		SET previous_operation_id = $2, updated_at = NOW()
+		WHERE id = $1 AND state = 'pending' AND previous_peer_id IS NOT NULL`, operationID, previousOperationID)
+	if err != nil {
+		return fmt.Errorf("record previous Core operation: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrOperationState
+	}
+	return nil
 }
 
 func scanOperationDevice(row interface{ Scan(...interface{}) error }) (*models.Device, error) {
