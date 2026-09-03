@@ -101,29 +101,29 @@ func BannedCheck(next http.Handler) http.Handler {
 }
 
 type Handler struct {
-	userRepo                *repo.UserRepo
-	serverRepo              *repo.ServerRepo
-	peerRepo                *repo.PeerRepo
-	peerOperationRepo       *repo.PeerOperationRepo
-	deviceRepo              *repo.DeviceRepo
-	meshRepo                *repo.MeshRepo
-	auditRepo               *repo.AuditRepo
-	trustedExtensionRepo    *repo.TrustedExtensionRepo
-	billingClient           *billing.Client
-	wgMgr                   *wg.Manager
-	hub                     *WSHub
-	maxDevicesPerUser       int
-	appEnv                  string
-	coreAllowLoopback       bool
-	publicBaseURL           string
-	vpnDNS                  string
-	credentialSigningSecret string
-	connectLimiter          *userRateLimiter // per-user rate limit for the /connect endpoint
-	nodeVerifier            *nodeauth.Verifier
-	clientCertificateRepo   *repo.DeviceCertificateRepo
-	clientCertificateCA     *clientpki.Authority
-	multiclusterRepo        *repo.MulticlusterRepo
-	desiredStateSigner      *desiredstate.Signer
+	userRepo              *repo.UserRepo
+	serverRepo            *repo.ServerRepo
+	peerRepo              *repo.PeerRepo
+	peerOperationRepo     *repo.PeerOperationRepo
+	deviceRepo            *repo.DeviceRepo
+	meshRepo              *repo.MeshRepo
+	auditRepo             *repo.AuditRepo
+	trustedExtensionRepo  *repo.TrustedExtensionRepo
+	billingClient         *billing.Client
+	wgMgr                 *wg.Manager
+	hub                   *WSHub
+	maxDevicesPerUser     int
+	appEnv                string
+	coreAllowLoopback     bool
+	publicBaseURL         string
+	vpnDNS                string
+	transportTokenSigner  *proxytoken.Signer
+	connectLimiter        *userRateLimiter // per-user rate limit for the /connect endpoint
+	nodeVerifier          *nodeauth.Verifier
+	clientCertificateRepo *repo.DeviceCertificateRepo
+	clientCertificateCA   *clientpki.Authority
+	multiclusterRepo      *repo.MulticlusterRepo
+	desiredStateSigner    *desiredstate.Signer
 }
 
 func (h *Handler) SetNodeVerifier(verifier *nodeauth.Verifier) {
@@ -149,25 +149,27 @@ func NewHandlerWithMesh(pool *pgxpool.Pool, cfg *config.Config, wgMgr *wg.Manage
 func NewHandlerWithMeshAndDataEncryption(pool *pgxpool.Pool, cfg *config.Config, wgMgr *wg.Manager, hub *WSHub, dataCipher *dataencryption.Cipher) *Handler {
 	billingRedis := billingRedisClient(cfg)
 	h := &Handler{
-		userRepo:                repo.NewUserRepo(pool),
-		serverRepo:              repo.NewServerRepo(pool),
-		peerRepo:                repo.NewPeerRepo(pool, dataCipher),
-		peerOperationRepo:       repo.NewPeerOperationRepo(pool, dataCipher),
-		deviceRepo:              repo.NewDeviceRepo(pool),
-		meshRepo:                repo.NewMeshRepo(pool),
-		auditRepo:               repo.NewAuditRepo(pool),
-		trustedExtensionRepo:    repo.NewTrustedExtensionRepo(pool),
-		clientCertificateRepo:   repo.NewDeviceCertificateRepo(pool),
-		multiclusterRepo:        repo.NewMulticlusterRepo(pool),
-		billingClient:           billing.NewClient(cfg, billingRedis),
-		wgMgr:                   wgMgr,
-		hub:                     hub,
-		maxDevicesPerUser:       cfg.MaxDevicesPerUser,
-		appEnv:                  cfg.AppEnv,
-		coreAllowLoopback:       cfg.CoreAllowHTTP,
-		publicBaseURL:           cfg.PublicBaseURL,
-		vpnDNS:                  cfg.VpnDNS,
-		credentialSigningSecret: cfg.CredentialSigningSecret,
+		userRepo:              repo.NewUserRepo(pool),
+		serverRepo:            repo.NewServerRepo(pool),
+		peerRepo:              repo.NewPeerRepo(pool, dataCipher),
+		peerOperationRepo:     repo.NewPeerOperationRepo(pool, dataCipher),
+		deviceRepo:            repo.NewDeviceRepo(pool),
+		meshRepo:              repo.NewMeshRepo(pool),
+		auditRepo:             repo.NewAuditRepo(pool),
+		trustedExtensionRepo:  repo.NewTrustedExtensionRepo(pool),
+		clientCertificateRepo: repo.NewDeviceCertificateRepo(pool),
+		multiclusterRepo:      repo.NewMulticlusterRepo(pool),
+		billingClient:         billing.NewClient(cfg, billingRedis),
+		wgMgr:                 wgMgr,
+		hub:                   hub,
+		maxDevicesPerUser:     cfg.MaxDevicesPerUser,
+		appEnv:                cfg.AppEnv,
+		coreAllowLoopback:     cfg.CoreAllowHTTP,
+		publicBaseURL:         cfg.PublicBaseURL,
+		vpnDNS:                cfg.VpnDNS,
+	}
+	if cfg.ControlNodeID != "" && cfg.ControlNodePrivateKey != "" && cfg.TransportTokenIssuer != "" {
+		h.transportTokenSigner, _ = proxytoken.NewSigner(cfg.ControlNodeID, cfg.TransportTokenIssuer, cfg.ControlNodePrivateKey)
 	}
 	if cfg.ControlNodeID != "" && cfg.ControlNodePrivateKey != "" {
 		h.desiredStateSigner, _ = desiredstate.NewSigner(cfg.ControlNodeID, cfg.ControlNodePrivateKey)
@@ -953,46 +955,89 @@ func (h *Handler) ExportQR(w http.ResponseWriter, r *http.Request) {
 	w.Write(png)
 }
 
-// ProxyCredentials generates a short-lived token with audience aud=vpn-proxy for browser extensions
+// ProxyCredentials issues one short-lived credential for one registered
+// installation and one healthy, cluster-bound proxy gateway.
 func (h *Handler) ProxyCredentials(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r)
 	if user == nil {
 		respond.JsonError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-
-	servers, err := h.serverRepo.ListActive(r.Context())
-	if err != nil {
-		respond.SafeError(w, "failed to list servers", err, http.StatusInternalServerError)
+	var request struct {
+		ServerID string        `json:"server_id"`
+		Device   DeviceRequest `json:"device"`
+	}
+	if err := decodeStrictJSON(r.Body, &request); err != nil {
+		respond.JsonError(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-
-	type proxyEndpoint struct {
-		Host        string `json:"host"`
-		Port        int    `json:"port"`
-		CountryCode string `json:"country_code"`
-		Location    string `json:"location"`
+	serverID, err := uuid.Parse(request.ServerID)
+	if err != nil || serverID == uuid.Nil {
+		respond.JsonError(w, "server_id must be a valid UUID", http.StatusBadRequest)
+		return
 	}
-
-	endpoints := make([]proxyEndpoint, 0)
-	for _, s := range servers {
-		if transport, ok := enabledServerTransport(&s, "proxy"); ok {
-			endpoints = append(endpoints, proxyEndpoint{
-				Host:        transport.Host,
-				Port:        transport.Port,
-				CountryCode: s.CountryCode,
-				Location:    s.Location,
-			})
+	deviceRequest, err := normalizeDeviceRequest(&request.Device, "")
+	if err != nil {
+		respond.JsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	server, err := h.serverRepo.GetByID(r.Context(), serverID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respond.JsonError(w, "server not found", http.StatusNotFound)
+		} else {
+			respond.SafeError(w, "failed to load proxy server", err, http.StatusInternalServerError)
 		}
+		return
 	}
-
-	// Scoped proxy token with 15-minute validity signed with HMAC-SHA256 (aud=vpn-proxy)
-	proxyTokenStr := proxytoken.Generate(user.ID, h.credentialSigningSecret, proxytoken.DefaultTTL)
-
+	transport, ok := enabledServerTransport(server, "proxy")
+	if !ok {
+		respond.JsonError(w, "proxy transport is unavailable", http.StatusConflict)
+		return
+	}
+	clusterID, err := h.multiclusterRepo.TransportCredentialCluster(r.Context(), serverID, "proxy", repo.DefaultNodeFreshness)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respond.JsonError(w, "proxy transport is not ready for cluster-scoped credentials", http.StatusConflict)
+		} else {
+			respond.SafeError(w, "failed to resolve proxy credential scope", err, http.StatusInternalServerError)
+		}
+		return
+	}
+	if h.transportTokenSigner == nil {
+		respond.JsonError(w, "transport credential signer is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	device, err := h.resolveRegisteredDevice(r.Context(), user.ID, deviceRequest)
+	if errors.Is(err, repo.ErrDeviceRevoked) {
+		respond.JsonErrorCode(w, "device is revoked", "device_revoked", http.StatusConflict)
+		return
+	}
+	if err != nil {
+		respond.SafeError(w, "failed to resolve device identity", err, http.StatusInternalServerError)
+		return
+	}
+	proxyToken, err := h.transportTokenSigner.Issue(proxytoken.AudienceVPNProxy, user.ID, device.ID, serverID, clusterID, proxytoken.DefaultTTL)
+	if err != nil {
+		respond.SafeError(w, "failed to issue proxy credential", err, http.StatusInternalServerError)
+		return
+	}
+	type proxyEndpoint struct {
+		ServerID    uuid.UUID `json:"server_id"`
+		Host        string    `json:"host"`
+		Port        int       `json:"port"`
+		CountryCode string    `json:"country_code"`
+		Location    string    `json:"location"`
+	}
+	w.Header().Set("Cache-Control", "no-store")
 	respond.JsonOK(w, map[string]interface{}{
-		"proxy_token":     proxyTokenStr,
-		"expires_in":      int(proxytoken.DefaultTTL.Seconds()),
-		"proxy_endpoints": endpoints,
+		"proxy_token": proxyToken,
+		"expires_in":  int(proxytoken.DefaultTTL.Seconds()),
+		"device_id":   device.ID,
+		"proxy_endpoint": proxyEndpoint{
+			ServerID: server.ID, Host: transport.Host, Port: transport.Port,
+			CountryCode: server.CountryCode, Location: server.Location,
+		},
 	}, http.StatusOK)
 }
 
@@ -1003,7 +1048,7 @@ func (h *Handler) TunnelCredentials(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		PeerID string `json:"peer_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeStrictJSON(r.Body, &req); err != nil {
 		respond.JsonError(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
@@ -1013,11 +1058,32 @@ func (h *Handler) TunnelCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	peer, err := h.peerRepo.GetByID(r.Context(), peerID)
-	if err != nil || peer.UserID != user.ID || !peer.IsActive {
+	if err != nil || peer.UserID != user.ID || !peer.IsActive || peer.DeviceID == nil {
 		respond.JsonError(w, "active device not found", http.StatusNotFound)
 		return
 	}
-	token := proxytoken.GenerateTunnel(proxytoken.TunnelClaims{UserID: user.ID, DeviceID: peer.ID, ServerID: peer.ServerID}, h.credentialSigningSecret, proxytoken.DefaultTTL)
+	clusterID, err := h.multiclusterRepo.TransportCredentialCluster(r.Context(), peer.ServerID, "wss", repo.DefaultNodeFreshness)
+	if errors.Is(err, pgx.ErrNoRows) {
+		clusterID, err = h.multiclusterRepo.TransportCredentialCluster(r.Context(), peer.ServerID, "masque", repo.DefaultNodeFreshness)
+	}
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respond.JsonError(w, "tunnel transport is not ready for cluster-scoped credentials", http.StatusConflict)
+		} else {
+			respond.SafeError(w, "failed to resolve tunnel credential scope", err, http.StatusInternalServerError)
+		}
+		return
+	}
+	if h.transportTokenSigner == nil {
+		respond.JsonError(w, "transport credential signer is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	token, err := h.transportTokenSigner.Issue(proxytoken.AudienceVPNTunnel, user.ID, *peer.DeviceID, peer.ServerID, clusterID, proxytoken.DefaultTTL)
+	if err != nil {
+		respond.SafeError(w, "failed to issue tunnel credential", err, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
 	respond.JsonOK(w, map[string]interface{}{"tunnel_token": token, "expires_in": int(proxytoken.DefaultTTL.Seconds())}, http.StatusOK)
 }
 

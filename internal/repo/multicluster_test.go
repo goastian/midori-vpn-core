@@ -161,6 +161,10 @@ func TestMulticlusterPlacementRequiresCurrentHealthyObservedState(t *testing.T) 
 		t.Fatalf("RecordObservation: %v", err)
 	}
 	assertEligibility(true, "matching healthy observation")
+	credentialClusterID, err := multiclusterRepo.TransportCredentialCluster(ctx, server.ID, "wireguard", repo.DefaultNodeFreshness)
+	if err != nil || credentialClusterID != cluster.ID {
+		t.Fatalf("TransportCredentialCluster = %s, %v; want %s", credentialClusterID, err, cluster.ID)
+	}
 
 	loadedCluster, err := multiclusterRepo.GetCluster(ctx, cluster.ID)
 	if err != nil || loadedCluster.PolicyLabels["tier"] != "regional" {
@@ -327,6 +331,9 @@ func TestMulticlusterPlacementRequiresCurrentHealthyObservedState(t *testing.T) 
 	legacyEligible, err := multiclusterRepo.ServerPlacementEligible(ctx, legacyServer.ID, "wireguard", repo.DefaultNodeFreshness)
 	if err != nil || !legacyEligible {
 		t.Fatalf("explicit historical migration exception is not usable: eligible=%v err=%v", legacyEligible, err)
+	}
+	if _, err := multiclusterRepo.TransportCredentialCluster(ctx, legacyServer.ID, "wireguard", repo.DefaultNodeFreshness); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("legacy server received an asymmetric credential scope: %v", err)
 	}
 	if err := multiclusterRepo.BindServer(ctx, uuid.New(), node.ID); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("binding an unknown server returned %v, want pgx.ErrNoRows", err)

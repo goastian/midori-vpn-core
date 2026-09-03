@@ -15,6 +15,9 @@ MASQUE_TLS_KEY=/etc/letsencrypt/live/vpn.example.org/privkey.pem
 MASQUE_URI_TEMPLATE=https://vpn.example.org/masque{?target_host,target_port}
 MASQUE_SERVER_ID=<uuid-del-vpn_server>
 MASQUE_MAX_CLIENTS=100
+TRANSPORT_CLUSTER_ID=<uuid-del-cluster>
+TRANSPORT_TOKEN_ISSUER=https://vpn.example.org
+TRANSPORT_TOKEN_AUTHORIZED_KEYS=<kid-control>=<clave-publica-ed25519-control>
 ```
 
 Los directorios `live` y `archive` de Let's Encrypt se montan de solo lectura.

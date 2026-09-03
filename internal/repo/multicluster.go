@@ -526,3 +526,26 @@ func (r *MulticlusterRepo) ServerPlacementEligible(ctx context.Context, serverID
 	}
 	return eligible, nil
 }
+
+// TransportCredentialCluster returns the exact cluster a short-lived
+// credential must name. Unlike the temporary placement compatibility path,
+// credential issuance never accepts legacy unbound servers: an asymmetric
+// token without a durable cluster target would defeat cross-cluster isolation.
+func (r *MulticlusterRepo) TransportCredentialCluster(ctx context.Context, serverID uuid.UUID, protocol string, freshness time.Duration) (uuid.UUID, error) {
+	if serverID == uuid.Nil || strings.TrimSpace(protocol) == "" || freshness <= 0 {
+		return uuid.Nil, errors.New("valid server, protocol and freshness are required")
+	}
+	var clusterID uuid.UUID
+	if err := r.pool.QueryRow(ctx, `
+		SELECT node.cluster_id
+		FROM vpn_servers server
+		JOIN core_nodes node ON node.id = server.node_id
+		WHERE server.id = $1
+		  AND server.legacy_node_unbound = FALSE
+		  AND vpn_server_placement_eligible(server.id, $2, $3::interval, FALSE)`,
+		serverID, protocol, freshness.String(),
+	).Scan(&clusterID); err != nil {
+		return uuid.Nil, fmt.Errorf("resolve transport credential cluster: %w", err)
+	}
+	return clusterID, nil
+}

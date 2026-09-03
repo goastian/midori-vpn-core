@@ -2,6 +2,9 @@ package proxy
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"net"
 	"net/http"
@@ -20,18 +23,40 @@ type fixedResolver struct {
 	err error
 }
 
+func proxyTestCredentials(t *testing.T) (*proxytoken.Signer, *proxytoken.Verifier) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := proxytoken.NewSigner("control", "https://control.test", base64.RawURLEncoding.EncodeToString(privateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := proxytoken.NewVerifier("https://control.test", "control="+base64.RawURLEncoding.EncodeToString(publicKey), false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer, verifier
+}
+
 func (r fixedResolver) LookupIP(context.Context, string, string) ([]net.IP, error) {
 	return r.ips, r.err
 }
 
 func TestAuthenticateAcceptsOnlyScopedProxyTokens(t *testing.T) {
-	const secret = "proxy-token-test-secret"
 	userID := uuid.New()
-	server := New(&config.Config{CredentialSigningSecret: secret}, nil)
+	serverID, clusterID := uuid.New(), uuid.New()
+	signer, verifier := proxyTestCredentials(t)
+	server := New(&config.Config{ProxyServerID: serverID.String(), TransportClusterID: clusterID.String()}, verifier)
 
 	t.Run("accepts valid proxy token", func(t *testing.T) {
 		req := httptest.NewRequest("CONNECT", "http://example.com:443", nil)
-		req.Header.Set("Proxy-Authorization", "Bearer "+proxytoken.Generate(userID, secret, time.Minute))
+		token, err := signer.Issue(proxytoken.AudienceVPNProxy, userID, uuid.New(), serverID, clusterID, time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Proxy-Authorization", "Bearer "+token)
 
 		subject, err := server.authenticate(req)
 		if err != nil {
@@ -105,11 +130,16 @@ func TestResolvePublicTargetsRejectsMalformedAddresses(t *testing.T) {
 }
 
 func TestServeHTTPReturnsForbiddenForPrivateTargets(t *testing.T) {
-	const secret = "proxy-forbidden-target-secret"
-	server := New(&config.Config{CredentialSigningSecret: secret, ProxyMaxConnsPerUser: 2}, nil)
+	serverID, clusterID := uuid.New(), uuid.New()
+	signer, verifier := proxyTestCredentials(t)
+	server := New(&config.Config{ProxyServerID: serverID.String(), TransportClusterID: clusterID.String(), ProxyMaxConnsPerUser: 2}, verifier)
 	request := httptest.NewRequest(http.MethodConnect, "http://127.0.0.1:443", nil)
 	request.Host = "127.0.0.1:443"
-	request.Header.Set("Proxy-Authorization", "Bearer "+proxytoken.Generate(uuid.New(), secret, time.Minute))
+	token, err := signer.Issue(proxytoken.AudienceVPNProxy, uuid.New(), uuid.New(), serverID, clusterID, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Proxy-Authorization", "Bearer "+token)
 	recorder := httptest.NewRecorder()
 
 	server.ServeHTTP(recorder, request)

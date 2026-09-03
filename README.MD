@@ -88,10 +88,11 @@ Copy `.env.example` to a private `0600` environment file and replace every `<req
 Important security groups:
 
 - `CONTROL_NODE_ID`, `CONTROL_NODE_PRIVATE_KEY`, `NODE_AUTHORIZED_KEYS`: Ed25519 node identities. The same Control identity signs canonical desired-state revisions under a separate cryptographic domain; every enrolled Core trusts only the matching public-key entry.
+- `TRANSPORT_TOKEN_ISSUER`, `TRANSPORT_TOKEN_AUTHORIZED_KEYS`, `TRANSPORT_CLUSTER_ID`: issuer and dedicated public trust/scope for Ed25519 `mvpn2` proxy, WSS and MASQUE credentials. Regional nodes never receive the private signing key.
 - `NODE_CONTROL_URL`, `CORE_NODE_ID`, `CORE_NODE_STATE_DIR`, `CORE_NODE_ENROLLMENT_TOKEN_FILE`, `CORE_NODE_MAX_PEERS`: enrolled node identity, signed 30-second desired-state polling with jitter, and private atomic last-known-good storage.
 - `NODE_SECRET_FINGERPRINTS`: optional `name=sha256` references that let a node reject desired transports whose local secret material does not match, without distributing the secret.
 - `NODE_AUTH_REDIS_URL`: shared nonce/revocation state for signed requests.
-- `CREDENTIAL_SIGNING_SECRET`: short-lived proxy and tunnel credentials.
+- `ALLOW_LEGACY_HMAC_TRANSPORT_TOKENS` and `CREDENTIAL_SIGNING_SECRET`: explicit development-only bridge for obsolete HMAC credentials; production rejects both the opt-in and an implicit secret.
 - `CONTROL_DATA_ENCRYPTION_KEY`: principal-only, canonical base64 for exactly 32 random bytes; encrypts recoverable WireGuard PSKs in PostgreSQL and must be backed up separately.
 - `DATABASE_URL` / `POSTGRES_*` and authenticated `REDIS_URL` / `REDIS_*`.
 - `WSS_TUNNEL_*` and `MASQUE_*`: disabled explicitly unless their gateways are configured.
@@ -169,8 +170,8 @@ See `deploy/OBSERVABILITY.md` for rendering, deployment and rollback.
 
 - Users authenticate with Authentik OAuth 2.0/OIDC Authorization Code + PKCE.
 - Core-to-node requests use Ed25519 signatures with timestamp, nonce, replay protection and revocation.
-- Browser proxy credentials use audience `vpn-proxy` and short expiry.
-- WSS/MASQUE credentials use audience `vpn-tunnel` and are bound to user, active peer and server UUID.
+- Browser proxy credentials use audience `vpn-proxy`, short expiry and bind the user, persistent extension installation, server and cluster.
+- WSS/MASQUE credentials use audience `vpn-tunnel` and bind the user, active device, server and cluster. Gateways verify issuer, `kid`, Ed25519 signature and their exact local server/cluster scope.
 - Clients receive only enabled transports whose latest health probe is `healthy`.
 - The normalized `vpn_server_transports` table is the sole transport contract; retired proxy/WSS columns were removed by migration 9.
 

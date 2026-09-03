@@ -19,7 +19,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/httpx"
 	"github.com/goastian/midori-vpn-core/internal/proxytoken"
@@ -29,18 +28,20 @@ import (
 // Server implements an HTTP CONNECT forward proxy with short-lived proxy tokens.
 type Server struct {
 	cfg  *config.Config
-	jwks *auth.JWKSProvider
 	addr string
 
 	// Optional DB pool for exit-node lookup
 	pool *pgxpool.Pool
 
 	// Per-user concurrency limiter
-	mu       sync.Mutex
-	active   map[string]int
-	maxConns int
-	resolver ipResolver
-	dialer   contextDialer
+	mu        sync.Mutex
+	active    map[string]int
+	maxConns  int
+	resolver  ipResolver
+	dialer    contextDialer
+	verifier  *proxytoken.Verifier
+	serverID  uuid.UUID
+	clusterID uuid.UUID
 }
 
 type ipResolver interface {
@@ -57,22 +58,26 @@ var (
 )
 
 // New creates a new proxy server.
-func New(cfg *config.Config, jwks *auth.JWKSProvider) *Server {
+func New(cfg *config.Config, verifier *proxytoken.Verifier) *Server {
+	serverID, _ := uuid.Parse(cfg.ProxyServerID)
+	clusterID, _ := uuid.Parse(cfg.TransportClusterID)
 	return &Server{
-		cfg:      cfg,
-		jwks:     jwks,
-		addr:     fmt.Sprintf(":%d", cfg.ProxyPort),
-		active:   make(map[string]int),
-		maxConns: cfg.ProxyMaxConnsPerUser,
-		resolver: net.DefaultResolver,
-		dialer:   &net.Dialer{Timeout: 10 * time.Second},
+		cfg:       cfg,
+		addr:      fmt.Sprintf(":%d", cfg.ProxyPort),
+		active:    make(map[string]int),
+		maxConns:  cfg.ProxyMaxConnsPerUser,
+		resolver:  net.DefaultResolver,
+		dialer:    &net.Dialer{Timeout: 10 * time.Second},
+		verifier:  verifier,
+		serverID:  serverID,
+		clusterID: clusterID,
 	}
 }
 
 // NewWithDB creates a proxy server that can chain connections through a user's
 // selected exit node when one is configured in the database.
-func NewWithDB(cfg *config.Config, jwks *auth.JWKSProvider, pool *pgxpool.Pool) *Server {
-	s := New(cfg, jwks)
+func NewWithDB(cfg *config.Config, pool *pgxpool.Pool, verifier *proxytoken.Verifier) *Server {
+	s := New(cfg, verifier)
 	s.pool = pool
 	return s
 }
@@ -315,7 +320,7 @@ func (s *Server) authenticate(r *http.Request) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("invalid basic auth encoding: %w", err)
 		}
-		// Format: "user:jwt_token" — extract the part after the first ':'
+		// Format: "user:transport_token" — extract the part after the first ':'.
 		colonIdx := strings.IndexByte(string(decoded), ':')
 		if colonIdx < 0 {
 			return "", fmt.Errorf("invalid basic auth format")
@@ -328,9 +333,9 @@ func (s *Server) authenticate(r *http.Request) (string, error) {
 		return "", fmt.Errorf("unsupported auth scheme: %s", parts[0])
 	}
 
-	// Proxy credentials are always short-lived HMAC tokens with aud=vpn-proxy.
-	if sub, ok := proxytoken.Validate(tokenStr, s.cfg.CredentialSigningSecret); ok {
-		return sub, nil
+	claims, err := s.verifier.Verify(tokenStr, proxytoken.AudienceVPNProxy, s.serverID, s.clusterID)
+	if err == nil {
+		return claims.UserID.String(), nil
 	}
 	return "", fmt.Errorf("invalid or expired proxy-scoped token")
 }

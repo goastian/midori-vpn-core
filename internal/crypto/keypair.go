@@ -47,4 +47,3 @@ func GeneratePresharedKey() (string, error) {
 	}
 	return base64.StdEncoding.EncodeToString(key[:]), nil
 }
-

@@ -96,6 +96,7 @@ type SignedBundle struct {
 }
 
 type LocalCapabilities struct {
+	ClusterID          uuid.UUID
 	Transports         map[string]bool
 	SecretFingerprints map[string]string
 }
@@ -337,6 +338,9 @@ func Validate(bundle Bundle) error {
 }
 
 func ValidateLocal(bundle Bundle, local LocalCapabilities) error {
+	if local.ClusterID != uuid.Nil && bundle.ClusterID != local.ClusterID {
+		return fmt.Errorf("%w: desired state targets another cluster", ErrLocalCapability)
+	}
 	for _, transport := range bundle.Transports {
 		if transport.Enabled && !local.Transports[transport.Protocol] {
 			return fmt.Errorf("%w: transport %s", ErrLocalCapability, transport.Protocol)

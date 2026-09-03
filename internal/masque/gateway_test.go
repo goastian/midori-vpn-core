@@ -3,11 +3,13 @@ package masque
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"math/big"
 	"net"
@@ -72,9 +74,21 @@ func TestGatewayProxiesAuthenticatedConnectUDPToWireGuardOnly(t *testing.T) {
 	probe.Close()
 	certFile, keyFile := writeTestCertificate(t)
 	serverID := uuid.New()
-	secret := "masque-test-secret"
+	clusterID := uuid.New()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := proxytoken.NewSigner("control", "https://control.test", base64.RawURLEncoding.EncodeToString(privateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := proxytoken.NewVerifier("https://control.test", "control="+base64.RawURLEncoding.EncodeToString(publicKey), false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	templateText := "https://127.0.0.1:" + big.NewInt(int64(proxyPort)).String() + "/masque{?target_host,target_port}"
-	gateway, err := NewGateway("127.0.0.1:"+big.NewInt(int64(proxyPort)).String(), certFile, keyFile, templateText, echo.LocalAddr().(*net.UDPAddr).Port, secret, serverID, 2)
+	gateway, err := NewGateway("127.0.0.1:"+big.NewInt(int64(proxyPort)).String(), certFile, keyFile, templateText, echo.LocalAddr().(*net.UDPAddr).Port, verifier, serverID, clusterID, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +110,10 @@ func TestGatewayProxiesAuthenticatedConnectUDPToWireGuardOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token := proxytoken.GenerateTunnel(proxytoken.TunnelClaims{UserID: uuid.New(), DeviceID: uuid.New(), ServerID: serverID}, secret, time.Minute)
+	token, err := signer.Issue(proxytoken.AudienceVPNTunnel, uuid.New(), uuid.New(), serverID, clusterID, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request.Header().Set("Authorization", "Bearer "+token)
 	transport := masquego.Transport{
 		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS13, NextProtos: []string{http3.NextProtoH3}, InsecureSkipVerify: true}, // test certificate

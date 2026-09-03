@@ -79,7 +79,7 @@ func TestRouterMatchesOpenAPIContract(t *testing.T) {
 		nil,
 		&clientpki.Authority{},
 		nil,
-		false,
+		nil, false,
 	)
 
 	routerOperations := make(map[string]struct{})

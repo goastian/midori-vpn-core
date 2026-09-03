@@ -22,6 +22,9 @@ configúralo en su entorno:
 WSS_TUNNEL_ENABLED=true
 WSS_TUNNEL_SERVER_ID=<uuid-del-vpn_server>
 WSS_TUNNEL_MAX_CLIENTS=100
+TRANSPORT_CLUSTER_ID=<uuid-del-cluster>
+TRANSPORT_TOKEN_ISSUER=https://vpn.example.org
+TRANSPORT_TOKEN_AUTHORIZED_KEYS=<kid-control>=<clave-publica-ed25519-control>
 ```
 
 En el API administrativo, añade un transporte normalizado `wss` con el FQDN
@@ -33,8 +36,9 @@ directo. No existen campos WSS paralelos en `vpn_servers`. La respuesta de
 { "protocol": "wss", "host": "vpn.example.org", "port": 443, "enabled": true, "health_status": "healthy" }
 ```
 
-No habilites la capacidad para otro UUID: el gateway rechaza el token ligado a
-un servidor distinto.
+No habilites la capacidad para otro UUID o cluster: el gateway rechaza el token
+`mvpn2` ligado a un servidor, cluster, audiencia o emisor distinto. El regional
+recibe sólo la clave pública de Control.
 
 ## Validación mínima
 

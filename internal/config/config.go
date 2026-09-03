@@ -41,8 +41,13 @@ type Config struct {
 	NodeSecretFingerprints      string
 	RuntimePolicy               RuntimePolicy
 
-	// HMAC secret used only for short-lived proxy and WSS credentials.
-	CredentialSigningSecret string
+	// Control-signed Ed25519 transport credentials. Regional nodes receive only
+	// TransportTokenAuthorizedKeys. The old HMAC secret is development-only.
+	TransportTokenIssuer           string
+	TransportTokenAuthorizedKeys   string
+	TransportClusterID             string
+	AllowLegacyHMACTransportTokens bool
+	CredentialSigningSecret        string
 
 	// CORS
 	CORSAllowedOrigins string // comma-separated list of allowed origins
@@ -113,6 +118,7 @@ type Config struct {
 	ProxyTLSTerminated   bool   // TLS is terminated by the trusted host Nginx proxy
 	ProxyTLSCert         string // path to TLS certificate (fullchain.pem)
 	ProxyTLSKey          string // path to TLS private key (privkey.pem)
+	ProxyServerID        string // exact Control server UUID accepted by this gateway
 
 	// Authenticated WireGuard-over-WebSocket relay. Disabled unless explicitly enabled.
 	WSSTunnelEnabled    bool
@@ -159,27 +165,31 @@ func Load() *Config {
 	}
 
 	cfg := &Config{
-		AppEnv:                      requireEnv("APP_ENV"),
-		DeploymentProfile:           env("DEPLOYMENT_PROFILE"),
-		CoreNodeName:                env("CORE_NODE_NAME"),
-		Port:                        requireEnv("VPN_CORE_PORT"),
-		ControlNodeID:               env("CONTROL_NODE_ID"),
-		ControlNodePrivateKey:       env("CONTROL_NODE_PRIVATE_KEY"),
-		NodeAuthorizedKeys:          requireEnv("NODE_AUTHORIZED_KEYS"),
-		NodeRevokedIDs:              env("NODE_REVOKED_IDS"),
-		NodeAuthRedisURL:            env("NODE_AUTH_REDIS_URL"),
-		NodeControlURL:              strings.TrimRight(env("NODE_CONTROL_URL"), "/"),
-		CoreNodeID:                  env("CORE_NODE_ID"),
-		CoreNodeStateDir:            env("CORE_NODE_STATE_DIR"),
-		CoreNodeEnrollmentTokenFile: env("CORE_NODE_ENROLLMENT_TOKEN_FILE"),
-		CoreNodeMaxPeers:            envIntDefault("CORE_NODE_MAX_PEERS", 0),
-		NodeSecretFingerprints:      env("NODE_SECRET_FINGERPRINTS"),
-		CredentialSigningSecret:     env("CREDENTIAL_SIGNING_SECRET"),
-		WGInterface:                 requireEnv("WG_INTERFACE"),
-		WGPort:                      requireEnvInt("WG_PORT"),
-		Subnet:                      requireEnv("WG_SUBNET"),
-		ConfigDir:                   requireEnv("WG_CONFIG_DIR"),
-		Endpoint:                    requireEnv("WG_ENDPOINT"),
+		AppEnv:                         requireEnv("APP_ENV"),
+		DeploymentProfile:              env("DEPLOYMENT_PROFILE"),
+		CoreNodeName:                   env("CORE_NODE_NAME"),
+		Port:                           requireEnv("VPN_CORE_PORT"),
+		ControlNodeID:                  env("CONTROL_NODE_ID"),
+		ControlNodePrivateKey:          env("CONTROL_NODE_PRIVATE_KEY"),
+		NodeAuthorizedKeys:             requireEnv("NODE_AUTHORIZED_KEYS"),
+		NodeRevokedIDs:                 env("NODE_REVOKED_IDS"),
+		NodeAuthRedisURL:               env("NODE_AUTH_REDIS_URL"),
+		NodeControlURL:                 strings.TrimRight(env("NODE_CONTROL_URL"), "/"),
+		CoreNodeID:                     env("CORE_NODE_ID"),
+		CoreNodeStateDir:               env("CORE_NODE_STATE_DIR"),
+		CoreNodeEnrollmentTokenFile:    env("CORE_NODE_ENROLLMENT_TOKEN_FILE"),
+		CoreNodeMaxPeers:               envIntDefault("CORE_NODE_MAX_PEERS", 0),
+		NodeSecretFingerprints:         env("NODE_SECRET_FINGERPRINTS"),
+		TransportTokenIssuer:           strings.TrimSpace(env("TRANSPORT_TOKEN_ISSUER")),
+		TransportTokenAuthorizedKeys:   env("TRANSPORT_TOKEN_AUTHORIZED_KEYS"),
+		TransportClusterID:             env("TRANSPORT_CLUSTER_ID"),
+		AllowLegacyHMACTransportTokens: requireEnvBool("ALLOW_LEGACY_HMAC_TRANSPORT_TOKENS"),
+		CredentialSigningSecret:        env("CREDENTIAL_SIGNING_SECRET"),
+		WGInterface:                    requireEnv("WG_INTERFACE"),
+		WGPort:                         requireEnvInt("WG_PORT"),
+		Subnet:                         requireEnv("WG_SUBNET"),
+		ConfigDir:                      requireEnv("WG_CONFIG_DIR"),
+		Endpoint:                       requireEnv("WG_ENDPOINT"),
 
 		CORSAllowedOrigins:      requireEnv("CORS_ALLOWED_ORIGINS"),
 		AllowedExtensionOrigins: env("ALLOWED_EXTENSION_ORIGINS"),
@@ -224,6 +234,7 @@ func Load() *Config {
 		ProxyTLSTerminated:   requireEnvBool("PROXY_TLS_TERMINATED_BY_NGINX"),
 		ProxyTLSCert:         env("PROXY_TLS_CERT"),
 		ProxyTLSKey:          env("PROXY_TLS_KEY"),
+		ProxyServerID:        env("PROXY_SERVER_ID"),
 		WSSTunnelEnabled:     requireEnvBool("WSS_TUNNEL_ENABLED"),
 		WSSTunnelServerID:    env("WSS_TUNNEL_SERVER_ID"),
 		WSSTunnelMaxClients:  requireEnvInt("WSS_TUNNEL_MAX_CLIENTS"),
@@ -309,8 +320,54 @@ func Load() *Config {
 	if cfg.AuthentikClientID != "" && len(cfg.ControlDataEncryptionKey) == 0 {
 		log.Fatal("FATAL: CONTROL_DATA_ENCRYPTION_KEY is required when the Control API is enabled")
 	}
-	if (cfg.AuthentikClientID != "" || cfg.ProxyEnabled || cfg.WSSTunnelEnabled || cfg.MasqueEnabled) && cfg.CredentialSigningSecret == "" {
-		log.Fatal("FATAL: CREDENTIAL_SIGNING_SECRET is required for scoped proxy and tunnel credentials")
+	transportCredentialsRequired := cfg.AuthentikClientID != "" || cfg.ProxyEnabled || cfg.WSSTunnelEnabled || cfg.MasqueEnabled
+	if transportCredentialsRequired && (cfg.TransportTokenIssuer == "" || cfg.TransportTokenAuthorizedKeys == "") {
+		log.Fatal("FATAL: TRANSPORT_TOKEN_ISSUER and TRANSPORT_TOKEN_AUTHORIZED_KEYS are required for scoped proxy and tunnel credentials")
+	}
+	if cfg.TransportTokenIssuer != "" {
+		issuerURL, err := url.ParseRequestURI(cfg.TransportTokenIssuer)
+		if err != nil || issuerURL.Host == "" || issuerURL.User != nil || issuerURL.RawQuery != "" || issuerURL.Fragment != "" ||
+			(issuerURL.Scheme != "https" && !(cfg.AppEnv == "development" && issuerURL.Scheme == "http")) {
+			log.Fatal("FATAL: TRANSPORT_TOKEN_ISSUER must be an absolute HTTPS issuer without credentials, query or fragment")
+		}
+	}
+	if cfg.AllowLegacyHMACTransportTokens {
+		if cfg.AppEnv != "development" {
+			log.Fatal("FATAL: ALLOW_LEGACY_HMAC_TRANSPORT_TOKENS is permitted only in development")
+		}
+		if cfg.CredentialSigningSecret == "" {
+			log.Fatal("FATAL: explicit legacy HMAC compatibility requires CREDENTIAL_SIGNING_SECRET")
+		}
+	} else if cfg.CredentialSigningSecret != "" {
+		log.Fatal("FATAL: CREDENTIAL_SIGNING_SECRET requires explicit development-only ALLOW_LEGACY_HMAC_TRANSPORT_TOKENS")
+	}
+	if cfg.ProxyEnabled || cfg.WSSTunnelEnabled || cfg.MasqueEnabled {
+		clusterID, err := uuid.Parse(cfg.TransportClusterID)
+		if err != nil || clusterID == uuid.Nil {
+			log.Fatal("FATAL: TRANSPORT_CLUSTER_ID must be a UUID when a transport gateway is enabled")
+		}
+		configuredServerID := uuid.Nil
+		for _, transport := range []struct {
+			name      string
+			candidate string
+			enabled   bool
+		}{
+			{name: "PROXY_SERVER_ID", candidate: cfg.ProxyServerID, enabled: cfg.ProxyEnabled},
+			{name: "WSS_TUNNEL_SERVER_ID", candidate: cfg.WSSTunnelServerID, enabled: cfg.WSSTunnelEnabled},
+			{name: "MASQUE_SERVER_ID", candidate: cfg.MasqueServerID, enabled: cfg.MasqueEnabled},
+		} {
+			if !transport.enabled {
+				continue
+			}
+			serverID, parseErr := uuid.Parse(transport.candidate)
+			if parseErr != nil || serverID == uuid.Nil {
+				log.Fatalf("FATAL: %s must be a UUID when its transport is enabled", transport.name)
+			}
+			if configuredServerID != uuid.Nil && serverID != configuredServerID {
+				log.Fatal("FATAL: enabled transport gateways in one Core process must use the same server UUID")
+			}
+			configuredServerID = serverID
+		}
 	}
 	if cfg.AppEnv == "production" && cfg.NodeAuthRedisURL == "" {
 		log.Fatal("FATAL: NODE_AUTH_REDIS_URL is required in production for shared replay prevention and immediate revocation")

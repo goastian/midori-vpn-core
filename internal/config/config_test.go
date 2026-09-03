@@ -161,7 +161,10 @@ func TestRequireEnvFailsFastWhenMissing(t *testing.T) {
 
 func TestLoadAcceptsPublicPKCEClientWithoutSecret(t *testing.T) {
 	if os.Getenv("MIDORIVPN_PUBLIC_PKCE_HELPER") == "1" {
-		_ = Load()
+		cfg := Load()
+		if cfg.AllowLegacyHMACTransportTokens || cfg.CredentialSigningSecret != "" {
+			t.Fatal("default asymmetric configuration unexpectedly enabled legacy HMAC credentials")
+		}
 		return
 	}
 	cmd := exec.Command(os.Args[0], "-test.run=TestLoadAcceptsPublicPKCEClientWithoutSecret")
@@ -172,7 +175,9 @@ func TestLoadAcceptsPublicPKCEClientWithoutSecret(t *testing.T) {
 		"NODE_AUTHORIZED_KEYS=control=test-public-key",
 		"CONTROL_NODE_ID=control",
 		"CONTROL_NODE_PRIVATE_KEY=test-private-key",
-		"CREDENTIAL_SIGNING_SECRET=test-credential-signing-secret",
+		"TRANSPORT_TOKEN_ISSUER=https://vpn.example.test",
+		"TRANSPORT_TOKEN_AUTHORIZED_KEYS=control=test-public-key",
+		"ALLOW_LEGACY_HMAC_TRANSPORT_TOKENS=false",
 		"WG_INTERFACE=wgtest0",
 		"WG_PORT=51820",
 		"WG_SUBNET=10.8.0.0/16",
@@ -202,6 +207,7 @@ func TestLoadAcceptsPublicPKCEClientWithoutSecret(t *testing.T) {
 		"PROXY_MAX_CONNS_PER_USER=20",
 		"PROXY_TLS_ENABLED=false",
 		"PROXY_TLS_TERMINATED_BY_NGINX=false",
+		"PROXY_SERVER_ID=",
 		"WSS_TUNNEL_ENABLED=false",
 		"WSS_TUNNEL_MAX_CLIENTS=100",
 		"MASQUE_ENABLED=false",

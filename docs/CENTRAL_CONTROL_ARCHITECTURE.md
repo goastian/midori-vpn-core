@@ -282,17 +282,18 @@ node-local replay store.
 
 ## Credential boundary for WSS, MASQUE and proxy
 
-The current token implementation uses `CREDENTIAL_SIGNING_SECRET`; therefore a
-regional node that verifies WSS or MASQUE credentials currently needs shared
-HMAC material. A single global HMAC secret would let a compromised region mint
-credentials accepted elsewhere and is not the target architecture.
+Control issues canonical, compact `mvpn2` credentials signed with Ed25519 under
+a transport-specific cryptographic domain. Claims bind `kid`, issuer,
+audience, user, persistent device, server, cluster, issue/expiry timestamps and
+a random `jti`. WSS, MASQUE and proxy verify the signature plus their exact
+local audience, server and cluster before accepting traffic.
 
-Before enabling those transports on multiple independent clusters, credential
-verification must use either Control-signed asymmetric tokens whose private key
-remains on the principal, or a distinct per-cluster HMAC key with an explicit
-audience and cluster/server binding. Asymmetric verification is preferred
-because regional nodes then receive only a public key. Existing tokens must
-remain short-lived and bound to their audience, user, peer and server UUID.
+The Control private key remains on the principal. Regional nodes receive only
+the dedicated `TRANSPORT_TOKEN_AUTHORIZED_KEYS` public trust store; it is kept
+separate from general node-call authorization so another trusted node identity
+cannot mint transport credentials. The former HMAC format is rejected by
+default and is available only in `APP_ENV=development` with explicit
+`ALLOW_LEGACY_HMAC_TRANSPORT_TOKENS=true` and a separate legacy secret.
 
 ## Desired and observed node state
 

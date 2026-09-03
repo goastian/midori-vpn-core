@@ -21,22 +21,23 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/core"
 	"github.com/goastian/midori-vpn-core/internal/dataencryption"
 	"github.com/goastian/midori-vpn-core/internal/nodeauth"
+	"github.com/goastian/midori-vpn-core/internal/proxytoken"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 	"github.com/goastian/midori-vpn-core/internal/tunnel"
 	"github.com/goastian/midori-vpn-core/internal/wg"
 )
 
-func NewRouter(cfg *config.Config, mgr *wg.Manager, verifier *nodeauth.Verifier) *chi.Mux {
-	return NewRouterWithDB(cfg, mgr, nil, nil, verifier, nil)
+func NewRouter(cfg *config.Config, mgr *wg.Manager, verifier *nodeauth.Verifier, transportVerifier *proxytoken.Verifier) *chi.Mux {
+	return NewRouterWithDB(cfg, mgr, nil, nil, verifier, nil, transportVerifier)
 }
 
-func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *auth.JWKSProvider, verifier *nodeauth.Verifier, clientCertificateAuthority *clientpki.Authority, dataCipher ...*dataencryption.Cipher) *chi.Mux {
-	return newRouter(cfg, mgr, pool, jwks, verifier, clientCertificateAuthority, resolveDataCipher(cfg, dataCipher), true)
+func NewRouterWithDB(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *auth.JWKSProvider, verifier *nodeauth.Verifier, clientCertificateAuthority *clientpki.Authority, transportVerifier *proxytoken.Verifier, dataCipher ...*dataencryption.Cipher) *chi.Mux {
+	return newRouter(cfg, mgr, pool, jwks, verifier, clientCertificateAuthority, transportVerifier, resolveDataCipher(cfg, dataCipher), true)
 }
 
 // newRouter keeps route registration independently testable without starting
 // long-lived workers. Production constructors always enable the workers.
-func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *auth.JWKSProvider, verifier *nodeauth.Verifier, clientCertificateAuthority *clientpki.Authority, dataCipher *dataencryption.Cipher, startWorkers bool) *chi.Mux {
+func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *auth.JWKSProvider, verifier *nodeauth.Verifier, clientCertificateAuthority *clientpki.Authority, transportVerifier *proxytoken.Verifier, dataCipher *dataencryption.Cipher, startWorkers bool) *chi.Mux {
 	r := chi.NewRouter()
 	var trustedExtRepo *repo.TrustedExtensionRepo
 	var trustedExtensionOrigin ExtensionOriginChecker
@@ -76,7 +77,8 @@ func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *au
 	r.Get("/metrics", metricsExporter.Handler)
 	if cfg.WSSTunnelEnabled {
 		serverID, _ := uuid.Parse(cfg.WSSTunnelServerID)
-		gateway := tunnel.NewWSGateway(cfg.WGPort, cfg.CredentialSigningSecret, serverID, cfg.WSSTunnelMaxClients)
+		clusterID, _ := uuid.Parse(cfg.TransportClusterID)
+		gateway := tunnel.NewWSGateway(cfg.WGPort, transportVerifier, serverID, clusterID, cfg.WSSTunnelMaxClients)
 		r.Get("/api/v1/tunnel/ws", gateway.Handler)
 	}
 	if pool != nil {

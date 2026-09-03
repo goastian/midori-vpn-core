@@ -170,6 +170,23 @@ func TestActivatorRejectsUnavailableLocalCapability(t *testing.T) {
 	}
 }
 
+func TestActivatorRejectsDesiredStateForAnotherConfiguredCluster(t *testing.T) {
+	signer, trust := testSignerAndTrust(t)
+	bundle := testBundle(time.Now().UTC().Truncate(time.Second))
+	signed, _, _, err := signer.Sign(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	activator, err := NewActivator(t.TempDir(), testNodeID, "2.0.0", trust,
+		LocalCapabilities{ClusterID: uuid.New(), Transports: map[string]bool{"wireguard": true}}, &limitRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := activator.Apply(*signed); !errors.Is(err, ErrLocalCapability) {
+		t.Fatalf("wrong local cluster error = %v", err)
+	}
+}
+
 var (
 	testNodeID    = uuid.MustParse("33333333-3333-4333-8333-333333333333")
 	testClusterID = uuid.MustParse("44444444-4444-4444-8444-444444444444")

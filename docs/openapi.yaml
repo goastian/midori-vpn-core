@@ -311,19 +311,28 @@ paths:
     post:
       operationId: createProxyCredential
       tags: [Credentials]
+      requestBody: {$ref: '#/components/requestBodies/ProxyCredential'}
       responses:
-        '200': {$ref: '#/components/responses/OK'}
+        '200': {$ref: '#/components/responses/ProxyCredential'}
+        '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/control/tunnel-credentials:
     post:
       operationId: createTunnelCredential
       tags: [Credentials]
       requestBody: {$ref: '#/components/requestBodies/TunnelCredential'}
       responses:
-        '200': {$ref: '#/components/responses/OK'}
+        '200': {$ref: '#/components/responses/TunnelCredential'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
         '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalError'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
 
   /api/v1/control/servers:
     get:
@@ -892,7 +901,7 @@ components:
     TunnelBearer:
       type: http
       scheme: bearer
-      bearerFormat: short-lived vpn-tunnel credential
+      bearerFormat: Ed25519 mvpn2 credential
     EnrollmentBearer:
       type: http
       scheme: bearer
@@ -1296,8 +1305,62 @@ components:
       additionalProperties: false
     TunnelCredentialRequest:
       type: object
+      additionalProperties: false
       required: [peer_id]
       properties: {peer_id: {type: string, format: uuid}}
+    ProxyCredentialRequest:
+      type: object
+      additionalProperties: false
+      required: [server_id, device]
+      properties:
+        server_id: {type: string, format: uuid}
+        device: {$ref: '#/components/schemas/DeviceRegistration'}
+    TransportCredential:
+      type: string
+      pattern: '^mvpn2\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{86}$'
+      writeOnly: true
+      x-midorivpn-sensitive: true
+      description: Opaque Ed25519 credential bound to its audience, user, device, server and cluster.
+    ProxyEndpoint:
+      type: object
+      additionalProperties: false
+      required: [server_id, host, port, country_code, location]
+      properties:
+        server_id: {type: string, format: uuid}
+        host: {type: string, minLength: 1, maxLength: 253}
+        port: {type: integer, minimum: 1, maximum: 65535}
+        country_code: {type: string, minLength: 2, maxLength: 2}
+        location: {type: string, minLength: 1, maxLength: 128}
+    ProxyCredentialResult:
+      type: object
+      additionalProperties: false
+      required: [proxy_token, expires_in, device_id, proxy_endpoint]
+      properties:
+        proxy_token: {$ref: '#/components/schemas/TransportCredential'}
+        expires_in: {type: integer, minimum: 1, maximum: 900}
+        device_id: {type: string, format: uuid}
+        proxy_endpoint: {$ref: '#/components/schemas/ProxyEndpoint'}
+    ProxyCredentialEnvelope:
+      type: object
+      additionalProperties: false
+      required: [ok, data]
+      properties:
+        ok: {const: true}
+        data: {$ref: '#/components/schemas/ProxyCredentialResult'}
+    TunnelCredentialResult:
+      type: object
+      additionalProperties: false
+      required: [tunnel_token, expires_in]
+      properties:
+        tunnel_token: {$ref: '#/components/schemas/TransportCredential'}
+        expires_in: {type: integer, minimum: 1, maximum: 900}
+    TunnelCredentialEnvelope:
+      type: object
+      additionalProperties: false
+      required: [ok, data]
+      properties:
+        ok: {const: true}
+        data: {$ref: '#/components/schemas/TunnelCredentialResult'}
     CertificateEnrollmentRequest:
       type: object
       additionalProperties: false
@@ -1589,6 +1652,7 @@ components:
     OAuthLogout: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/OAuthLogoutRequest'}}}}
     Connection: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ConnectionRequest'}}}}
     TunnelCredential: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/TunnelCredentialRequest'}}}}
+    ProxyCredential: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ProxyCredentialRequest'}}}}
     CertificateEnrollment: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CertificateEnrollmentRequest'}}}}
     DeviceUpdate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/DeviceUpdateRequest'}}}}
     MeshCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/MeshCreateRequest'}}}}
@@ -1698,6 +1762,22 @@ components:
       content:
         application/json:
           schema: {$ref: '#/components/schemas/ConnectionConfigurationEnvelope'}
+    ProxyCredential:
+      description: Short-lived proxy credential bound to one device, server and cluster.
+      headers:
+        Cache-Control:
+          schema: {type: string, const: no-store}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ProxyCredentialEnvelope'}
+    TunnelCredential:
+      description: Short-lived WSS or MASQUE credential bound to the active peer device, server and cluster.
+      headers:
+        Cache-Control:
+          schema: {type: string, const: no-store}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/TunnelCredentialEnvelope'}
     BadRequest: {description: Invalid request., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
     Unauthorized: {description: Missing or invalid authentication., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}
     Forbidden: {description: Authenticated but not allowed., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}

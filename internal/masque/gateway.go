@@ -31,13 +31,14 @@ type Gateway struct {
 	proxy      *masquego.Proxy
 	template   *uritemplate.Template
 	target     *net.UDPAddr
-	secret     string
+	verifier   *proxytoken.Verifier
 	serverID   uuid.UUID
+	clusterID  uuid.UUID
 	active     atomic.Int64
 	maxClients int64
 }
 
-func NewGateway(addr, certFile, keyFile, templateText string, wgPort int, secret string, serverID uuid.UUID, maxClients int) (*Gateway, error) {
+func NewGateway(addr, certFile, keyFile, templateText string, wgPort int, verifier *proxytoken.Verifier, serverID, clusterID uuid.UUID, maxClients int) (*Gateway, error) {
 	template, err := uritemplate.New(templateText)
 	if err != nil {
 		return nil, fmt.Errorf("parse MASQUE URI template: %w", err)
@@ -66,8 +67,9 @@ func NewGateway(addr, certFile, keyFile, templateText string, wgPort int, secret
 		proxy:      &masquego.Proxy{},
 		template:   template,
 		target:     target,
-		secret:     secret,
+		verifier:   verifier,
 		serverID:   serverID,
+		clusterID:  clusterID,
 		maxClients: int64(maxClients),
 	}
 	mux := http.NewServeMux()
@@ -106,8 +108,7 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tunnel authentication required", http.StatusUnauthorized)
 		return
 	}
-	claims, ok := proxytoken.ValidateTunnel(strings.TrimSpace(strings.TrimPrefix(header, "Bearer ")), g.secret)
-	if !ok || claims.ServerID != g.serverID {
+	if _, err := g.verifier.Verify(strings.TrimSpace(strings.TrimPrefix(header, "Bearer ")), proxytoken.AudienceVPNTunnel, g.serverID, g.clusterID); err != nil {
 		http.Error(w, "invalid tunnel credential", http.StatusUnauthorized)
 		return
 	}

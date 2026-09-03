@@ -63,13 +63,18 @@ The principal has the cluster signing identity:
 CONTROL_NODE_ID=<cluster-control-identity>
 CONTROL_NODE_PRIVATE_KEY=<private-ed25519-key>
 NODE_AUTHORIZED_KEYS=<cluster-control-identity>=<public-ed25519-key>
+TRANSPORT_TOKEN_ISSUER=https://vpn.example.test
+TRANSPORT_TOKEN_AUTHORIZED_KEYS=<cluster-control-identity>=<public-ed25519-key>
+ALLOW_LEGACY_HMAC_TRANSPORT_TOKENS=false
 CONTROL_DATA_ENCRYPTION_KEY=<canonical-base64-32-byte-key>
 ```
 
 The private key is present only on the principal. The local Core trusts its
 matching public key through `NODE_AUTHORIZED_KEYS` just like every remote
 Core. PostgreSQL and the Control-only Redis are not deployed on regional
-nodes.
+nodes. If the principal also hosts proxy, WSS or MASQUE, set its exact
+`TRANSPORT_CLUSTER_ID` and the same `vpn_servers` UUID in each enabled
+transport's server-ID variable.
 
 The principal Core is also modeled as an enrolled node. Its outbound identity
 is distinct from the Control signing identity above and uses the same contract
@@ -104,6 +109,10 @@ CONTROL_NODE_PRIVATE_KEY=
 CONTROL_DATA_ENCRYPTION_KEY=
 NODE_AUTHORIZED_KEYS=<cluster-control-identity>=<public-ed25519-key>
 NODE_AUTH_REDIS_URL=<node-local-authenticated-redis-url>
+TRANSPORT_TOKEN_ISSUER=https://vpn.example.test
+TRANSPORT_TOKEN_AUTHORIZED_KEYS=<cluster-control-identity>=<public-ed25519-key>
+TRANSPORT_CLUSTER_ID=<control-issued-cluster-uuid>
+ALLOW_LEGACY_HMAC_TRANSPORT_TOKENS=false
 ```
 
 Set `DEPLOYMENT_PROFILE=core-node`, choose a unique `CORE_NODE_NAME`, and run
@@ -117,6 +126,12 @@ requires the host state directory to be `0700`, accepts only a regular `0600`
 token file, and mounts the state directory at the exact configured container
 path. It fails closed if Control, database, Authentik or CA signing secrets are
 present.
+
+The regional receives no credential signing secret or private key. Its proxy,
+WSS and MASQUE gateways accept only `mvpn2` credentials signed by one of the
+dedicated public keys and bound to `TRANSPORT_CLUSTER_ID` plus the configured
+server UUID. `CREDENTIAL_SIGNING_SECRET` must be empty in this production
+profile.
 
 The node-local Redis provides replay protection for Control-to-Core calls. It
 is not the Control data store and must not expose a host port. Control calls the

@@ -4,6 +4,11 @@
 
 ### Security
 
+- Replaced shared HMAC proxy/WSS/MASQUE credentials with canonical Ed25519
+  `mvpn2` tokens carrying issuer, audience, user, persistent device, server,
+  cluster, `iat`, `exp`, `jti` and rotating `kid`. Regional gateways receive
+  only a dedicated public trust store and fail closed on scope mismatch; the
+  legacy HMAC format is development-only behind explicit opt-in.
 - Control now issues strict canonical desired-state revisions signed with
   Ed25519 under a dedicated domain. Enrolled Core nodes verify target, time,
   version, local capabilities and a contiguous anti-rollback chain before an

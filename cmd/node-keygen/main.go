@@ -16,9 +16,5 @@ func main() {
 	encoding := base64.RawURLEncoding
 	fmt.Printf("CONTROL_NODE_PRIVATE_KEY=%s\n", encoding.EncodeToString(privateKey))
 	fmt.Printf("CONTROL_NODE_PUBLIC_KEY=%s\n", encoding.EncodeToString(publicKey))
-	credentialSecret := make([]byte, 64)
-	if _, err := rand.Read(credentialSecret); err != nil {
-		log.Fatalf("generate credential signing secret: %v", err)
-	}
-	fmt.Printf("CREDENTIAL_SIGNING_SECRET=%s\n", encoding.EncodeToString(credentialSecret))
+	fmt.Printf("TRANSPORT_TOKEN_AUTHORIZED_KEYS=<CONTROL_NODE_ID>=%s\n", encoding.EncodeToString(publicKey))
 }

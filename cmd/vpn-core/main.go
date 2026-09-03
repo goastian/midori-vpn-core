@@ -24,6 +24,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/nodeauth"
 	"github.com/goastian/midori-vpn-core/internal/nodeplane"
 	"github.com/goastian/midori-vpn-core/internal/proxy"
+	"github.com/goastian/midori-vpn-core/internal/proxytoken"
 	"github.com/goastian/midori-vpn-core/internal/respond"
 	"github.com/goastian/midori-vpn-core/internal/wg"
 	"github.com/google/uuid"
@@ -50,6 +51,16 @@ func main() {
 		log.Fatalf("failed to initialize node signature verifier: %v", err)
 	}
 	defer verifier.Close()
+	var transportVerifier *proxytoken.Verifier
+	if cfg.TransportTokenIssuer != "" {
+		transportVerifier, err = proxytoken.NewVerifier(
+			cfg.TransportTokenIssuer, cfg.TransportTokenAuthorizedKeys,
+			cfg.AllowLegacyHMACTransportTokens, cfg.CredentialSigningSecret,
+		)
+		if err != nil {
+			log.Fatalf("failed to initialize transport credential verifier: %v", err)
+		}
+	}
 
 	// Initialize core HTTP client with TLS settings
 	control.InitCoreClient(cfg.CoreTLSSkipVerify, cfg.CoreAllowHTTP, cfg.CoreAllowedHosts)
@@ -65,6 +76,12 @@ func main() {
 		desiredVerifier, err := desiredstate.NewVerifier(cfg.NodeAuthorizedKeys)
 		if err != nil || !desiredVerifier.Trusts(cfg.ControlNodeID, desiredSigner.PublicKey()) {
 			log.Fatal("desired state signing identity must match its NODE_AUTHORIZED_KEYS trust entry")
+		}
+		if cfg.AuthentikClientID != "" {
+			transportSigner, signerErr := proxytoken.NewSigner(cfg.ControlNodeID, cfg.TransportTokenIssuer, cfg.ControlNodePrivateKey)
+			if signerErr != nil || transportVerifier == nil || !transportVerifier.Trusts(cfg.ControlNodeID, transportSigner.PublicKey()) {
+				log.Fatal("transport credential signing identity must match its TRANSPORT_TOKEN_AUTHORIZED_KEYS trust entry")
+			}
 		}
 	}
 
@@ -101,9 +118,10 @@ func main() {
 			"masque":    cfg.MasqueEnabled,
 			"proxy":     cfg.ProxyEnabled,
 		}
+		transportClusterID, _ := uuid.Parse(cfg.TransportClusterID)
 		activator, err := desiredstate.NewActivator(
 			cfg.CoreNodeStateDir, nodeID, coreVersion, cfg.NodeAuthorizedKeys,
-			desiredstate.LocalCapabilities{Transports: localTransports, SecretFingerprints: secretFingerprints}, manager,
+			desiredstate.LocalCapabilities{ClusterID: transportClusterID, Transports: localTransports, SecretFingerprints: secretFingerprints}, manager,
 		)
 		if err != nil {
 			log.Fatalf("failed to initialize signed desired state: %v", err)
@@ -131,6 +149,7 @@ func main() {
 
 	// Optional: connect to PostgreSQL + JWKS if DATABASE_URL is set
 	var router http.Handler
+	var proxyServer *proxy.Server
 	if cfg.DatabaseURL != "" && cfg.AuthentikClientID != "" {
 		pool, err := db.Connect(shutdownCtx, cfg)
 		if err != nil {
@@ -161,20 +180,24 @@ func main() {
 		defer jwks.Close()
 
 		slog.Info("Control API enabled", "auth", "PostgreSQL + Authentik")
-		router = api.NewRouterWithDB(cfg, manager, pool, jwks, verifier, clientCertificateAuthority, dataCipher)
+		router = api.NewRouterWithDB(cfg, manager, pool, jwks, verifier, clientCertificateAuthority, transportVerifier, dataCipher)
 
-		// Start HTTP CONNECT proxy if enabled
 		if cfg.ProxyEnabled {
-			proxySrv := proxy.NewWithDB(cfg, jwks, pool)
-			go func() {
-				if err := proxySrv.Start(shutdownCtx); err != nil {
-					slog.Error("proxy server stopped", "error", err)
-				}
-			}()
+			proxyServer = proxy.NewWithDB(cfg, pool, transportVerifier)
 		}
 	} else {
 		slog.Info("Control API disabled", "reason", "no DATABASE_URL or AUTHENTIK_CLIENT_ID")
-		router = api.NewRouter(cfg, manager, verifier)
+		router = api.NewRouter(cfg, manager, verifier, transportVerifier)
+		if cfg.ProxyEnabled {
+			proxyServer = proxy.New(cfg, transportVerifier)
+		}
+	}
+	if proxyServer != nil {
+		go func() {
+			if err := proxyServer.Start(shutdownCtx); err != nil {
+				slog.Error("proxy server stopped", "error", err)
+			}
+		}()
 	}
 
 	addr := fmt.Sprintf(":%s", cfg.Port)
@@ -187,9 +210,10 @@ func main() {
 	var masqueErrCh chan error
 	if cfg.MasqueEnabled {
 		serverID, _ := uuid.Parse(cfg.MasqueServerID)
+		clusterID, _ := uuid.Parse(cfg.TransportClusterID)
 		masqueGateway, err = masque.NewGateway(
 			fmt.Sprintf(":%d", cfg.MasquePort), cfg.MasqueTLSCert, cfg.MasqueTLSKey,
-			cfg.MasqueURITemplate, cfg.WGPort, cfg.CredentialSigningSecret, serverID, cfg.MasqueMaxClients,
+			cfg.MasqueURITemplate, cfg.WGPort, transportVerifier, serverID, clusterID, cfg.MasqueMaxClients,
 		)
 		if err != nil {
 			log.Fatalf("failed to initialize MASQUE gateway: %v", err)

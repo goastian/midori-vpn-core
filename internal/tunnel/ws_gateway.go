@@ -23,15 +23,16 @@ import (
 // WireGuard transport through strict firewalls and captive portals without TCP-over-TCP penalty.
 type WSGateway struct {
 	wgAddr     string
-	secret     string
+	verifier   *proxytoken.Verifier
 	serverID   uuid.UUID
+	clusterID  uuid.UUID
 	active     atomic.Int64
 	maxClients int64
 }
 
 // NewWSGateway creates a new WebSocket tunnel gateway targeting the local WireGuard port.
-func NewWSGateway(wgPort int, secret string, serverID uuid.UUID, maxClients int) *WSGateway {
-	return &WSGateway{wgAddr: fmt.Sprintf("127.0.0.1:%d", wgPort), secret: secret, serverID: serverID, maxClients: int64(maxClients)}
+func NewWSGateway(wgPort int, verifier *proxytoken.Verifier, serverID, clusterID uuid.UUID, maxClients int) *WSGateway {
+	return &WSGateway{wgAddr: fmt.Sprintf("127.0.0.1:%d", wgPort), verifier: verifier, serverID: serverID, clusterID: clusterID, maxClients: int64(maxClients)}
 }
 
 // Handler handles WebSocket upgrade and bidirectional binary datagram relay.
@@ -47,8 +48,7 @@ func (g *WSGateway) Handler(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, "tunnel authentication required", http.StatusUnauthorized)
 		return
 	}
-	claims, ok := proxytoken.ValidateTunnel(strings.TrimSpace(strings.TrimPrefix(header, "Bearer ")), g.secret)
-	if !ok || claims.ServerID != g.serverID {
+	if _, err := g.verifier.Verify(strings.TrimSpace(strings.TrimPrefix(header, "Bearer ")), proxytoken.AudienceVPNTunnel, g.serverID, g.clusterID); err != nil {
 		respond.JsonError(w, "invalid tunnel credential", http.StatusUnauthorized)
 		return
 	}
