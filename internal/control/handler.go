@@ -120,6 +120,7 @@ type Handler struct {
 	nodeVerifier            *nodeauth.Verifier
 	clientCertificateRepo   *repo.DeviceCertificateRepo
 	clientCertificateCA     *clientpki.Authority
+	multiclusterRepo        *repo.MulticlusterRepo
 }
 
 func (h *Handler) SetNodeVerifier(verifier *nodeauth.Verifier) {
@@ -154,6 +155,7 @@ func NewHandlerWithMeshAndDataEncryption(pool *pgxpool.Pool, cfg *config.Config,
 		auditRepo:               repo.NewAuditRepo(pool),
 		trustedExtensionRepo:    repo.NewTrustedExtensionRepo(pool),
 		clientCertificateRepo:   repo.NewDeviceCertificateRepo(pool),
+		multiclusterRepo:        repo.NewMulticlusterRepo(pool),
 		billingClient:           billing.NewClient(cfg, billingRedis),
 		wgMgr:                   wgMgr,
 		hub:                     hub,

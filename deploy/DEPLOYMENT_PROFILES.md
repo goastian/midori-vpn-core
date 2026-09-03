@@ -3,7 +3,9 @@
 This is the executable deployment baseline for the topology defined in
 [`docs/CENTRAL_CONTROL_ARCHITECTURE.md`](../docs/CENTRAL_CONTROL_ARCHITECTURE.md).
 The regional script does not by itself certify a node or implement the future
-signed desired-state, heartbeat and fleet revocation contracts described there.
+signed desired-state and last-known-good contracts described there. Signed
+enrollment, heartbeat and database-backed node-to-Control revocation are part
+of the current local implementation.
 
 MidoriVPN uses two explicit server profiles. A service is never promoted to a
 more privileged execution level merely because deployment is easier there.
@@ -69,6 +71,27 @@ matching public key through `NODE_AUTHORIZED_KEYS` just like every remote
 Core. PostgreSQL and the Control-only Redis are not deployed on regional
 nodes.
 
+The principal Core is also modeled as an enrolled node. Its outbound identity
+is distinct from the Control signing identity above and uses the same contract
+as regional nodes:
+
+```text
+NODE_CONTROL_URL=https://vpn.example.test
+CORE_NODE_ID=<pre-created-node-uuid>
+CORE_NODE_STATE_DIR=/var/lib/midorivpn-node
+CORE_NODE_ENROLLMENT_TOKEN_FILE=/var/lib/midorivpn-node/enrollment-token
+CORE_NODE_MAX_PEERS=100
+```
+
+The host state directory must be `0700` and an initial token file must be a
+regular `0600` file. After successful enrollment, Core removes that token while
+retaining `identity.json` at `0600`. Subsequent restarts reuse the same key.
+For a brand-new principal only, these six node-identity variables may all be
+empty for the first bootstrap so the administrator API can create the cluster,
+node and token. Configure the complete set and restart immediately afterward;
+the bootstrap instance remains ineligible for modeled placement and is not a
+release-ready state. Partial configuration always fails startup.
+
 ## Regional profile: Core exit node
 
 Every additional server runs a rootless Core without `DATABASE_URL`,
@@ -84,28 +107,40 @@ NODE_AUTH_REDIS_URL=<node-local-authenticated-redis-url>
 
 Set `DEPLOYMENT_PROFILE=core-node`, choose a unique `CORE_NODE_NAME`, and run
 `scripts/VPN/deploy-core-node.sh` as the dedicated unprivileged service
-account. The script fails closed if Control, database, Authentik or CA signing
-secrets are present.
+account. Configure `NODE_CONTROL_URL`, `CORE_NODE_ID`,
+`CORE_NODE_STATE_DIR`, `CORE_NODE_ENROLLMENT_TOKEN_FILE` and
+`CORE_NODE_MAX_PEERS` together. The script validates the UUID and HTTPS origin,
+requires the host state directory to be `0700`, accepts only a regular `0600`
+token file, and mounts the state directory at the exact configured container
+path. It fails closed if Control, database, Authentik or CA signing secrets are
+present.
 
-The node-local Redis provides replay protection. It is not the Control data
-store and must not expose a host port. Control calls the regional Core over
-HTTPS and signs every peer/statistics request with Ed25519, timestamp and a
-single-use nonce. “Connecting a Core to Control” therefore consists of:
+The node-local Redis provides replay protection for Control-to-Core calls. It
+is not the Control data store and must not expose a host port. Control calls the
+regional Core over HTTPS and signs every peer/statistics request with Ed25519,
+timestamp and a single-use nonce. Node-to-Control enrollment and heartbeat use
+the principal Redis for a separate nonce domain. “Connecting a Core to
+Control” therefore consists of:
 
-1. provisioning the Control public key in the Core;
-2. issuing a TLS certificate for the Core management hostname;
-3. adding that hostname to `CORE_ALLOWED_HOSTS` on the principal;
-4. registering the server and its explicit transport rows in Control; and
-5. verifying signed add/remove-peer and statistics calls before activation.
+1. creating the inactive cluster and `enrolling` node in Control;
+2. issuing and privately installing its one-use enrollment token;
+3. provisioning the Control public key in the Core;
+4. issuing a TLS certificate for the Core management hostname;
+5. adding that hostname to `CORE_ALLOWED_HOSTS` on the principal;
+6. starting Core and confirming token removal plus signed heartbeat storage;
+7. registering the server and its explicit transport rows in Control; and
+8. verifying signed add/remove-peer and statistics calls before activation.
 
 No database credential, Authentik secret, Control data-encryption key or Control
 private signing key is copied to a regional node. Node management ports are reachable only through
 TLS and an ingress allowlist restricted to the principal server.
 
-The current admin identity registry is local to the Redis instance used by its
-Core process. It does not yet propagate revocation into independent regional
-Redis instances. Until signed trust revisions are implemented, key rotation or
-revocation is an explicit coordinated configuration update on every node.
+Revoking the enrolled node blocks its node-to-Control heartbeat immediately in
+the central database and invalidates unused enrollment tokens. The separate
+Control-to-Core admin identity registry remains local to each Core's Redis and
+does not yet propagate into independent regional instances. Until signed trust
+revisions are implemented, rotating or revoking Control-to-Core trust remains
+an explicit coordinated configuration update on every node.
 
 ## Gateway placement on both profiles
 
@@ -129,6 +164,12 @@ tests pass.
 
 - Rootless Core starts without PostgreSQL/Auth/Control configuration.
 - Node-local Redis is private and replay tests reject a reused nonce.
+- Core generates one stable private Ed25519 identity locally; Control stores
+  only the public key and a digest of the consumed enrollment token.
+- A successful enrollment removes the node-local plaintext token, and a replay,
+  expired token, reused token or revoked node fails closed.
+- Signed heartbeats update durable observed history without claiming transport
+  certification or version compatibility.
 - Unsigned and wrongly signed management calls return `401`.
 - Control can add a test peer, read real statistics and remove that peer.
 - Node health and transport health appear in the protected admin endpoint.

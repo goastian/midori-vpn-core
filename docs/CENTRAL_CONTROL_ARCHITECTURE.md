@@ -242,13 +242,18 @@ option, not a deployment dependency.
 
 Initial regional enrollment is an operator-controlled process:
 
-1. Create the node on a dedicated host and generate node-local secrets there.
-2. Provision the Control public key and private management-network trust.
-3. Issue the management TLS certificate for the exact node hostname.
-4. Add the hostname to the principal `CORE_ALLOWED_HOSTS` allowlist.
-5. Register the server and explicit transport rows as inactive.
-6. Verify signed peer operations, replay rejection, statistics and cleanup.
-7. Mark only certified transports healthy, then activate the server.
+1. Create an inactive cluster and an `enrolling` node in Control.
+2. Issue a one-use enrollment token with a lifetime between one minute and 24
+   hours and place that plaintext token in the node's private state directory.
+3. Provision the Control public key and private management-network trust.
+4. Issue the management TLS certificate for the exact node hostname.
+5. Add the hostname to the principal `CORE_ALLOWED_HOSTS` allowlist.
+6. Start Core with the exact Control origin, node UUID, private state directory
+   and capacity. Core generates its Ed25519 identity locally and enrolls itself.
+7. Confirm that the token file is gone and signed heartbeats are persisted.
+8. Register the server and explicit transport rows as inactive.
+9. Verify signed peer operations, replay rejection, statistics and cleanup.
+10. Mark only certified transports healthy, then activate the server.
 
 The existing admin identity registry updates the Redis attached to the
 principal process. Regional nodes use independent Redis instances, so it is not
@@ -258,10 +263,22 @@ a coordinated configuration deployment followed by verification on every
 node. No document or UI may claim instantaneous fleet revocation before that
 gate is closed.
 
-Node-originated enrollment and heartbeat will use a node-specific identity
-whose private key is generated and retained on that node. A one-time enrollment
-credential may authorize only creation of that node record and expires after
-first use. It is not a reusable fleet token.
+Node-originated enrollment and heartbeat use a separate node-specific Ed25519
+identity. Core generates and atomically persists the private key in a `0700`
+state directory with a `0600` identity file; Control stores only its 32-byte
+public key. Enrollment requires both possession of a bounded, one-use token and
+a valid self-signature by the proposed identity. Control stores only the
+token's SHA-256 digest and marks the token used in the same PostgreSQL
+transaction that binds the key. Core overwrites, truncates and removes its
+local plaintext token only after Control confirms success.
+
+Every later node-to-Control request signs a domain-separated canonical message
+containing the node UUID, method, request target, body digest, timestamp and a
+random nonce. Nonces are consumed through the principal Redis and fail closed
+when replay protection is unavailable. Revoking a node immediately blocks
+node-originated requests in PostgreSQL and revokes any unused enrollment token.
+The reverse Control-to-Core direction retains its distinct signing domain and
+node-local replay store.
 
 ## Credential boundary for WSS, MASQUE and proxy
 
@@ -309,10 +326,14 @@ available while enrollment is implemented. Newly created unbound servers do
 not receive placements, and the temporary historical exception must be removed
 before regional certification.
 
-Admin ping remains an on-demand probe, not a heartbeat. Signed enrollment,
-heartbeat ingestion, cryptographic desired-state issuance/activation and
-last-known-good behavior remain MCL-02 and MCL-03 work; the persistence layer
-does not emulate those protocols.
+Migration 18 binds an exact Ed25519 public key and enrollment timestamp to each
+node, with a database uniqueness constraint preventing one identity from being
+assigned to two nodes. Signed enrollment and heartbeat ingestion are now
+implemented. Heartbeats report bounded capacity, Core version and transport
+health every 30 seconds, but deliberately report no compatibility decision or
+certification claim. Cryptographic desired-state issuance/activation,
+compatibility evaluation and last-known-good behavior remain MCL-03 work.
+Admin ping remains an on-demand probe and is not treated as a heartbeat.
 
 ## Observability
 
@@ -373,11 +394,13 @@ upgrade; a migration requiring destructive rollback blocks the rollout.
 | TLS host allowlist and production fail-closed checks | Implemented |
 | Central server/transport inventory and capacity reservation | Implemented |
 | Per-host retries and circuit breaker | Implemented in memory |
-| Persistent cluster/node lifecycle model | Implemented locally in migration 17; not deployed |
-| Desired/observed history and fail-closed placement gate | Implemented locally; heartbeat ingestion pending |
+| Persistent cluster/node lifecycle model | Implemented locally in migrations 17–18; not deployed |
+| Node-generated Ed25519 enrollment with hashed one-use token | Implemented locally; not deployed |
+| Signed node-to-Control heartbeat and replay rejection | Implemented locally; not deployed |
+| Desired/observed history and fail-closed placement gate | Implemented locally; desired-state activation pending |
 | Signed desired revisions and last-known-good activation | Not implemented |
-| Automated enrollment and fleet trust rotation/revocation | Not implemented |
-| Durable heartbeat, version compatibility and revision drift | Storage and placement checks implemented; reporting protocol pending |
+| Fleet identity revocation | Implemented for node-to-Control requests; Control-to-Core trust distribution remains MCL-03 |
+| Durable heartbeat, version compatibility and revision drift | Heartbeat persistence implemented; compatibility and revision application pending |
 | Private central scrape of regional metrics | Designed, not deployed |
 | Cross-cluster-safe asymmetric transport credentials | Not implemented |
 | First regional acceptance and failure-isolation E2E | Paused; not certified |

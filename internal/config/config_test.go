@@ -128,6 +128,21 @@ func TestRedisURLFromEnvRemainsDisabledWithoutRedisSettings(t *testing.T) {
 	}
 }
 
+func TestCoreNodeNameRequiresCompleteDNSLabel(t *testing.T) {
+	valid := []string{"a", "node-1", strings.Repeat("a", 63)}
+	for _, name := range valid {
+		if !coreNodeNameRe.MatchString(name) {
+			t.Errorf("valid Core node name %q was rejected", name)
+		}
+	}
+	invalid := []string{"", "node-", "-node", "Node", strings.Repeat("a", 64)}
+	for _, name := range invalid {
+		if coreNodeNameRe.MatchString(name) {
+			t.Errorf("invalid Core node name %q was accepted", name)
+		}
+	}
+}
+
 func TestRequireEnvFailsFastWhenMissing(t *testing.T) {
 	if os.Getenv("MIDORIVPN_REQUIRE_ENV_HELPER") == "1" {
 		_ = requireEnv("MIDORIVPN_REQUIRED_SETTING")

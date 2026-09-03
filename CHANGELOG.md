@@ -4,6 +4,11 @@
 
 ### Security
 
+- Core nodes now generate and atomically retain a private Ed25519 identity,
+  enroll through a short-lived one-use credential whose plaintext is never
+  stored by Control, and sign domain-separated node-to-Control requests with a
+  timestamp, body digest and Redis-consumed nonce. Reuse, replay, expiry,
+  identity collision and database-backed node revocation fail closed.
 - WireGuard PSKs are now encrypted at rest with versioned
   XChaCha20-Poly1305 records bound to their table and row. Control requires a
   principal-only 32-byte data key, writes ciphertext exclusively, limits
@@ -26,6 +31,10 @@
 
 ### Operations
 
+- Added migration 18 and the operational node enrollment/heartbeat plane.
+  Control binds one unique public key to each node, preserves token audit state,
+  ingests bounded observed health every 30 seconds and never treats an
+  unverified transport or unevaluated Core version as eligible.
 - Added the migration 17 multicluster persistence model for clusters, Core
   nodes, hashed one-use enrollment tokens, desired revisions, observed history
   and one-to-one server bindings. New nodes fail closed for placement until
@@ -70,7 +79,7 @@
 - Replaced the legacy backup and chaos helpers with fail-fast, environment-neutral staging tests. Backup validation restores into an isolated database and compares critical tables; network chaos applies bounded netem loss, verifies private metrics and probes, and always restores the original qdisc.
 - Pinned the Core builder, Alpine runtime and rootless analysis tools to exact supported versions and image digests. Staticcheck and govulncheck no longer resolve mutable `latest` releases during a rebuild.
 - Added rootless Podman development images for Go, Control and Desktop workflows.
-- Added immutable migrations through version 17, including billing/quotas, transport health, unique active peer addresses, Ed25519 identities, removal of retired transport columns, revocable per-device client certificates, persistent device identity, durable peer operations, safe administrative draining, encrypted PSKs, the multicluster state model and the missing Mesh exit-node protocol/capability fields.
+- Added immutable migrations through version 18, including billing/quotas, transport health, unique active peer addresses, Ed25519 identities, removal of retired transport columns, revocable per-device client certificates, persistent device identity, durable peer operations, safe administrative draining, encrypted PSKs, the multicluster state model, enrolled Core-node identities and the missing Mesh exit-node protocol/capability fields.
 - Added migrations 13–14 and a durable PostgreSQL lifecycle for WireGuard connect
   and replacement operations. Quota and capacity are revalidated under locks,
   retries reuse the exact completed session, ambiguous failures remain

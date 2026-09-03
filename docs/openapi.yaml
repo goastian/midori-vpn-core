@@ -75,6 +75,38 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
 
+  /api/v1/node/enroll:
+    post:
+      operationId: enrollCoreNode
+      tags: [Node plane]
+      security:
+        - EnrollmentBearer: []
+          NodeID: []
+          NodeTimestamp: []
+          NodeNonce: []
+          NodeSignature: []
+      requestBody: {$ref: '#/components/requestBodies/NodeEnrollment'}
+      responses:
+        '201': {$ref: '#/components/responses/NodeEnrollment'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/node/heartbeat:
+    post:
+      operationId: reportCoreNodeHeartbeat
+      tags: [Node plane]
+      security:
+        - NodeID: []
+          NodeTimestamp: []
+          NodeNonce: []
+          NodeSignature: []
+      requestBody: {$ref: '#/components/requestBodies/NodeHeartbeat'}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '503': {$ref: '#/components/responses/ServiceUnavailable'}
+
   /api/v1/peers:
     parameters: []
     get:
@@ -725,6 +757,45 @@ paths:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
+  /api/v1/admin/clusters:
+    post:
+      operationId: createAdminCluster
+      tags: [Administration, Node plane]
+      requestBody: {$ref: '#/components/requestBodies/ClusterCreate'}
+      responses:
+        '201': {$ref: '#/components/responses/Created'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+  /api/v1/admin/clusters/{clusterID}/nodes:
+    parameters:
+      - {$ref: '#/components/parameters/ClusterID'}
+    post:
+      operationId: createAdminCoreNode
+      tags: [Administration, Node plane]
+      requestBody: {$ref: '#/components/requestBodies/CoreNodeCreate'}
+      responses:
+        '201': {$ref: '#/components/responses/Created'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+  /api/v1/admin/nodes/{nodeID}/enrollment-token:
+    parameters:
+      - {$ref: '#/components/parameters/NodeID'}
+    post:
+      operationId: issueAdminNodeEnrollmentToken
+      tags: [Administration, Node plane]
+      requestBody: {$ref: '#/components/requestBodies/NodeEnrollmentTokenIssue'}
+      responses:
+        '201': {$ref: '#/components/responses/NodeEnrollmentToken'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/nodes/{nodeID}/revoke:
+    parameters:
+      - {$ref: '#/components/parameters/NodeID'}
+    post:
+      operationId: revokeAdminCoreNode
+      tags: [Administration, Node plane]
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/admin/peers:
     get:
       operationId: listAdminPeers
@@ -796,6 +867,10 @@ components:
       type: http
       scheme: bearer
       bearerFormat: short-lived vpn-tunnel credential
+    EnrollmentBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: one-use Core node enrollment token
     NodeID:
       type: apiKey
       in: header
@@ -823,6 +898,11 @@ components:
       in: path
       required: true
       schema: {type: string, minLength: 1}
+    ClusterID:
+      name: clusterID
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
     MeshID:
       name: meshID
       in: path
@@ -908,6 +988,8 @@ components:
             - peer_operation_conflict
             - core_peer_state_unavailable
             - origin_country_unavailable
+            - node_enrollment_unauthorized
+            - node_authentication_failed
       additionalProperties: false
     TokenResponse:
       type: object
@@ -1302,6 +1384,92 @@ components:
       properties:
         node_id: {type: string}
         public_key: {type: string, writeOnly: true}
+    NodeEnrollmentRequest:
+      type: object
+      additionalProperties: false
+      required: [node_id, public_key]
+      properties:
+        node_id: {type: string, format: uuid}
+        public_key:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{43}$'
+    NodeEnrollmentResult:
+      type: object
+      additionalProperties: false
+      required: [node_id, status]
+      properties:
+        node_id: {type: string, format: uuid}
+        status: {const: enrolled}
+    NodeEnrollmentEnvelope:
+      type: object
+      additionalProperties: false
+      required: [ok, data]
+      properties:
+        ok: {const: true}
+        data: {$ref: '#/components/schemas/NodeEnrollmentResult'}
+    NodeHeartbeatRequest:
+      type: object
+      additionalProperties: false
+      required: [schema_version, core_version, health_status, current_peers, max_peers, transport_states, reported_at]
+      properties:
+        schema_version: {type: integer, const: 1}
+        applied_revision: {type: integer, format: int64, minimum: 1}
+        core_version: {type: string, minLength: 1, maxLength: 64}
+        health_status: {type: string, enum: [unknown, healthy, degraded, error]}
+        current_peers: {type: integer, minimum: 0}
+        max_peers: {type: integer, minimum: 0}
+        transport_states:
+          type: object
+          maxProperties: 6
+          additionalProperties:
+            type: object
+            additionalProperties: false
+            required: [status, certified]
+            properties:
+              status: {type: string, enum: [unknown, healthy, degraded, error, disabled]}
+              certified: {type: boolean}
+        last_error_code: {type: string, pattern: '^[a-z0-9_]{1,64}$'}
+        reported_at: {type: string, format: date-time}
+    ClusterCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, region]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 64}
+        region: {type: string, minLength: 1, maxLength: 64}
+        policy_labels: {type: object, additionalProperties: {type: string}}
+        is_principal: {type: boolean}
+    CoreNodeCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [name, management_host]
+      properties:
+        name: {type: string, pattern: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'}
+        management_host: {type: string, minLength: 1, maxLength: 253}
+    NodeEnrollmentTokenIssueRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        ttl_minutes: {type: integer, minimum: 1, maximum: 1440, default: 15}
+    NodeEnrollmentTokenResult:
+      type: object
+      additionalProperties: false
+      required: [node_id, token, expires_at]
+      properties:
+        node_id: {type: string, format: uuid}
+        token:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{43}$'
+          writeOnly: true
+          x-midorivpn-sensitive: true
+        expires_at: {type: string, format: date-time}
+    NodeEnrollmentTokenEnvelope:
+      type: object
+      additionalProperties: false
+      required: [ok, data]
+      properties:
+        ok: {const: true}
+        data: {$ref: '#/components/schemas/NodeEnrollmentTokenResult'}
     ExtensionOriginUpdateRequest:
       type: object
       additionalProperties: false
@@ -1328,6 +1496,11 @@ components:
     ServerCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ServerCreateRequest'}}}}
     ServerUpdate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ServerUpdateRequest'}}}}
     NodeIdentity: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/NodeIdentityRequest'}}}}
+    NodeEnrollment: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/NodeEnrollmentRequest'}}}}
+    NodeHeartbeat: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/NodeHeartbeatRequest'}}}}
+    ClusterCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ClusterCreateRequest'}}}}
+    CoreNodeCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CoreNodeCreateRequest'}}}}
+    NodeEnrollmentTokenIssue: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/NodeEnrollmentTokenIssueRequest'}}}}
     ExtensionOriginUpdate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ExtensionOriginUpdateRequest'}}}}
   responses:
     OK:
@@ -1350,6 +1523,16 @@ components:
     NodePeerList:
       description: Complete observed peer list; observation failures return HTTP 503 instead of an empty array.
       content: {application/json: {schema: {$ref: '#/components/schemas/NodePeerListEnvelope'}}}
+    NodeEnrollment:
+      description: Node identity enrollment completed and the one-use credential consumed.
+      headers:
+        Cache-Control: {schema: {type: string, const: no-store}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/NodeEnrollmentEnvelope'}}}
+    NodeEnrollmentToken:
+      description: One-time plaintext enrollment credential. Control stores only its SHA-256 digest.
+      headers:
+        Cache-Control: {schema: {type: string, const: no-store}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/NodeEnrollmentTokenEnvelope'}}}
     HealthOK:
       description: Core process health.
       content: {application/json: {schema: {$ref: '#/components/schemas/SuccessEnvelope'}}}

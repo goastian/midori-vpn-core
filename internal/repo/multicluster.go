@@ -2,19 +2,40 @@ package repo
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/goastian/midori-vpn-core/internal/models"
 )
 
 const DefaultNodeFreshness = 90 * time.Second
+
+const (
+	minEnrollmentTokenTTL = time.Minute
+	maxEnrollmentTokenTTL = 24 * time.Hour
+)
+
+var (
+	ErrEnrollmentTokenInvalid  = errors.New("node enrollment token is invalid")
+	ErrNodeAlreadyEnrolled     = errors.New("core node is already enrolled")
+	ErrNodeNotEnrolling        = errors.New("core node is not accepting enrollment")
+	ErrNodeIdentityUnavailable = errors.New("core node identity is unavailable")
+	ErrNodeIdentityConflict    = errors.New("core node identity is already assigned")
+	ErrNodeRevoked             = errors.New("core node or cluster is revoked")
+)
 
 type MulticlusterRepo struct {
 	pool *pgxpool.Pool
@@ -73,6 +94,195 @@ func (r *MulticlusterRepo) CreateNode(ctx context.Context, node *models.CoreNode
 	).Scan(&node.ID, &node.LastSeenAt, &node.CreatedAt, &node.UpdatedAt)
 }
 
+// IssueEnrollmentToken returns the only plaintext copy of a bounded one-use
+// token. PostgreSQL receives only its SHA-256 digest.
+func (r *MulticlusterRepo) IssueEnrollmentToken(ctx context.Context, nodeID uuid.UUID, ttl time.Duration) (*models.NodeEnrollmentToken, error) {
+	if nodeID == uuid.Nil {
+		return nil, errors.New("core node ID is required")
+	}
+	if ttl < minEnrollmentTokenTTL || ttl > maxEnrollmentTokenTTL {
+		return nil, fmt.Errorf("enrollment token TTL must be between %s and %s", minEnrollmentTokenTTL, maxEnrollmentTokenTTL)
+	}
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return nil, fmt.Errorf("generate enrollment token: %w", err)
+	}
+	token := base64.RawURLEncoding.EncodeToString(tokenBytes)
+	digest := sha256.Sum256(tokenBytes)
+	expiresAt := time.Now().UTC().Add(ttl)
+
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("begin enrollment token issuance: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var state, clusterState models.ClusterState
+	var hasIdentity bool
+	if err := tx.QueryRow(ctx, `
+		SELECT node.state, cluster.state, node.identity_public_key IS NOT NULL
+		FROM core_nodes node
+		JOIN clusters cluster ON cluster.id = node.cluster_id
+		WHERE node.id = $1
+		FOR UPDATE OF node, cluster`, nodeID).Scan(&state, &clusterState, &hasIdentity); err != nil {
+		return nil, fmt.Errorf("lock Core node for enrollment: %w", err)
+	}
+	if hasIdentity {
+		return nil, ErrNodeAlreadyEnrolled
+	}
+	if state == models.ClusterStateRevoked || state == models.ClusterStateRetired ||
+		clusterState == models.ClusterStateRevoked || clusterState == models.ClusterStateRetired {
+		return nil, ErrNodeRevoked
+	}
+	if state != models.ClusterStateEnrolling {
+		return nil, ErrNodeNotEnrolling
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE node_enrollment_tokens
+		SET revoked_at = NOW()
+		WHERE node_id = $1 AND used_at IS NULL AND revoked_at IS NULL`, nodeID); err != nil {
+		return nil, fmt.Errorf("revoke previous enrollment token: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO node_enrollment_tokens (node_id, token_hash, expires_at)
+		VALUES ($1, $2, $3)`, nodeID, digest[:], expiresAt); err != nil {
+		return nil, fmt.Errorf("persist enrollment token hash: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit enrollment token issuance: %w", err)
+	}
+	return &models.NodeEnrollmentToken{NodeID: nodeID, Token: token, ExpiresAt: expiresAt}, nil
+}
+
+// EnrollNode consumes one token and binds the presented Ed25519 public key in
+// the same transaction. Errors never include either credential.
+func (r *MulticlusterRepo) EnrollNode(ctx context.Context, nodeID uuid.UUID, token string, publicKey ed25519.PublicKey) error {
+	tokenBytes, err := decodeCanonicalRawURL(token, 32)
+	if err != nil || len(publicKey) != ed25519.PublicKeySize {
+		return ErrEnrollmentTokenInvalid
+	}
+	digest := sha256.Sum256(tokenBytes)
+
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin Core node enrollment: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var nodeState, clusterState models.ClusterState
+	var hasIdentity bool
+	if err := tx.QueryRow(ctx, `
+		SELECT node.state, cluster.state, node.identity_public_key IS NOT NULL
+		FROM core_nodes node
+		JOIN clusters cluster ON cluster.id = node.cluster_id
+		WHERE node.id = $1
+		FOR UPDATE OF node, cluster`, nodeID).Scan(&nodeState, &clusterState, &hasIdentity); err != nil {
+		return fmt.Errorf("lock Core node enrollment: %w", err)
+	}
+	if hasIdentity {
+		return ErrNodeAlreadyEnrolled
+	}
+	if nodeState == models.ClusterStateRevoked || nodeState == models.ClusterStateRetired ||
+		clusterState == models.ClusterStateRevoked || clusterState == models.ClusterStateRetired {
+		return ErrNodeRevoked
+	}
+	if nodeState != models.ClusterStateEnrolling {
+		return ErrNodeNotEnrolling
+	}
+	var tokenID uuid.UUID
+	var storedDigest []byte
+	var expiresAt time.Time
+	if err := tx.QueryRow(ctx, `
+		SELECT id, token_hash, expires_at
+		FROM node_enrollment_tokens
+		WHERE node_id = $1 AND used_at IS NULL AND revoked_at IS NULL
+		FOR UPDATE`, nodeID).Scan(&tokenID, &storedDigest, &expiresAt); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrEnrollmentTokenInvalid
+		}
+		return fmt.Errorf("lock enrollment token: %w", err)
+	}
+	if !expiresAt.After(time.Now().UTC()) || len(storedDigest) != sha256.Size ||
+		subtle.ConstantTimeCompare(storedDigest, digest[:]) != 1 {
+		return ErrEnrollmentTokenInvalid
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE core_nodes
+		SET identity_public_key = $2, enrolled_at = NOW(), state = 'inactive', updated_at = NOW()
+		WHERE id = $1`, nodeID, []byte(publicKey)); err != nil {
+		var pgError *pgconn.PgError
+		if errors.As(err, &pgError) && pgError.Code == "23505" {
+			return ErrNodeIdentityConflict
+		}
+		return fmt.Errorf("bind Core node identity: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE node_enrollment_tokens SET used_at = NOW() WHERE id = $1`, tokenID); err != nil {
+		return fmt.Errorf("consume enrollment token: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit Core node enrollment: %w", err)
+	}
+	return nil
+}
+
+// NodeIdentity returns the public key only for lifecycle states permitted to
+// report heartbeat. Revoked and retired authority fails closed in PostgreSQL.
+func (r *MulticlusterRepo) NodeIdentity(ctx context.Context, nodeID uuid.UUID) (ed25519.PublicKey, error) {
+	var publicKey []byte
+	var nodeState, clusterState models.ClusterState
+	if err := r.pool.QueryRow(ctx, `
+		SELECT node.identity_public_key, node.state, cluster.state
+		FROM core_nodes node
+		JOIN clusters cluster ON cluster.id = node.cluster_id
+		WHERE node.id = $1`, nodeID).Scan(&publicKey, &nodeState, &clusterState); err != nil {
+		return nil, fmt.Errorf("load Core node identity: %w", err)
+	}
+	if nodeState == models.ClusterStateRevoked || nodeState == models.ClusterStateRetired ||
+		clusterState == models.ClusterStateRevoked || clusterState == models.ClusterStateRetired {
+		return nil, ErrNodeRevoked
+	}
+	if nodeState == models.ClusterStateEnrolling || len(publicKey) != ed25519.PublicKeySize {
+		return nil, ErrNodeIdentityUnavailable
+	}
+	return ed25519.PublicKey(append([]byte(nil), publicKey...)), nil
+}
+
+func (r *MulticlusterRepo) RevokeNode(ctx context.Context, nodeID uuid.UUID) error {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin Core node revocation: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, `
+		UPDATE core_nodes SET state = 'revoked', updated_at = NOW()
+		WHERE id = $1 AND state <> 'retired'`, nodeID)
+	if err != nil {
+		return fmt.Errorf("revoke Core node: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return pgx.ErrNoRows
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE node_enrollment_tokens SET revoked_at = NOW()
+		WHERE node_id = $1 AND used_at IS NULL AND revoked_at IS NULL`, nodeID); err != nil {
+		return fmt.Errorf("revoke Core node enrollment tokens: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit Core node revocation: %w", err)
+	}
+	return nil
+}
+
+func decodeCanonicalRawURL(value string, size int) ([]byte, error) {
+	if value != strings.TrimSpace(value) {
+		return nil, errors.New("non-canonical base64url")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil || len(raw) != size || base64.RawURLEncoding.EncodeToString(raw) != value {
+		return nil, errors.New("non-canonical base64url")
+	}
+	return raw, nil
+}
+
 // BindServer attaches exactly one server inventory row to one Core node and
 // permanently removes that row's temporary legacy placement exception.
 func (r *MulticlusterRepo) BindServer(ctx context.Context, serverID, nodeID uuid.UUID) error {
@@ -125,6 +335,23 @@ func (r *MulticlusterRepo) RecordObservation(ctx context.Context, observation *m
 		return fmt.Errorf("begin node observation: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	var nodeState, clusterState models.ClusterState
+	var identitySize int
+	if err := tx.QueryRow(ctx, `
+		SELECT node.state, cluster.state, COALESCE(octet_length(node.identity_public_key), 0)
+		FROM core_nodes node
+		JOIN clusters cluster ON cluster.id = node.cluster_id
+		WHERE node.id = $1
+		FOR UPDATE OF node, cluster`, observation.NodeID).Scan(&nodeState, &clusterState, &identitySize); err != nil {
+		return fmt.Errorf("authorize node observation: %w", err)
+	}
+	if nodeState == models.ClusterStateRevoked || nodeState == models.ClusterStateRetired ||
+		clusterState == models.ClusterStateRevoked || clusterState == models.ClusterStateRetired {
+		return ErrNodeRevoked
+	}
+	if nodeState == models.ClusterStateEnrolling || identitySize != ed25519.PublicKeySize {
+		return ErrNodeIdentityUnavailable
+	}
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO node_observations (
 			node_id, applied_revision, core_version, health_status,

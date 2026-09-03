@@ -59,7 +59,9 @@ for name in CORE_NODE_NAME CORE_IMAGE REDIS_IMAGE REDIS_PASSWORD \
   CORE_TLS_SKIP_VERIFY CORE_ALLOW_INSECURE_HTTP RATE_LIMIT_RPS RATE_LIMIT_BURST \
   CONNECT_RATE_LIMIT_RPS CONNECT_RATE_LIMIT_BURST MAX_DEVICES_PER_USER \
   PROXY_ENABLED WSS_TUNNEL_ENABLED MASQUE_ENABLED WS_MAX_GLOBAL WS_MAX_FREE \
-  WS_MAX_BASIC WS_MAX_MEDIUM WS_MAX_PRO WS_MAX_ADMIN; do
+  WS_MAX_BASIC WS_MAX_MEDIUM WS_MAX_PRO WS_MAX_ADMIN NODE_CONTROL_URL \
+  CORE_NODE_ID CORE_NODE_STATE_DIR CORE_NODE_STATE_HOST_DIR \
+  CORE_NODE_ENROLLMENT_TOKEN_FILE CORE_NODE_MAX_PEERS; do
   require_value "${name}"
 done
 
@@ -72,9 +74,20 @@ for name in CONTROL_NODE_ID CONTROL_NODE_PRIVATE_KEY CONTROL_DATA_ENCRYPTION_KEY
   require_empty "${name}"
 done
 
-[[ "${CORE_NODE_NAME}" =~ ^[a-z0-9][a-z0-9-]{0,30}$ ]] || die "CORE_NODE_NAME must be a lowercase DNS label"
+[[ "${CORE_NODE_NAME}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || die "CORE_NODE_NAME must be a lowercase DNS label"
 [[ "${APP_ENV}" == "production" ]] || die "regional Core nodes require APP_ENV=production"
 [[ "${NODE_AUTH_REDIS_URL}" == redis://* || "${NODE_AUTH_REDIS_URL}" == rediss://* ]] || die "NODE_AUTH_REDIS_URL must be a Redis URL"
+[[ "${NODE_CONTROL_URL}" == https://* ]] || die "NODE_CONTROL_URL must be an HTTPS origin"
+[[ "${CORE_NODE_ID}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]] || die "CORE_NODE_ID must be a UUID"
+[[ "${CORE_NODE_STATE_DIR}" == /* && "${CORE_NODE_STATE_HOST_DIR}" == /* ]] || die "Core node state directories must be absolute"
+[[ "${CORE_NODE_ENROLLMENT_TOKEN_FILE}" == "${CORE_NODE_STATE_DIR}/enrollment-token" ]] || die "CORE_NODE_ENROLLMENT_TOKEN_FILE must be the enrollment-token file inside CORE_NODE_STATE_DIR"
+[[ -d "${CORE_NODE_STATE_HOST_DIR}" && ! -L "${CORE_NODE_STATE_HOST_DIR}" ]] || die "CORE_NODE_STATE_HOST_DIR must be a real directory"
+[[ "$(stat -c '%a' "${CORE_NODE_STATE_HOST_DIR}")" == "700" ]] || die "CORE_NODE_STATE_HOST_DIR must have mode 0700"
+if [[ -e "${CORE_NODE_STATE_HOST_DIR}/enrollment-token" ]]; then
+  [[ -f "${CORE_NODE_STATE_HOST_DIR}/enrollment-token" && ! -L "${CORE_NODE_STATE_HOST_DIR}/enrollment-token" ]] || die "enrollment-token must be a regular file"
+  [[ "$(stat -c '%a' "${CORE_NODE_STATE_HOST_DIR}/enrollment-token")" == "600" ]] || die "enrollment-token must have mode 0600"
+fi
+[[ "${CORE_NODE_MAX_PEERS}" =~ ^[1-9][0-9]*$ ]] || die "CORE_NODE_MAX_PEERS must be positive"
 require_port VPN_CORE_PORT
 require_port VPN_CORE_HOST_PORT
 require_port WG_PORT
@@ -137,6 +150,7 @@ wait_healthy "${redis_name}"
 
 core_volumes=(
   --volume "${core_name}-wg:${WG_CONFIG_DIR}:Z"
+  --volume "${CORE_NODE_STATE_HOST_DIR}:${CORE_NODE_STATE_DIR}:Z"
   --volume /run/midorivpn-health:/run/midorivpn-health:ro
 )
 if [[ "${MASQUE_ENABLED}" == "true" ]]; then

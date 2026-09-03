@@ -48,7 +48,7 @@ if [ "${DEPLOYMENT_PROFILE:-}" != "principal" ]; then
 fi
 
 require_value CORE_NODE_NAME
-[[ "${CORE_NODE_NAME}" =~ ^[a-z0-9][a-z0-9-]{0,30}$ ]] || die "CORE_NODE_NAME must be a lowercase DNS label"
+[[ "${CORE_NODE_NAME}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || die "CORE_NODE_NAME must be a lowercase DNS label"
 
 for required_var in \
   CORE_IMAGE CONTROL_IMAGE POSTGRES_IMAGE PGBOUNCER_IMAGE REDIS_IMAGE \
@@ -68,6 +68,29 @@ for required_var in \
   WS_MAX_GLOBAL WS_MAX_FREE WS_MAX_BASIC WS_MAX_MEDIUM WS_MAX_PRO WS_MAX_ADMIN; do
   require_value "${required_var}"
 done
+
+node_identity_configured=false
+for node_identity_var in NODE_CONTROL_URL CORE_NODE_ID CORE_NODE_STATE_DIR CORE_NODE_STATE_HOST_DIR CORE_NODE_ENROLLMENT_TOKEN_FILE CORE_NODE_MAX_PEERS; do
+  if [[ -n "${!node_identity_var:-}" ]]; then
+    node_identity_configured=true
+  fi
+done
+if [[ "${node_identity_configured}" == "true" ]]; then
+  for node_identity_var in NODE_CONTROL_URL CORE_NODE_ID CORE_NODE_STATE_DIR CORE_NODE_STATE_HOST_DIR CORE_NODE_ENROLLMENT_TOKEN_FILE CORE_NODE_MAX_PEERS; do
+    require_value "${node_identity_var}"
+  done
+  [[ "${NODE_CONTROL_URL}" == https://* ]] || die "NODE_CONTROL_URL must be an HTTPS origin"
+  [[ "${CORE_NODE_ID}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]] || die "CORE_NODE_ID must be a UUID"
+  [[ "${CORE_NODE_STATE_DIR}" == /* && "${CORE_NODE_STATE_HOST_DIR}" == /* ]] || die "Core node state directories must be absolute"
+  [[ "${CORE_NODE_ENROLLMENT_TOKEN_FILE}" == "${CORE_NODE_STATE_DIR}/enrollment-token" ]] || die "CORE_NODE_ENROLLMENT_TOKEN_FILE must be the enrollment-token file inside CORE_NODE_STATE_DIR"
+  [[ -d "${CORE_NODE_STATE_HOST_DIR}" && ! -L "${CORE_NODE_STATE_HOST_DIR}" ]] || die "CORE_NODE_STATE_HOST_DIR must be a real directory"
+  [[ "$(stat -c '%a' "${CORE_NODE_STATE_HOST_DIR}")" == "700" ]] || die "CORE_NODE_STATE_HOST_DIR must have mode 0700"
+  if [[ -e "${CORE_NODE_STATE_HOST_DIR}/enrollment-token" ]]; then
+    [[ -f "${CORE_NODE_STATE_HOST_DIR}/enrollment-token" && ! -L "${CORE_NODE_STATE_HOST_DIR}/enrollment-token" ]] || die "enrollment-token must be a regular file"
+    [[ "$(stat -c '%a' "${CORE_NODE_STATE_HOST_DIR}/enrollment-token")" == "600" ]] || die "enrollment-token must have mode 0600"
+  fi
+  [[ "${CORE_NODE_MAX_PEERS}" =~ ^[1-9][0-9]*$ ]] || die "CORE_NODE_MAX_PEERS must be positive"
+fi
 
 case "${PROXY_ENABLED}" in
   true|false) ;;
@@ -170,7 +193,12 @@ podman run -d \
 wait_healthy midori-pgbouncer
 
 echo "🛡️ Iniciando midori-vpn-core..."
-core_volume_args=(-v wg-config:/etc/wireguard:Z)
+core_volume_args=(
+  -v wg-config:/etc/wireguard:Z
+)
+if [[ "${node_identity_configured}" == "true" ]]; then
+  core_volume_args+=(-v "${CORE_NODE_STATE_HOST_DIR}:${CORE_NODE_STATE_DIR}:Z")
+fi
 if [ "${MASQUE_ENABLED}" = "true" ]; then
   core_volume_args+=(
     -v /etc/letsencrypt/live:/etc/letsencrypt/live:ro

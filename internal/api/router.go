@@ -79,6 +79,11 @@ func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *au
 		gateway := tunnel.NewWSGateway(cfg.WGPort, cfg.CredentialSigningSecret, serverID, cfg.WSSTunnelMaxClients)
 		r.Get("/api/v1/tunnel/ws", gateway.Handler)
 	}
+	if pool != nil {
+		nodePlaneHandler := control.NewNodePlaneHandler(pool, cfg)
+		r.Post("/api/v1/node/enroll", nodePlaneHandler.Enroll)
+		r.Post("/api/v1/node/heartbeat", nodePlaneHandler.Heartbeat)
+	}
 
 	// WireGuard core API protected by signed Ed25519 node requests.
 	r.Route("/api/v1", func(r chi.Router) {
@@ -203,6 +208,12 @@ func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *au
 			r.Post("/node-identities", ch.AdminRegisterNodeIdentity)
 			r.Delete("/node-identities/{nodeID}", ch.AdminRevokeNodeIdentity)
 			r.Post("/node-identities/{nodeID}/restore", ch.AdminRestoreNodeIdentity)
+
+			// Cluster and enrolled Core node lifecycle
+			r.Post("/clusters", ch.AdminCreateCluster)
+			r.Post("/clusters/{clusterID}/nodes", ch.AdminCreateCoreNode)
+			r.Post("/nodes/{nodeID}/enrollment-token", ch.AdminIssueNodeEnrollmentToken)
+			r.Post("/nodes/{nodeID}/revoke", ch.AdminRevokeCoreNode)
 
 			// Peers
 			r.Get("/peers", ch.AdminListPeers)

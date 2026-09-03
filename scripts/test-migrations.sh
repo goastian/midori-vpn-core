@@ -69,6 +69,8 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000016_encrypt_preshared_keys.up.sql >/dev/null
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000017_multicluster_model.up.sql >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000018_node_enrollment_identity.up.sql >/dev/null
 
 multicluster_tables="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('clusters','core_nodes','node_enrollment_tokens','desired_revisions','node_observations')")"
@@ -82,6 +84,21 @@ legacy_server_rows="$(podman exec "${container}" psql -U midori -d midori_vpn -A
 placement_function="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT to_regprocedure('vpn_server_placement_eligible(uuid,text,interval,boolean)') IS NOT NULL")"
 [ "${placement_function}" = "t" ] || { printf 'error: migration 17 did not create the placement gate\n' >&2; exit 1; }
+node_identity_columns="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'core_nodes' AND column_name IN ('identity_public_key','enrolled_at')")"
+[ "${node_identity_columns}" = "2" ] || { printf 'error: migration 18 created %s of 2 node identity columns\n' "${node_identity_columns}" >&2; exit 1; }
+node_identity_index="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT to_regclass('public.uq_core_nodes_identity_public_key') IS NOT NULL")"
+[ "${node_identity_index}" = "t" ] || { printf 'error: migration 18 did not create the unique node identity index\n' >&2; exit 1; }
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c \
+  "INSERT INTO clusters (id, name, region) VALUES ('80000000-0000-4000-8000-000000000019', 'DNS label guard', 'test')" >/dev/null
+if podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c \
+  "INSERT INTO core_nodes (cluster_id, name, management_host) VALUES ('80000000-0000-4000-8000-000000000019', 'invalid-', 'invalid.test')" >/dev/null 2>&1; then
+  printf 'error: migration 18 accepted a node name with a trailing hyphen\n' >&2
+  exit 1
+fi
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c \
+  "DELETE FROM clusters WHERE id = '80000000-0000-4000-8000-000000000019'" >/dev/null
 
 encrypted_psk_columns="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ('peers','peer_operations','mesh_members') AND column_name IN ('preshared_key_ciphertext','preshared_key_version')")"
@@ -238,8 +255,37 @@ cascade_rows="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT (SELECT COUNT(*) FROM devices WHERE user_id = '10000000-0000-4000-8000-000000000002') + (SELECT COUNT(*) FROM peers WHERE user_id = '10000000-0000-4000-8000-000000000002') + (SELECT COUNT(*) FROM device_certificates WHERE user_id = '10000000-0000-4000-8000-000000000002')")"
 [ "${cascade_rows}" = "0" ] || { printf 'error: user cascade left %s device-related rows\n' "${cascade_rows}" >&2; exit 1; }
 
-# A rollback must refuse to discard ciphertext. Clearing the synthetic value
-# then proves that a safe, plaintext-only rollback remains available.
+# Enrollment identity rollback must refuse to discard durable identity state.
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c "
+  INSERT INTO clusters (id, name, region)
+  VALUES ('80000000-0000-4000-8000-000000000018', 'Identity rollback guard', 'test');
+  INSERT INTO core_nodes (
+    id, cluster_id, name, management_host, state, identity_public_key, enrolled_at
+  ) VALUES (
+    '81000000-0000-4000-8000-000000000018',
+    '80000000-0000-4000-8000-000000000018',
+    'identity-rollback-guard',
+    'identity-rollback.test.invalid',
+    'inactive',
+    decode(repeat('ab', 32), 'hex'),
+    NOW()
+  );
+" >/dev/null
+if podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000018_node_enrollment_identity.down.sql >/dev/null 2>&1; then
+  printf 'error: migration 18 rollback discarded an enrolled identity\n' >&2
+  exit 1
+fi
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c \
+  "DELETE FROM core_nodes WHERE id = '81000000-0000-4000-8000-000000000018'; DELETE FROM clusters WHERE id = '80000000-0000-4000-8000-000000000018'" >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000018_node_enrollment_identity.down.sql >/dev/null
+node_identity_columns="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'core_nodes' AND column_name IN ('identity_public_key','enrolled_at')")"
+[ "${node_identity_columns}" = "0" ] || { printf 'error: migration 18 rollback left %s identity columns\n' "${node_identity_columns}" >&2; exit 1; }
+
+# A rollback must refuse to discard multicluster state. Clearing the synthetic
+# value then proves that a safe rollback remains available.
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c \
   "INSERT INTO clusters (id, name, region) VALUES ('80000000-0000-4000-8000-000000000017', 'Rollback guard', 'test')" >/dev/null
 if podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
@@ -334,6 +380,8 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000016_encrypt_preshared_keys.up.sql >/dev/null
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000017_multicluster_model.up.sql >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000018_node_enrollment_identity.up.sql >/dev/null
 
 # The device-based certificate key permits equal hostnames on distinct
 # registered installations without merging either device.
@@ -372,5 +420,11 @@ schema_multicluster_tables="$(podman exec "${container}" psql -U midori -d midor
 schema_server_node_columns="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
   "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'vpn_servers' AND column_name IN ('node_id','legacy_node_unbound')")"
 [ "${schema_server_node_columns}" = "2" ] || { printf 'error: consolidated schema created %s of 2 server-node columns\n' "${schema_server_node_columns}" >&2; exit 1; }
+schema_node_identity_columns="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
+  "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'core_nodes' AND column_name IN ('identity_public_key','enrolled_at')")"
+[ "${schema_node_identity_columns}" = "2" ] || { printf 'error: consolidated schema created %s of 2 node identity columns\n' "${schema_node_identity_columns}" >&2; exit 1; }
+schema_node_identity_index="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
+  "SELECT to_regclass('public.uq_core_nodes_identity_public_key') IS NOT NULL")"
+[ "${schema_node_identity_index}" = "t" ] || { printf 'error: consolidated schema did not create the unique node identity index\n' >&2; exit 1; }
 
-printf 'Migration chain 1-17, migrations 9-17 rollback, and consolidated schema verified on PostgreSQL 18.\n'
+printf 'Migration chain 1-18, migrations 9-18 rollback, and consolidated schema verified on PostgreSQL 18.\n'

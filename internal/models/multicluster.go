@@ -40,15 +40,23 @@ type Cluster struct {
 }
 
 type CoreNode struct {
-	ID             uuid.UUID    `json:"id"`
-	ClusterID      uuid.UUID    `json:"cluster_id"`
-	Name           string       `json:"name"`
-	ManagementHost string       `json:"management_host"`
-	State          ClusterState `json:"state"`
-	CoreVersion    string       `json:"core_version"`
-	LastSeenAt     *time.Time   `json:"last_seen_at,omitempty"`
-	CreatedAt      time.Time    `json:"created_at"`
-	UpdatedAt      time.Time    `json:"updated_at"`
+	ID                uuid.UUID    `json:"id"`
+	ClusterID         uuid.UUID    `json:"cluster_id"`
+	Name              string       `json:"name"`
+	ManagementHost    string       `json:"management_host"`
+	State             ClusterState `json:"state"`
+	CoreVersion       string       `json:"core_version"`
+	IdentityPublicKey string       `json:"identity_public_key,omitempty"`
+	EnrolledAt        *time.Time   `json:"enrolled_at,omitempty"`
+	LastSeenAt        *time.Time   `json:"last_seen_at,omitempty"`
+	CreatedAt         time.Time    `json:"created_at"`
+	UpdatedAt         time.Time    `json:"updated_at"`
+}
+
+type NodeEnrollmentToken struct {
+	NodeID    uuid.UUID `json:"node_id"`
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
 type DesiredRevision struct {

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,7 +18,9 @@ import (
 
 type Config struct {
 	// Application
-	AppEnv string // "production" or "development"
+	AppEnv            string // "production" or "development"
+	DeploymentProfile string // "principal" or "core-node"
+	CoreNodeName      string
 
 	// HTTP
 	Port string
@@ -28,6 +31,13 @@ type Config struct {
 	NodeAuthorizedKeys    string
 	NodeRevokedIDs        string
 	NodeAuthRedisURL      string
+
+	// Enrolled Core node identity used for signed node-to-Control requests.
+	NodeControlURL              string
+	CoreNodeID                  string
+	CoreNodeStateDir            string
+	CoreNodeEnrollmentTokenFile string
+	CoreNodeMaxPeers            int
 
 	// HMAC secret used only for short-lived proxy and WSS credentials.
 	CredentialSigningSecret string
@@ -132,6 +142,7 @@ type Config struct {
 // wgInterfaceRe allows only safe characters for a WireGuard interface name.
 // Linux netdev names are limited to 15 characters, alphanumeric plus - and _.
 var wgInterfaceRe = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,15}$`)
+var coreNodeNameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 func Load() *Config {
 	issuer := strings.TrimRight(env("AUTHENTIK_ISSUER"), "/")
@@ -142,19 +153,26 @@ func Load() *Config {
 	}
 
 	cfg := &Config{
-		AppEnv:                  requireEnv("APP_ENV"),
-		Port:                    requireEnv("VPN_CORE_PORT"),
-		ControlNodeID:           env("CONTROL_NODE_ID"),
-		ControlNodePrivateKey:   env("CONTROL_NODE_PRIVATE_KEY"),
-		NodeAuthorizedKeys:      requireEnv("NODE_AUTHORIZED_KEYS"),
-		NodeRevokedIDs:          env("NODE_REVOKED_IDS"),
-		NodeAuthRedisURL:        env("NODE_AUTH_REDIS_URL"),
-		CredentialSigningSecret: env("CREDENTIAL_SIGNING_SECRET"),
-		WGInterface:             requireEnv("WG_INTERFACE"),
-		WGPort:                  requireEnvInt("WG_PORT"),
-		Subnet:                  requireEnv("WG_SUBNET"),
-		ConfigDir:               requireEnv("WG_CONFIG_DIR"),
-		Endpoint:                requireEnv("WG_ENDPOINT"),
+		AppEnv:                      requireEnv("APP_ENV"),
+		DeploymentProfile:           env("DEPLOYMENT_PROFILE"),
+		CoreNodeName:                env("CORE_NODE_NAME"),
+		Port:                        requireEnv("VPN_CORE_PORT"),
+		ControlNodeID:               env("CONTROL_NODE_ID"),
+		ControlNodePrivateKey:       env("CONTROL_NODE_PRIVATE_KEY"),
+		NodeAuthorizedKeys:          requireEnv("NODE_AUTHORIZED_KEYS"),
+		NodeRevokedIDs:              env("NODE_REVOKED_IDS"),
+		NodeAuthRedisURL:            env("NODE_AUTH_REDIS_URL"),
+		NodeControlURL:              strings.TrimRight(env("NODE_CONTROL_URL"), "/"),
+		CoreNodeID:                  env("CORE_NODE_ID"),
+		CoreNodeStateDir:            env("CORE_NODE_STATE_DIR"),
+		CoreNodeEnrollmentTokenFile: env("CORE_NODE_ENROLLMENT_TOKEN_FILE"),
+		CoreNodeMaxPeers:            envIntDefault("CORE_NODE_MAX_PEERS", 0),
+		CredentialSigningSecret:     env("CREDENTIAL_SIGNING_SECRET"),
+		WGInterface:                 requireEnv("WG_INTERFACE"),
+		WGPort:                      requireEnvInt("WG_PORT"),
+		Subnet:                      requireEnv("WG_SUBNET"),
+		ConfigDir:                   requireEnv("WG_CONFIG_DIR"),
+		Endpoint:                    requireEnv("WG_ENDPOINT"),
 
 		CORSAllowedOrigins:      requireEnv("CORS_ALLOWED_ORIGINS"),
 		AllowedExtensionOrigins: env("ALLOWED_EXTENSION_ORIGINS"),
@@ -226,6 +244,39 @@ func Load() *Config {
 	}
 	if cfg.AppEnv != "production" && cfg.AppEnv != "development" {
 		log.Fatalf("FATAL: APP_ENV must be production or development, got %q", cfg.AppEnv)
+	}
+	if cfg.CoreNodeName != "" && !coreNodeNameRe.MatchString(cfg.CoreNodeName) {
+		log.Fatal("FATAL: CORE_NODE_NAME must be a lowercase DNS label")
+	}
+	if cfg.DeploymentProfile != "" && cfg.DeploymentProfile != "principal" && cfg.DeploymentProfile != "core-node" {
+		log.Fatal("FATAL: DEPLOYMENT_PROFILE must be principal or core-node")
+	}
+	nodeIdentityConfigured := cfg.NodeControlURL != "" || cfg.CoreNodeID != "" || cfg.CoreNodeStateDir != "" ||
+		cfg.CoreNodeEnrollmentTokenFile != "" || cfg.CoreNodeMaxPeers != 0
+	if cfg.DeploymentProfile == "core-node" && !nodeIdentityConfigured {
+		log.Fatal("FATAL: regional Core nodes require enrolled node-to-Control identity settings")
+	}
+	if nodeIdentityConfigured {
+		if cfg.NodeControlURL == "" || cfg.CoreNodeID == "" || cfg.CoreNodeStateDir == "" ||
+			cfg.CoreNodeEnrollmentTokenFile == "" || cfg.CoreNodeMaxPeers < 1 {
+			log.Fatal("FATAL: NODE_CONTROL_URL, CORE_NODE_ID, CORE_NODE_STATE_DIR, CORE_NODE_ENROLLMENT_TOKEN_FILE and positive CORE_NODE_MAX_PEERS must be configured together")
+		}
+		if _, err := uuid.Parse(cfg.CoreNodeID); err != nil {
+			log.Fatal("FATAL: CORE_NODE_ID must be a UUID")
+		}
+		controlURL, err := url.Parse(cfg.NodeControlURL)
+		if err != nil || controlURL.Host == "" || controlURL.User != nil || controlURL.RawQuery != "" ||
+			controlURL.Fragment != "" || controlURL.Path != "" ||
+			(controlURL.Scheme != "https" && !(cfg.AppEnv == "development" && controlURL.Scheme == "http")) {
+			log.Fatal("FATAL: NODE_CONTROL_URL must be an absolute HTTPS origin without credentials, path, query or fragment")
+		}
+		if !filepath.IsAbs(cfg.CoreNodeStateDir) || !filepath.IsAbs(cfg.CoreNodeEnrollmentTokenFile) {
+			log.Fatal("FATAL: Core node identity paths must be absolute")
+		}
+		relativeTokenPath, err := filepath.Rel(cfg.CoreNodeStateDir, cfg.CoreNodeEnrollmentTokenFile)
+		if err != nil || relativeTokenPath == "." || relativeTokenPath == ".." || strings.HasPrefix(relativeTokenPath, ".."+string(os.PathSeparator)) {
+			log.Fatal("FATAL: CORE_NODE_ENROLLMENT_TOKEN_FILE must be inside CORE_NODE_STATE_DIR")
+		}
 	}
 	port, err := strconv.Atoi(cfg.Port)
 	if err != nil || port < 1 || port > 65535 {

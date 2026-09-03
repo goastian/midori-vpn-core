@@ -17,14 +17,18 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/control"
 	"github.com/goastian/midori-vpn-core/internal/dataencryption"
 	"github.com/goastian/midori-vpn-core/internal/db"
+	"github.com/goastian/midori-vpn-core/internal/fleetauth"
 	"github.com/goastian/midori-vpn-core/internal/httpx"
 	"github.com/goastian/midori-vpn-core/internal/masque"
 	"github.com/goastian/midori-vpn-core/internal/nodeauth"
+	"github.com/goastian/midori-vpn-core/internal/nodeplane"
 	"github.com/goastian/midori-vpn-core/internal/proxy"
 	"github.com/goastian/midori-vpn-core/internal/respond"
 	"github.com/goastian/midori-vpn-core/internal/wg"
 	"github.com/google/uuid"
 )
+
+const coreVersion = "2.0.0"
 
 func main() {
 	cfg := config.Load()
@@ -63,6 +67,36 @@ func main() {
 		log.Fatalf("failed to initialize WireGuard manager: %v", err)
 	}
 	defer manager.Close()
+
+	var nodeReporter *nodeplane.Reporter
+	if cfg.NodeControlURL != "" {
+		nodeID, err := uuid.Parse(cfg.CoreNodeID)
+		if err != nil {
+			log.Fatalf("failed to parse enrolled Core node ID: %v", err)
+		}
+		identity, err := fleetauth.LoadOrCreateIdentity(cfg.CoreNodeStateDir, nodeID)
+		if err != nil {
+			log.Fatalf("failed to initialize enrolled Core node identity: %v", err)
+		}
+		nodeClient, err := nodeplane.NewClient(cfg.NodeControlURL, identity, nil, cfg.AppEnv == "development")
+		if err != nil {
+			log.Fatalf("failed to initialize node-to-Control client: %v", err)
+		}
+		nodeReporter, err = nodeplane.NewReporter(
+			nodeClient, manager, coreVersion, cfg.CoreNodeMaxPeers,
+			cfg.CoreNodeEnrollmentTokenFile,
+			func(reportErr error) {
+				if reportErr != nil {
+					slog.Warn("Core node report failed", "node_id", nodeID, "error", reportErr)
+					return
+				}
+				slog.Debug("Core node report accepted", "node_id", nodeID)
+			},
+		)
+		if err != nil {
+			log.Fatalf("failed to initialize Core node reporter: %v", err)
+		}
+	}
 
 	// Optional: connect to PostgreSQL + JWKS if DATABASE_URL is set
 	var router http.Handler
@@ -140,6 +174,9 @@ func main() {
 		}
 		serverErrCh <- nil
 	}()
+	if nodeReporter != nil {
+		go nodeReporter.Run(shutdownCtx)
+	}
 
 	select {
 	case err := <-serverErrCh:

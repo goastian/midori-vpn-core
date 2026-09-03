@@ -2,6 +2,7 @@ package repo_test
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"testing"
 	"time"
@@ -36,6 +37,15 @@ func TestMulticlusterPlacementRequiresCurrentHealthyObservedState(t *testing.T) 
 	}
 	if err := multiclusterRepo.CreateNode(ctx, node); err != nil {
 		t.Fatalf("CreateNode: %v", err)
+	}
+	identityPublicKey := make([]byte, 32)
+	if _, err := rand.Read(identityPublicKey); err != nil {
+		t.Fatalf("generate node identity fixture: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE core_nodes SET identity_public_key = $2, enrolled_at = NOW()
+		WHERE id = $1`, node.ID, identityPublicKey); err != nil {
+		t.Fatalf("enroll node identity fixture: %v", err)
 	}
 
 	checkedAt := time.Now().UTC()

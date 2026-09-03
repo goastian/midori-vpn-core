@@ -1,5 +1,5 @@
 -- Midori VPN v2.0.0 Canonical Consolidated PostgreSQL Schema
--- Generated from migrations 000001 - 000017
+-- Generated from migrations 000001 - 000018
 
 BEGIN;
 
@@ -50,20 +50,35 @@ CREATE TABLE IF NOT EXISTS core_nodes (
     management_host     TEXT        NOT NULL,
     state               TEXT        NOT NULL DEFAULT 'enrolling',
     core_version        TEXT        NOT NULL DEFAULT '',
+    identity_public_key BYTEA,
+    enrolled_at         TIMESTAMPTZ,
     last_seen_at        TIMESTAMPTZ,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_core_nodes_cluster_name UNIQUE (cluster_id, name),
-    CONSTRAINT chk_core_nodes_name CHECK (name ~ '^[a-z0-9][a-z0-9-]{0,62}$'),
+    CONSTRAINT chk_core_nodes_name CHECK (name ~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'),
     CONSTRAINT chk_core_nodes_management_host CHECK (
         length(management_host) BETWEEN 1 AND 253 AND management_host !~ '[[:space:]/?#@]'
     ),
     CONSTRAINT chk_core_nodes_state CHECK (state IN ('enrolling', 'inactive', 'active', 'draining', 'revoked', 'retired')),
     CONSTRAINT chk_core_nodes_version CHECK (length(core_version) <= 64),
+    CONSTRAINT chk_core_nodes_identity_key CHECK (
+        identity_public_key IS NULL OR octet_length(identity_public_key) = 32
+    ),
+    CONSTRAINT chk_core_nodes_enrollment_pair CHECK (
+        (identity_public_key IS NULL AND enrolled_at IS NULL)
+        OR (identity_public_key IS NOT NULL AND enrolled_at IS NOT NULL)
+    ),
+    CONSTRAINT chk_core_nodes_enrollment_order CHECK (
+        enrolled_at IS NULL OR enrolled_at >= created_at
+    ),
     CONSTRAINT chk_core_nodes_seen_order CHECK (last_seen_at IS NULL OR last_seen_at >= created_at),
     CONSTRAINT chk_core_nodes_timestamps CHECK (updated_at >= created_at)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_core_nodes_management_host_ci ON core_nodes (lower(management_host));
+CREATE UNIQUE INDEX IF NOT EXISTS uq_core_nodes_identity_public_key
+    ON core_nodes (identity_public_key)
+    WHERE identity_public_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_core_nodes_cluster_state ON core_nodes (cluster_id, state);
 CREATE INDEX IF NOT EXISTS idx_core_nodes_last_seen ON core_nodes (last_seen_at DESC) WHERE last_seen_at IS NOT NULL;
 
