@@ -3,16 +3,18 @@ package billing
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/goastian/midori-vpn-core/internal/config"
+	"github.com/goastian/midori-vpn-core/internal/httpx"
+	"github.com/goastian/midori-vpn-core/internal/models"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-	"github.com/goastian/midori-vpn-core/internal/config"
-	"github.com/goastian/midori-vpn-core/internal/models"
 )
 
 const (
@@ -28,11 +30,9 @@ type Client struct {
 
 func NewClient(cfg *config.Config, rdb *redis.Client) *Client {
 	return &Client{
-		cfg: cfg,
-		httpClient: &http.Client{
-			Timeout: 1200 * time.Millisecond,
-		},
-		redis: rdb,
+		cfg:        cfg,
+		httpClient: httpx.NewClient(1200 * time.Millisecond),
+		redis:      rdb,
 	}
 }
 
@@ -115,9 +115,19 @@ func (c *Client) fetchFromAstianPayment(ctx context.Context, userID uuid.UUID, a
 		return nil, fmt.Errorf("astian-payment returned status %d", resp.StatusCode)
 	}
 
+	body, err := httpx.ReadBody(resp.Body, httpx.MaxResponseBytes)
+	if err != nil {
+		code := "response_read_failed"
+		responseBytes := 0
+		if errors.Is(err, httpx.ErrResponseTooLarge) {
+			code = "response_too_large"
+			responseBytes = httpx.MaxResponseBytes + 1
+		}
+		return nil, httpx.NewRemoteError("astian_payment_entitlements", code, resp.StatusCode, responseBytes, err)
+	}
 	var payload models.AstianEntitlementResponse
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, err
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, httpx.NewRemoteError("astian_payment_entitlements", "response_invalid", resp.StatusCode, len(body), err)
 	}
 
 	return c.mapPayloadToSubscription(userID, &payload), nil

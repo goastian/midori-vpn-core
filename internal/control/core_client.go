@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/goastian/midori-vpn-core/internal/httpx"
 	"github.com/goastian/midori-vpn-core/internal/models"
 	"github.com/goastian/midori-vpn-core/internal/nodeauth"
 )
@@ -34,7 +35,7 @@ const (
 )
 
 var (
-	coreHTTP              = &http.Client{Timeout: coreRequestTimeout}
+	coreHTTP              = httpx.NewClient(coreRequestTimeout)
 	coreAllowInsecureHTTP bool
 	coreAllowedHosts      map[string]bool
 	coreSigner            *nodeauth.Signer
@@ -52,19 +53,12 @@ func InitCoreSigningIdentity(nodeID, encodedPrivateKey string) error {
 // InitCoreClient configures the core HTTP client with TLS settings.
 func InitCoreClient(skipVerify bool, allowInsecureHTTP bool, allowedHosts string) {
 	coreAllowInsecureHTTP = allowInsecureHTTP
-	coreHTTP = &http.Client{
-		Timeout: coreRequestTimeout,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: skipVerify,
-			},
-			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: 10,
-			MaxConnsPerHost:     20,
-			IdleConnTimeout:     90 * time.Second,
-			DisableKeepAlives:   false,
-		},
-	}
+	coreHTTP = httpx.NewClient(coreRequestTimeout)
+	transport := coreHTTP.Transport.(*http.Transport)
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: skipVerify}
+	transport.MaxIdleConns = 100
+	transport.MaxIdleConnsPerHost = 10
+	transport.MaxConnsPerHost = 20
 
 	// Parse allowed hosts whitelist
 	coreAllowedHosts = make(map[string]bool)
@@ -74,6 +68,12 @@ func InitCoreClient(skipVerify bool, allowInsecureHTTP bool, allowedHosts string
 			coreAllowedHosts[h] = true
 		}
 	}
+}
+
+// CloseCoreClient releases idle connections owned by the dedicated Core
+// transport. Active requests remain governed by their request contexts.
+func CloseCoreClient() {
+	coreHTTP.CloseIdleConnections()
 }
 
 func normalizeCoreAllowedHost(raw string) string {
@@ -249,7 +249,7 @@ func coreDoWithRetry(req *http.Request, bodyBytes []byte, host string) (*http.Re
 		if err != nil {
 			lastErr = err
 			cb.recordFailure()
-			slog.Error("core request failed", "attempt", attempt+1, "max_retries", coreMaxRetries, "host", host, "error", err)
+			slog.Error("core request failed", "operation", "core_request", "code", "transport_failed", "status", 0, "response_bytes", 0)
 			timer := time.NewTimer(coreRetryBaseDelay * time.Duration(attempt+1))
 			select {
 			case <-req.Context().Done():
@@ -261,11 +261,15 @@ func coreDoWithRetry(req *http.Request, bodyBytes []byte, host string) (*http.Re
 		}
 
 		if resp.StatusCode >= 500 {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			body, readErr := readCoreBody(resp)
 			resp.Body.Close()
-			lastErr = fmt.Errorf("core returned %d: %s", resp.StatusCode, string(body))
+			if readErr != nil {
+				lastErr = readErr
+			} else {
+				lastErr = httpx.NewRemoteError("core_request", "server_error", resp.StatusCode, len(body), nil)
+			}
 			cb.recordFailure()
-			slog.Error("core request server error", "attempt", attempt+1, "max_retries", coreMaxRetries, "host", host, "status", resp.StatusCode)
+			slog.Error("core request server error", "operation", "core_request", "code", "server_error", "status", resp.StatusCode, "response_bytes", len(body))
 			timer := time.NewTimer(coreRetryBaseDelay * time.Duration(attempt+1))
 			select {
 			case <-req.Context().Done():
@@ -315,7 +319,19 @@ type CoreAPIError struct {
 }
 
 func (e *CoreAPIError) Error() string {
-	return fmt.Sprintf("core returned %d (%s): %s", e.Status, e.Code, e.Message)
+	return fmt.Sprintf("core request failed (status=%d code=%s)", e.Status, e.Code)
+}
+
+func sanitizeCoreErrorCode(code string) string {
+	if code == "" || len(code) > 64 {
+		return "core_request_failed"
+	}
+	for _, char := range code {
+		if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '_' {
+			return "core_request_failed"
+		}
+	}
+	return code
 }
 
 func parseCoreAPIError(status int, body []byte) error {
@@ -323,15 +339,26 @@ func parseCoreAPIError(status int, body []byte) error {
 	if err := json.Unmarshal(body, &response); err != nil {
 		return &CoreAPIError{Status: status, Code: "invalid_core_response", Message: "Core returned an invalid error response"}
 	}
-	code := response.Code
-	if code == "" {
-		code = "core_request_failed"
-	}
+	code := sanitizeCoreErrorCode(response.Code)
 	message := response.Err
 	if message == "" {
 		message = "Core request failed"
 	}
 	return &CoreAPIError{Status: status, Code: code, Message: message}
+}
+
+func readCoreBody(resp *http.Response) ([]byte, error) {
+	body, err := httpx.ReadBody(resp.Body, httpx.MaxResponseBytes)
+	if err == nil {
+		return body, nil
+	}
+	responseBytes := 0
+	code := "response_read_failed"
+	if errors.Is(err, httpx.ErrResponseTooLarge) {
+		responseBytes = httpx.MaxResponseBytes + 1
+		code = "response_too_large"
+	}
+	return nil, httpx.NewRemoteError("core_request", code, resp.StatusCode, responseBytes, err)
 }
 
 func coreErrorHasStatus(err error, status int) bool {
@@ -372,14 +399,17 @@ func CallCoreAddPeerContext(ctx context.Context, server *models.VPNServer, pubke
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readCoreBody(resp)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode >= http.StatusBadRequest {
 		return nil, parseCoreAPIError(resp.StatusCode, body)
 	}
 
 	var apiResp coreAPIResponse
 	if err := json.Unmarshal(body, &apiResp); err != nil {
-		return nil, fmt.Errorf("invalid core response: %s", string(body))
+		return nil, httpx.NewRemoteError("core_add_peer", "response_invalid", resp.StatusCode, len(body), err)
 	}
 
 	if !apiResp.OK {
@@ -427,7 +457,10 @@ func CallCoreRemovePeerContext(ctx context.Context, server *models.VPNServer, pu
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
+		body, err := readCoreBody(resp)
+		if err != nil {
+			return err
+		}
 		return parseCoreAPIError(resp.StatusCode, body)
 	}
 
@@ -473,14 +506,17 @@ func CallCoreGetPeerStatsContext(ctx context.Context, server *models.VPNServer, 
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readCoreBody(resp)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode >= http.StatusBadRequest {
 		return nil, parseCoreAPIError(resp.StatusCode, body)
 	}
 
 	var apiResp coreAPIResponse
 	if err := json.Unmarshal(body, &apiResp); err != nil {
-		return nil, fmt.Errorf("invalid core response: %s", string(body))
+		return nil, httpx.NewRemoteError("core_peer_stats", "response_invalid", resp.StatusCode, len(body), err)
 	}
 	if !apiResp.OK {
 		return nil, parseCoreAPIError(resp.StatusCode, body)
@@ -522,14 +558,17 @@ func CallCoreServerStats(server *models.VPNServer) (*CoreServerStatsResponse, er
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readCoreBody(resp)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode >= http.StatusBadRequest {
 		return nil, parseCoreAPIError(resp.StatusCode, body)
 	}
 
 	var apiResp coreAPIResponse
 	if err := json.Unmarshal(body, &apiResp); err != nil {
-		return nil, fmt.Errorf("invalid core response: %s", string(body))
+		return nil, httpx.NewRemoteError("core_server_stats", "response_invalid", resp.StatusCode, len(body), err)
 	}
 	if !apiResp.OK {
 		return nil, parseCoreAPIError(resp.StatusCode, body)
@@ -563,14 +602,17 @@ func CallCoreListPeersContext(ctx context.Context, server *models.VPNServer) ([]
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readCoreBody(resp)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode >= http.StatusBadRequest {
 		return nil, parseCoreAPIError(resp.StatusCode, body)
 	}
 
 	var apiResp coreAPIResponse
 	if err := json.Unmarshal(body, &apiResp); err != nil {
-		return nil, fmt.Errorf("invalid core response: %s", string(body))
+		return nil, httpx.NewRemoteError("core_list_peers", "response_invalid", resp.StatusCode, len(body), err)
 	}
 	if !apiResp.OK {
 		return nil, parseCoreAPIError(resp.StatusCode, body)

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/goastian/midori-vpn-core/internal/httpx"
 	"github.com/goastian/midori-vpn-core/internal/proxytoken"
 	"github.com/google/uuid"
 	masquego "github.com/quic-go/masque-go"
@@ -76,6 +77,10 @@ func TestGatewayProxiesAuthenticatedConnectUDPToWireGuardOnly(t *testing.T) {
 	gateway, err := NewGateway("127.0.0.1:"+big.NewInt(int64(proxyPort)).String(), certFile, keyFile, templateText, echo.LocalAddr().(*net.UDPAddr).Port, secret, serverID, 2)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if gateway.server.MaxHeaderBytes != httpx.MaxHeaderBytes || gateway.server.IdleTimeout <= 0 ||
+		gateway.server.QUICConfig == nil || gateway.server.QUICConfig.HandshakeIdleTimeout <= 0 || gateway.server.QUICConfig.MaxIdleTimeout <= 0 {
+		t.Fatalf("MASQUE server limits are incomplete: %#v", gateway.server)
 	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- gateway.Serve() }()

@@ -56,6 +56,19 @@ func TestCountryFromIPUsesProviderResponse(t *testing.T) {
 	}
 }
 
+func TestCountryFromIPRejectsOversizedProviderResponse(t *testing.T) {
+	h := &MeshHandler{geoClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(strings.Repeat("x", 65))),
+			Header:     make(http.Header),
+		}, nil
+	})}}
+	if _, err := h.countryFromIP(context.Background(), "8.8.8.8"); err != errOriginCountryUnavailable {
+		t.Fatalf("countryFromIP() error = %v, want %v", err, errOriginCountryUnavailable)
+	}
+}
+
 func TestWriteAutoMeshErrorReturnsStableCode(t *testing.T) {
 	w := httptest.NewRecorder()
 	writeAutoMeshError(w, errOriginCountryUnavailable)

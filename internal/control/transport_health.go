@@ -172,7 +172,7 @@ func probeMASQUE(ctx context.Context, transport models.TransportCapability) bool
 		EnableDatagrams: true,
 	}
 	defer h3Transport.Close()
-	client := &http.Client{Transport: h3Transport}
+	client := &http.Client{Transport: h3Transport, Timeout: transportHealthTimeout}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL.String(), nil)
 	if err != nil {
 		return false

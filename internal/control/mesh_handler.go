@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -19,6 +18,7 @@ import (
 
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/clientip"
+	"github.com/goastian/midori-vpn-core/internal/httpx"
 	"github.com/goastian/midori-vpn-core/internal/models"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 	"github.com/goastian/midori-vpn-core/internal/respond"
@@ -78,7 +78,7 @@ func NewMeshHandler(pool *pgxpool.Pool, wgMgr *wg.Manager, hub *WSHub, trustedPr
 		wgMgr:          wgMgr,
 		hub:            hub,
 		pool:           pool,
-		geoClient:      &http.Client{Timeout: 5 * time.Second},
+		geoClient:      httpx.NewClient(5 * time.Second),
 		trustedProxies: clientip.ParseTrustedProxies(trustedRaw),
 	}
 }
@@ -598,7 +598,7 @@ func (h *MeshHandler) countryFromIP(ctx context.Context, ip string) (string, err
 		return "", errOriginCountryUnavailable
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8))
+	body, err := httpx.ReadBody(resp.Body, 64)
 	if err != nil {
 		return "", errOriginCountryUnavailable
 	}

@@ -223,6 +223,30 @@ func TestCoreConflictRemainsTyped(t *testing.T) {
 	}
 }
 
+func TestCoreAPIErrorDoesNotFormatRemoteMessageOrInvalidCode(t *testing.T) {
+	secret := "remote-core-secret"
+	err := parseCoreAPIError(http.StatusBadRequest, []byte(`{"ok":false,"code":"INVALID CODE","error":"`+secret+`"}`))
+	var coreError *CoreAPIError
+	if !errors.As(err, &coreError) || coreError.Code != "core_request_failed" {
+		t.Fatalf("error = %#v", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("remote Core message leaked through error: %q", err.Error())
+	}
+}
+
+func TestCoreResponseBodyIsStrictlyBounded(t *testing.T) {
+	server, cleanup := useTestCoreServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", (1<<20)+1)))
+	}))
+	defer cleanup()
+
+	_, err := CallCoreListPeers(server)
+	if err == nil || !strings.Contains(err.Error(), "response_too_large") {
+		t.Fatalf("CallCoreListPeers() error = %v", err)
+	}
+}
+
 func TestCoreRetryBackoffHonorsContextCancellation(t *testing.T) {
 	server, cleanup := useTestCoreServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)

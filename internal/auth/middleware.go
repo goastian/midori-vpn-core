@@ -2,7 +2,7 @@ package auth
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -75,15 +75,14 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 						"path", r.URL.Path,
 						"method", r.Method,
 						"remote", r.RemoteAddr,
-						"error", intErr,
+						"code", "introspection_failed",
 					)
 					respond.JsonError(w, "invalid token", http.StatusUnauthorized)
 					return
 				}
 				if claims.Iss != "" && !sameIssuer(claims.Iss, cfg.AuthentikTokenIssuer()) {
 					slog.Warn("JWE introspection issuer mismatch",
-						"got", claims.Iss,
-						"expected", cfg.AuthentikTokenIssuer(),
+						"code", "issuer_mismatch",
 					)
 					respond.JsonError(w, "invalid token issuer", http.StatusUnauthorized)
 					return
@@ -105,7 +104,7 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 						"path", r.URL.Path,
 						"method", r.Method,
 						"remote", r.RemoteAddr,
-						"error", err,
+						"code", "jwt_validation_failed",
 					)
 					claims, intErr := IntrospectTokenCached(cfg, tokenStr)
 					if intErr != nil {
@@ -113,7 +112,7 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 							"path", r.URL.Path,
 							"method", r.Method,
 							"remote", r.RemoteAddr,
-							"error", intErr,
+							"code", "introspection_failed",
 						)
 						respond.JsonError(w, "invalid token", http.StatusUnauthorized)
 						return
@@ -199,7 +198,7 @@ func ValidateTokenOnly(cfg *config.Config, jwks *JWKSProvider, tokenStr string) 
 	if isJWE(tokenStr) {
 		claims, intErr := IntrospectTokenCached(cfg, tokenStr)
 		if intErr != nil {
-			slog.Warn("WS JWE introspection failed", "introspection_error", intErr)
+			slog.Warn("WS JWE introspection failed", "code", "introspection_failed")
 			return false
 		}
 		if claims.Iss != "" && !sameIssuer(claims.Iss, cfg.AuthentikTokenIssuer()) {
@@ -218,7 +217,7 @@ func ValidateTokenOnly(cfg *config.Config, jwks *JWKSProvider, tokenStr string) 
 	if err != nil {
 		claims, intErr := IntrospectTokenCached(cfg, tokenStr)
 		if intErr != nil {
-			slog.Warn("WS JWT validation/introspection failed", "jwt_error", err, "introspection_error", intErr)
+			slog.Warn("WS JWT validation/introspection failed", "code", "token_validation_failed")
 			return false
 		}
 		if claims.Iss != "" && !sameIssuer(claims.Iss, cfg.AuthentikTokenIssuer()) {
@@ -241,13 +240,13 @@ func ValidateTokenAndExtractClaims(cfg *config.Config, jwks *JWKSProvider, token
 	if isJWE(tokenStr) {
 		claims, intErr := IntrospectTokenCached(cfg, tokenStr)
 		if intErr != nil {
-			return nil, fmt.Errorf("jwe introspection failed: %w", intErr)
+			return nil, errors.New("token introspection failed")
 		}
 		if claims.Iss != "" && !sameIssuer(claims.Iss, cfg.AuthentikTokenIssuer()) {
-			return nil, fmt.Errorf("invalid issuer: %s", claims.Iss)
+			return nil, errors.New("invalid token issuer")
 		}
 		if claims.Sub == "" {
-			return nil, fmt.Errorf("missing sub claim")
+			return nil, errors.New("missing sub claim")
 		}
 		return &WSClaims{
 			Subject: claims.Sub,
@@ -265,13 +264,13 @@ func ValidateTokenAndExtractClaims(cfg *config.Config, jwks *JWKSProvider, token
 	if err != nil {
 		claims, intErr := IntrospectTokenCached(cfg, tokenStr)
 		if intErr != nil {
-			return nil, fmt.Errorf("jwt parse failed: %w; introspection failed: %v", err, intErr)
+			return nil, errors.New("token validation failed")
 		}
 		if claims.Iss != "" && !sameIssuer(claims.Iss, cfg.AuthentikTokenIssuer()) {
-			return nil, fmt.Errorf("invalid issuer: %s", claims.Iss)
+			return nil, errors.New("invalid token issuer")
 		}
 		if claims.Sub == "" {
-			return nil, fmt.Errorf("missing sub claim")
+			return nil, errors.New("missing sub claim")
 		}
 		return &WSClaims{
 			Subject: claims.Sub,
@@ -280,11 +279,11 @@ func ValidateTokenAndExtractClaims(cfg *config.Config, jwks *JWKSProvider, token
 	}
 	iss, _ := token.Issuer()
 	if !sameIssuer(iss, cfg.AuthentikTokenIssuer()) {
-		return nil, fmt.Errorf("invalid issuer: %s", iss)
+		return nil, errors.New("invalid token issuer")
 	}
 	sub, _ := token.Subject()
 	if sub == "" {
-		return nil, fmt.Errorf("missing sub claim")
+		return nil, errors.New("missing sub claim")
 	}
 	return &WSClaims{
 		Subject: sub,

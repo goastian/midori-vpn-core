@@ -13,10 +13,13 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
+	"github.com/goastian/midori-vpn-core/internal/httpx"
 	"github.com/goastian/midori-vpn-core/internal/proxytoken"
 	"github.com/google/uuid"
 	masquego "github.com/quic-go/masque-go"
+	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/yosida95/uritemplate/v3"
 )
@@ -70,10 +73,18 @@ func NewGateway(addr, certFile, keyFile, templateText string, wgPort int, secret
 	mux := http.NewServeMux()
 	mux.HandleFunc(templateURL.Path, gateway.handle)
 	gateway.server = &http3.Server{
-		Addr:            addr,
-		TLSConfig:       http3.ConfigureTLSConfig(&tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13}),
+		Addr:      addr,
+		TLSConfig: http3.ConfigureTLSConfig(&tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13}),
+		QUICConfig: &quic.Config{
+			HandshakeIdleTimeout: 10 * time.Second,
+			MaxIdleTimeout:       5 * time.Minute,
+			KeepAlivePeriod:      30 * time.Second,
+			EnableDatagrams:      true,
+		},
 		EnableDatagrams: true,
 		Handler:         mux,
+		MaxHeaderBytes:  httpx.MaxHeaderBytes,
+		IdleTimeout:     5 * time.Minute,
 		Logger:          slog.Default(),
 	}
 	return gateway, nil

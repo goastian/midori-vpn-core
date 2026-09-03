@@ -13,6 +13,7 @@ import (
 
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/config"
+	"github.com/goastian/midori-vpn-core/internal/httpx"
 )
 
 var (
@@ -184,6 +185,7 @@ func (h *WSHub) HandleWS(w http.ResponseWriter, r *http.Request, cfg *config.Con
 	// connecting (see below). Browser extensions use moz-extension:// or
 	// chrome-extension:// origins that cannot be listed as patterns, so we rely
 	// entirely on the token check instead of the origin check.
+	httpx.AllowStreaming(w)
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		CompressionMode:    websocket.CompressionContextTakeover,
 		InsecureSkipVerify: true,

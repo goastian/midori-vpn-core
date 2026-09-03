@@ -16,6 +16,7 @@ import (
 	"github.com/goastian/midori-vpn-core/internal/config"
 	"github.com/goastian/midori-vpn-core/internal/control"
 	"github.com/goastian/midori-vpn-core/internal/db"
+	"github.com/goastian/midori-vpn-core/internal/httpx"
 	"github.com/goastian/midori-vpn-core/internal/masque"
 	"github.com/goastian/midori-vpn-core/internal/nodeauth"
 	"github.com/goastian/midori-vpn-core/internal/proxy"
@@ -46,6 +47,7 @@ func main() {
 
 	// Initialize core HTTP client with TLS settings
 	control.InitCoreClient(cfg.CoreTLSSkipVerify, cfg.CoreAllowHTTP, cfg.CoreAllowedHosts)
+	defer control.CloseCoreClient()
 	if cfg.ControlNodeID != "" {
 		if err := control.InitCoreSigningIdentity(cfg.ControlNodeID, cfg.ControlNodePrivateKey); err != nil {
 			log.Fatalf("failed to initialize Control signing identity: %v", err)
@@ -100,10 +102,7 @@ func main() {
 	addr := fmt.Sprintf(":%s", cfg.Port)
 	slog.Info("MidoriVPN listening", "addr", addr)
 
-	srv := &http.Server{
-		Addr:    addr,
-		Handler: router,
-	}
+	srv := httpx.NewAPIServer(addr, router)
 
 	serverErrCh := make(chan error, 1)
 	var masqueGateway *masque.Gateway

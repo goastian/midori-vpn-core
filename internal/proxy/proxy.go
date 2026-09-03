@@ -21,6 +21,7 @@ import (
 
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/config"
+	"github.com/goastian/midori-vpn-core/internal/httpx"
 	"github.com/goastian/midori-vpn-core/internal/proxytoken"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 )
@@ -78,11 +79,7 @@ func NewWithDB(cfg *config.Config, jwks *auth.JWKSProvider, pool *pgxpool.Pool) 
 
 // Start listens and serves until the context is cancelled.
 func (s *Server) Start(ctx context.Context) error {
-	srv := &http.Server{
-		Addr:              s.addr,
-		Handler:           s,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	srv := httpx.NewTunnelServer(s.addr, s)
 
 	go func() {
 		<-ctx.Done()
@@ -262,6 +259,10 @@ func dialViaProxy(proxyHost string, proxyPort int, target string) (net.Conn, err
 	if err != nil {
 		return nil, fmt.Errorf("dial exit proxy %s: %w", proxyAddr, err)
 	}
+	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("set exit proxy handshake deadline: %w", err)
+	}
 
 	// Send CONNECT request to upstream proxy (no auth — mesh-internal)
 	req := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
@@ -280,7 +281,11 @@ func dialViaProxy(proxyHost string, proxyPort int, target string) (net.Conn, err
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		conn.Close()
-		return nil, fmt.Errorf("exit proxy CONNECT failed: %s", resp.Status)
+		return nil, fmt.Errorf("exit proxy CONNECT failed with status %d", resp.StatusCode)
+	}
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("clear exit proxy handshake deadline: %w", err)
 	}
 
 	slog.Info("proxy tunnel chained through selected exit node")

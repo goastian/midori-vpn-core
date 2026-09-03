@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/goastian/midori-vpn-core/internal/httpx"
 	"github.com/goastian/midori-vpn-core/internal/proxytoken"
 	"github.com/goastian/midori-vpn-core/internal/respond"
 	"github.com/google/uuid"
@@ -51,6 +52,7 @@ func (g *WSGateway) Handler(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, "invalid tunnel credential", http.StatusUnauthorized)
 		return
 	}
+	httpx.AllowStreaming(w)
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{})
 	if err != nil {
 		slog.Warn("ws-tunnel: upgrade failed", "error", err, "remote", r.RemoteAddr)

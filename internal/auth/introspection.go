@@ -3,8 +3,8 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -12,7 +12,10 @@ import (
 	"time"
 
 	"github.com/goastian/midori-vpn-core/internal/config"
+	"github.com/goastian/midori-vpn-core/internal/httpx"
 )
+
+var introspectionHTTPClient = httpx.NewClient(10 * time.Second)
 
 // IntrospectionClaims holds the claims returned by the Authentik introspection
 // endpoint. Exported so other packages (e.g. proxy) can use introspection.
@@ -52,41 +55,46 @@ func introspectionURLs(cfg *config.Config) []string {
 	return urls
 }
 
-func doIntrospectionRequest(ctx context.Context, endpoint string, form url.Values) (*IntrospectionClaims, int, string, error) {
+func doIntrospectionRequest(ctx context.Context, endpoint string, form url.Values) (*IntrospectionClaims, int, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
-		return nil, 0, "", err
+		return nil, 0, 0, httpx.NewRemoteError("authentik_introspection", "request_build_failed", 0, 0, err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := introspectionHTTPClient.Do(req)
 	if err != nil {
-		return nil, 0, "", fmt.Errorf("introspection request failed: %w", err)
+		return nil, 0, 0, httpx.NewRemoteError("authentik_introspection", "transport_failed", 0, 0, err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := httpx.ReadBody(resp.Body, httpx.MaxResponseBytes)
 	if err != nil {
-		return nil, resp.StatusCode, "", fmt.Errorf("read introspection response: %w", err)
+		size := 0
+		code := "response_read_failed"
+		if errors.Is(err, httpx.ErrResponseTooLarge) {
+			size = httpx.MaxResponseBytes + 1
+			code = "response_too_large"
+		}
+		return nil, resp.StatusCode, size, httpx.NewRemoteError("authentik_introspection", code, resp.StatusCode, size, err)
 	}
 
-	bodyStr := string(body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, resp.StatusCode, bodyStr, fmt.Errorf("introspection returned %d: %s", resp.StatusCode, bodyStr)
+		return nil, resp.StatusCode, len(body), httpx.NewRemoteError("authentik_introspection", "provider_rejected", resp.StatusCode, len(body), nil)
 	}
 
 	var claims IntrospectionClaims
 	if err := json.Unmarshal(body, &claims); err != nil {
-		return nil, resp.StatusCode, bodyStr, fmt.Errorf("parse introspection response: %w", err)
+		return nil, resp.StatusCode, len(body), httpx.NewRemoteError("authentik_introspection", "response_invalid", resp.StatusCode, len(body), err)
 	}
 	if !claims.Active {
-		return nil, resp.StatusCode, bodyStr, fmt.Errorf("token is not active")
+		return nil, resp.StatusCode, len(body), httpx.NewRemoteError("authentik_introspection", "token_inactive", resp.StatusCode, len(body), nil)
 	}
 	if claims.Exp > 0 && time.Now().Unix() >= claims.Exp {
-		return nil, resp.StatusCode, bodyStr, fmt.Errorf("token expired")
+		return nil, resp.StatusCode, len(body), httpx.NewRemoteError("authentik_introspection", "token_expired", resp.StatusCode, len(body), nil)
 	}
 
-	return &claims, resp.StatusCode, bodyStr, nil
+	return &claims, resp.StatusCode, len(body), nil
 }
 
 // IntrospectToken validates a token via the Authentik introspection endpoint.
@@ -115,7 +123,7 @@ func IntrospectToken(cfg *config.Config, token string) (*IntrospectionClaims, er
 	allAttemptsFailed := true
 	for i, endpoint := range urls {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		claims, status, body, err := doIntrospectionRequest(ctx, endpoint, form)
+		claims, status, responseBytes, err := doIntrospectionRequest(ctx, endpoint, form)
 		cancel()
 
 		if err == nil {
@@ -129,16 +137,17 @@ func IntrospectToken(cfg *config.Config, token string) (*IntrospectionClaims, er
 			return claims, nil
 		}
 
-		bodyPreview := body
-		if len(bodyPreview) > 240 {
-			bodyPreview = bodyPreview[:240]
+		errorCode := "introspection_failed"
+		var remoteErr *httpx.RemoteError
+		if errors.As(err, &remoteErr) {
+			errorCode = remoteErr.Code
 		}
 		slog.Debug("introspection attempt failed",
-			"endpoint", endpoint,
+			"operation", "authentik_introspection",
 			"attempt", i+1,
 			"status", status,
-			"error", err,
-			"body_preview", bodyPreview,
+			"response_bytes", responseBytes,
+			"code", errorCode,
 		)
 		lastErr = err
 
@@ -152,7 +161,7 @@ func IntrospectToken(cfg *config.Config, token string) (*IntrospectionClaims, er
 		lastErr = fmt.Errorf("introspection failed for all candidate endpoints")
 	}
 	if allAttemptsFailed {
-		slog.Warn("introspection failed for all candidate endpoints", "error", lastErr)
+		slog.Warn("introspection failed for all candidate endpoints", "operation", "authentik_introspection", "code", "all_candidates_failed")
 	}
 	return nil, lastErr
 }

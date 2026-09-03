@@ -2,14 +2,17 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/goastian/midori-vpn-core/internal/config"
+	"github.com/goastian/midori-vpn-core/internal/httpx"
 )
 
 func TestJWKSProviderCoalescesConcurrentRefreshRequests(t *testing.T) {
@@ -68,6 +71,28 @@ func TestJWKSProviderCoalescesConcurrentRefreshRequests(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	if calls.Load() != 2 {
 		t.Fatalf("JWKS requests = %d, want one preload and one refresh", calls.Load())
+	}
+}
+
+func TestJWKSRefreshRejectsOversizedResponseWithoutLeakingBody(t *testing.T) {
+	secret := "jwks-provider-secret"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(secret + strings.Repeat("x", httpx.MaxResponseBytes)))
+	}))
+	defer server.Close()
+
+	provider := &JWKSProvider{
+		cfg:        &config.Config{AuthentikJWKSURL: server.URL},
+		cacheDir:   t.TempDir(),
+		httpClient: server.Client(),
+	}
+	err := provider.refresh(context.Background())
+	var remoteErr *httpx.RemoteError
+	if !errors.As(err, &remoteErr) || remoteErr.Code != "response_too_large" {
+		t.Fatalf("refresh() error = %#v", err)
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("provider body leaked through error: %q", err.Error())
 	}
 }
 

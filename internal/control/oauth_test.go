@@ -181,6 +181,28 @@ func TestOAuthRefreshAuthentikErrorIsNormalized(t *testing.T) {
 	}
 }
 
+func TestOAuthRefreshRejectsOversizedProviderResponse(t *testing.T) {
+	secret := "authentik-provider-secret"
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(secret + strings.Repeat("x", 1<<20)))
+	}))
+	defer tokenServer.Close()
+
+	handler := newOAuthTestHandler(tokenServer.URL)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", strings.NewReader(`{"refresh_token":"refresh-token"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "https://vpn.test")
+	rr := httptest.NewRecorder()
+	handler.Refresh(rr, req)
+
+	if rr.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadGateway)
+	}
+	if strings.Contains(rr.Body.String(), secret) {
+		t.Fatalf("provider body leaked to client: %s", rr.Body.String())
+	}
+}
+
 func TestOAuthAllowedOriginsIncludeLegacyDesktopWhenConfigured(t *testing.T) {
 	handler := NewOAuthHandler(&config.Config{
 		CORSAllowedOrigins: "https://vpn.astian.org,https://desktop.astian.org",
