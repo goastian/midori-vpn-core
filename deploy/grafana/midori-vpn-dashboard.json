@@ -121,6 +121,21 @@
       "options": {"alertInstanceLabelFilter": "", "alertName": "", "dashboardAlerts": false, "folder": "", "groupBy": [], "groupMode": "default", "maxItems": 20, "sortOrder": 1, "stateFilter": {"error": true, "firing": true, "noData": true, "normal": false, "pending": true}},
       "title": "Active alerts",
       "type": "alertlist"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "midorivpn-prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 24, "x": 0, "y": 28},
+      "id": 11,
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "midori_vpn_reconciliation_divergent_peers", "legendFormat": "divergent {{cluster}}", "refId": "A"},
+        {"expr": "midori_vpn_reconciliation_cleanup_pending", "legendFormat": "cleanup pending {{cluster}}", "refId": "B"},
+        {"expr": "midori_vpn_peer_operations_pending", "legendFormat": "operations pending {{cluster}}", "refId": "C"},
+        {"expr": "midori_vpn_reconciliation_observation_errors", "legendFormat": "observation errors {{cluster}}", "refId": "D"}
+      ],
+      "title": "Peer reconciliation state",
+      "type": "timeseries"
     }
   ],
   "refresh": "15s",
@@ -132,6 +147,6 @@
   "timezone": "browser",
   "title": "MidoriVPN — Private operations",
   "uid": "midorivpn-private-operations",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }

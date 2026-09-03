@@ -173,6 +173,17 @@ func TestPeerOperationReplacementWorksAtQuotaAndCapacityLimit(t *testing.T) {
 	if secondPeer.ID == firstPeer.ID {
 		t.Fatal("replacement reused the historical peer row")
 	}
+	var replacementState models.PeerOperationState
+	if err := fixture.pool.QueryRow(context.Background(), `
+		SELECT state FROM peer_operations WHERE id = $1`, second.Operation.ID).Scan(&replacementState); err != nil {
+		t.Fatalf("load replacement cleanup state: %v", err)
+	}
+	if replacementState != models.PeerOperationCleanupPending {
+		t.Fatalf("replacement state = %s, want cleanup_pending", replacementState)
+	}
+	if err := operationRepo.CompleteCleanup(context.Background(), second.Operation.ID); err != nil {
+		t.Fatalf("CompleteCleanup: %v", err)
+	}
 
 	var activePeers, currentPeers int
 	if err := fixture.pool.QueryRow(context.Background(), `
@@ -264,6 +275,36 @@ func TestPeerOperationCrossServerReplacementMovesCapacityAtomically(t *testing.T
 	}
 	if sourcePeers != 0 || targetPeers != 1 {
 		t.Fatalf("cross-server counters diverged: source=%d target=%d", sourcePeers, targetPeers)
+	}
+	if _, err := fixture.pool.Exec(context.Background(), `
+		UPDATE vpn_servers SET is_active = FALSE WHERE id = $1`, fixture.serverID); err != nil {
+		t.Fatalf("deactivate cleanup source: %v", err)
+	}
+	reconcilable, err := repo.NewServerRepo(fixture.pool).ListForReconciliation(context.Background())
+	if err != nil {
+		t.Fatalf("ListForReconciliation: %v", err)
+	}
+	var sourceIncluded bool
+	for _, server := range reconcilable {
+		if server.ID == fixture.serverID {
+			sourceIncluded = true
+			break
+		}
+	}
+	if !sourceIncluded {
+		t.Fatal("inactive cross-server cleanup source was not reconcilable")
+	}
+	if err := operationRepo.CompleteCleanup(context.Background(), replacement.Operation.ID); err != nil {
+		t.Fatalf("complete cross-server cleanup: %v", err)
+	}
+	reconcilable, err = repo.NewServerRepo(fixture.pool).ListForReconciliation(context.Background())
+	if err != nil {
+		t.Fatalf("ListForReconciliation after cleanup: %v", err)
+	}
+	for _, server := range reconcilable {
+		if server.ID == fixture.serverID {
+			t.Fatal("inactive server without durable intent remained reconcilable")
+		}
 	}
 }
 

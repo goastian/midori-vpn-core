@@ -752,15 +752,22 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	}
 	h.serverRepo.InvalidateCache()
 
-	if previousPeer != nil && previousPeer.IsActive && beginResult.Operation.PreviousOperationID != nil {
-		previousServer, loadErr := h.serverRepo.GetByID(r.Context(), previousPeer.ServerID)
-		if loadErr != nil {
-			_ = h.peerOperationRepo.MarkCleanupPending(r.Context(), operationID, loadErr)
+	if previousPeer != nil && previousPeer.IsActive {
+		if beginResult.Operation.PreviousOperationID == nil {
+			// The preflight observation already proved the legacy Core peer absent.
+			_ = h.peerOperationRepo.CompleteCleanup(r.Context(), operationID)
 		} else {
-			cleanupErr := CallCoreRemovePeer(previousServer, previousPeer.PublicKey, beginResult.Operation.PreviousOperationID.String())
-			if cleanupErr != nil {
-				slog.Error("replaced peer cleanup is pending", "operation_id", operationID, "peer_id", previousPeer.ID, "error", cleanupErr)
-				_ = h.peerOperationRepo.MarkCleanupPending(r.Context(), operationID, cleanupErr)
+			previousServer, loadErr := h.serverRepo.GetByID(r.Context(), previousPeer.ServerID)
+			if loadErr != nil {
+				_ = h.peerOperationRepo.MarkCleanupPending(r.Context(), operationID, loadErr)
+			} else {
+				cleanupErr := CallCoreRemovePeer(previousServer, previousPeer.PublicKey, beginResult.Operation.PreviousOperationID.String())
+				if cleanupErr != nil {
+					slog.Error("replaced peer cleanup is pending", "operation_id", operationID, "peer_id", previousPeer.ID, "error", cleanupErr)
+					_ = h.peerOperationRepo.MarkCleanupPending(r.Context(), operationID, cleanupErr)
+				} else if completeErr := h.peerOperationRepo.CompleteCleanup(r.Context(), operationID); completeErr != nil {
+					slog.Error("failed to finalize replaced peer cleanup", "operation_id", operationID, "peer_id", previousPeer.ID, "error", completeErr)
+				}
 			}
 		}
 	}

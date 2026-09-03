@@ -61,6 +61,14 @@ Then open `http://127.0.0.1:3000`. Prometheus alert rules are visible through
 the provisioned data source. Notification destinations are operational secrets
 and must be configured in Grafana, not committed to this repository.
 
+The reconciliation panels and alerts use aggregate gauges only:
+`midori_vpn_reconciliation_divergent_peers`,
+`midori_vpn_reconciliation_cleanup_pending`,
+`midori_vpn_peer_operations_pending` and
+`midori_vpn_reconciliation_observation_errors`. A failed Core observation is
+reported separately and never interpreted as zero peers. None of these series
+contains a peer key, operation UUID, user, address or device label.
+
 ## Multi-cluster extension
 
 The principal deployment is the only currently deployed target. The regional

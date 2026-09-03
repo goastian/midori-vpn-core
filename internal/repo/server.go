@@ -144,6 +144,50 @@ func (r *ServerRepo) ListAll(ctx context.Context) ([]models.VPNServer, error) {
 	return servers, nil
 }
 
+// ListForReconciliation includes active servers and inactive servers that
+// still carry durable peer intent. A newly staged inactive server with no
+// sessions is deliberately not probed or reported as an observation failure.
+func (r *ServerRepo) ListForReconciliation(ctx context.Context) ([]models.VPNServer, error) {
+	query := `SELECT ` + serverColumns + `
+		FROM vpn_servers server
+		WHERE server.is_active = TRUE
+		   OR server.current_peers > 0
+		   OR EXISTS (
+			SELECT 1 FROM peers peer
+			WHERE peer.server_id = server.id AND peer.is_active = TRUE
+		   )
+		   OR EXISTS (
+			SELECT 1 FROM peer_operations operation
+			WHERE operation.server_id = server.id
+			  AND operation.state IN ('pending', 'core_applied', 'cleanup_pending')
+		   )
+		   OR EXISTS (
+			SELECT 1
+			FROM peer_operations operation
+			JOIN peers previous ON previous.id = operation.previous_peer_id
+			WHERE previous.server_id = server.id
+			  AND operation.state = 'cleanup_pending'
+		   )
+		ORDER BY server.name`
+	rows, err := r.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("list servers for reconciliation: %w", err)
+	}
+	defer rows.Close()
+	servers := make([]models.VPNServer, 0)
+	for rows.Next() {
+		server, err := scanServer(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan server for reconciliation: %w", err)
+		}
+		servers = append(servers, *server)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list servers for reconciliation rows: %w", err)
+	}
+	return servers, nil
+}
+
 func (r *ServerRepo) LeastLoaded(ctx context.Context) (*models.VPNServer, error) {
 	query := `
 		SELECT ` + serverColumns + `

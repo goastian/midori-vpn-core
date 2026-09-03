@@ -2,6 +2,7 @@ package control
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -249,7 +250,13 @@ func coreDoWithRetry(req *http.Request, bodyBytes []byte, host string) (*http.Re
 			lastErr = err
 			cb.recordFailure()
 			slog.Error("core request failed", "attempt", attempt+1, "max_retries", coreMaxRetries, "host", host, "error", err)
-			time.Sleep(coreRetryBaseDelay * time.Duration(attempt+1))
+			timer := time.NewTimer(coreRetryBaseDelay * time.Duration(attempt+1))
+			select {
+			case <-req.Context().Done():
+				timer.Stop()
+				return nil, req.Context().Err()
+			case <-timer.C:
+			}
 			continue
 		}
 
@@ -259,7 +266,13 @@ func coreDoWithRetry(req *http.Request, bodyBytes []byte, host string) (*http.Re
 			lastErr = fmt.Errorf("core returned %d: %s", resp.StatusCode, string(body))
 			cb.recordFailure()
 			slog.Error("core request server error", "attempt", attempt+1, "max_retries", coreMaxRetries, "host", host, "status", resp.StatusCode)
-			time.Sleep(coreRetryBaseDelay * time.Duration(attempt+1))
+			timer := time.NewTimer(coreRetryBaseDelay * time.Duration(attempt+1))
+			select {
+			case <-req.Context().Done():
+				timer.Stop()
+				return nil, req.Context().Err()
+			case <-timer.C:
+			}
 			continue
 		}
 
@@ -329,6 +342,10 @@ func coreErrorHasStatus(err error, status int) bool {
 // --- Core API calls ---
 
 func CallCoreAddPeer(server *models.VPNServer, pubkey, operationID string, presharedKey ...string) (*CoreAddPeerResponse, error) {
+	return CallCoreAddPeerContext(context.Background(), server, pubkey, operationID, presharedKey...)
+}
+
+func CallCoreAddPeerContext(ctx context.Context, server *models.VPNServer, pubkey, operationID string, presharedKey ...string) (*CoreAddPeerResponse, error) {
 	reqMap := map[string]interface{}{
 		"public_key":   pubkey,
 		"operation_id": operationID,
@@ -343,7 +360,7 @@ func CallCoreAddPeer(server *models.VPNServer, pubkey, operationID string, presh
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodPost, fullURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -381,6 +398,10 @@ func CallCoreAddPeer(server *models.VPNServer, pubkey, operationID string, presh
 }
 
 func CallCoreRemovePeer(server *models.VPNServer, pubkey, expectedOperationID string) error {
+	return CallCoreRemovePeerContext(context.Background(), server, pubkey, expectedOperationID)
+}
+
+func CallCoreRemovePeerContext(ctx context.Context, server *models.VPNServer, pubkey, expectedOperationID string) error {
 	encodedKey := url.PathEscape(pubkey)
 	fullURL, cbKey, err := coreURL(server, "/api/v1/peers/"+encodedKey)
 	if err != nil {
@@ -394,7 +415,7 @@ func CallCoreRemovePeer(server *models.VPNServer, pubkey, expectedOperationID st
 	query := parsedURL.Query()
 	query.Set("expected_operation_id", expectedOperationID)
 	parsedURL.RawQuery = query.Encode()
-	req, err := http.NewRequest(http.MethodDelete, parsedURL.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, parsedURL.String(), nil)
 	if err != nil {
 		return err
 	}
@@ -431,13 +452,17 @@ func CallCoreRemoveCurrentPeer(server *models.VPNServer, pubkey string) error {
 }
 
 func CallCoreGetPeerStats(server *models.VPNServer, pubkey string) (*CorePeerStatsResponse, error) {
+	return CallCoreGetPeerStatsContext(context.Background(), server, pubkey)
+}
+
+func CallCoreGetPeerStatsContext(ctx context.Context, server *models.VPNServer, pubkey string) (*CorePeerStatsResponse, error) {
 	encodedKey := url.PathEscape(pubkey)
 	fullURL, cbKey, err := coreURL(server, "/api/v1/peers/"+encodedKey+"/stats")
 	if err != nil {
 		return nil, err
 	}
 
-	req, err := http.NewRequest(http.MethodGet, fullURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -518,12 +543,16 @@ func CallCoreServerStats(server *models.VPNServer) (*CoreServerStatsResponse, er
 }
 
 func CallCoreListPeers(server *models.VPNServer) ([]CorePeerStatsResponse, error) {
+	return CallCoreListPeersContext(context.Background(), server)
+}
+
+func CallCoreListPeersContext(ctx context.Context, server *models.VPNServer) ([]CorePeerStatsResponse, error) {
 	fullURL, cbKey, err := coreURL(server, "/api/v1/peers")
 	if err != nil {
 		return nil, err
 	}
 
-	req, err := http.NewRequest(http.MethodGet, fullURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil)
 	if err != nil {
 		return nil, err
 	}

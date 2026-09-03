@@ -134,8 +134,10 @@ timestamps. The exact prior Core operation is captured before replacement,
 including for adopted legacy peers. `peers.provision_operation_id` preserves
 the operation that owns each completed session. A pending retry returns
 `409 connection_in_progress` with `Retry-After`; a completed retry returns the
-same session and sensitive configuration rather than allocating again.
-Startup/periodic reconciliation of stalled rows remains a separate phase.
+same session and sensitive configuration rather than allocating again. Control
+reconciles immediately at startup and every 60 seconds. Operations become
+eligible for recovery after two minutes, while fresh operations remain
+protected from an older Core snapshot.
 
 ### Data plane
 
@@ -188,15 +190,20 @@ A successful connection or replacement follows this order:
 3. Control signs an idempotent add-peer request using that operation UUID.
 4. Core applies or recognizes the operation and returns its stable address.
 5. Control records `core_applied`, creates the new peer, retires the previous
-   database session, adjusts cross-server counters and marks the operation
-   completed in one transaction.
-6. Control removes the exact previous Core operation. A failure becomes
-   `cleanup_pending` without losing either operation owner.
+   database session and adjusts cross-server counters in one transaction. A
+   replacement remains `cleanup_pending`; a first connection is `completed`.
+6. Control removes the exact previous Core operation and only then marks the
+   replacement `completed`. A crash or failure preserves `cleanup_pending`
+   without losing either operation owner.
 
 Only a definitive Core rejection releases a pending reservation immediately;
 ambiguous transport or persistence failures retain durable state for the
-reconciler. Reconciliation compares central active peers with a successfully
-observed signed Core peer list. It must be idempotent: retrying a completed
+reconciler. Reconciliation compares central active peers only with a
+successfully observed signed Core peer list; an error never becomes an empty
+list. It completes already-applied operations, retries idempotent adds, retires
+database sessions absent from a valid observation and removes Core orphans by
+their exact `(public_key, operation_id)`. Peer state and the logical server
+counter are repaired in the same PostgreSQL transaction. Retrying a completed
 operation cannot allocate another address or count the same peer twice.
 
 There is no cross-cluster replication of WireGuard runtime state. Moving a
@@ -299,11 +306,14 @@ regional Core over the authenticated private management network, never through
 public Nginx. Labels are bounded to cluster, node and protocol; user IDs, peer
 keys, client IPs and destination addresses are prohibited.
 
-Control must expose fleet-level desired/observed revision drift, last report,
-capacity, provisioning failures and circuit-breaker state. Each node exposes
-local request latency, replay failures, WireGuard capacity and transport health.
-Grafana remains loopback-only and administrator access uses an SSH tunnel or an
-equivalent private channel.
+Control exposes aggregate reconciliation divergence, pending cleanup and live
+peer-operation gauges alongside capacity and provisioning failures. Alerting
+fires when divergence, cleanup, pending operations or observation errors
+persist. Fleet-level desired/observed revision drift, last report and
+circuit-breaker state remain part of the multicluster phase. Each node exposes
+local request latency, replay failures, WireGuard capacity and transport
+health. Grafana remains loopback-only and administrator access uses an SSH
+tunnel or an equivalent private channel.
 
 ## Failure behavior
 

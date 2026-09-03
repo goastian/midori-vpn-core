@@ -65,6 +65,11 @@
   retries reuse the exact completed session, ambiguous failures remain
   recoverable, and the exact previous Core owner is captured before replacement
   so cleanup cannot target a later operation, including for legacy peers.
+- Added fail-closed peer reconciliation at startup and every 60 seconds. It
+  recovers stalled idempotent operations, keeps replacements durable until
+  exact prior-owner cleanup succeeds, repairs missing sessions and counters in
+  one transaction, removes observed orphans conditionally and exports bounded
+  divergence, cleanup, pending-operation and observation-error metrics.
 - Deployment scripts reject default credentials and publish proxy upstream only on loopback.
 - Added reversible Quadlet configuration for MASQUE, Redis 8.10.1 migration with volume export, PostgreSQL 18 migration-chain tests, Certbot reload hook and Redis persistence sysctl.
 - Updated CI to Go 1.27, Node 24/npm 12 and current stable action majors; Linux releases are signed RPMs built entirely with rootless Podman.

@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	controlpkg "github.com/goastian/midori-vpn-core/internal/control"
 	"github.com/goastian/midori-vpn-core/internal/wg"
 )
 
@@ -148,6 +149,7 @@ func (m *MetricsExporter) Handler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	control := m.controlMetrics(r.Context())
+	reconciliation := controlpkg.ReconciliationMetricsSnapshot()
 
 	var output strings.Builder
 	writeMetric(&output, "midori_vpn_active_peers", "Current number of active WireGuard peers.", "gauge", activePeers)
@@ -165,6 +167,10 @@ func (m *MetricsExporter) Handler(w http.ResponseWriter, r *http.Request) {
 	writeMetric(&output, "midori_vpn_control_database_up", "Whether the Control database was available to the metrics exporter.", "gauge", control.databaseUp)
 	writeMetric(&output, "midori_vpn_server_current_peers", "Current peers across active configured servers.", "gauge", control.currentPeer)
 	writeMetric(&output, "midori_vpn_server_peer_capacity", "Maximum peer capacity across active configured servers.", "gauge", control.maxPeers)
+	writeMetric(&output, "midori_vpn_reconciliation_divergent_peers", "Peers divergent in the latest reconciliation pass.", "gauge", reconciliation.DivergentPeers)
+	writeMetric(&output, "midori_vpn_reconciliation_cleanup_pending", "Peer cleanups pending after the latest reconciliation pass.", "gauge", reconciliation.CleanupPending)
+	writeMetric(&output, "midori_vpn_peer_operations_pending", "Durable peer operations that have not fully converged.", "gauge", reconciliation.PendingOperations)
+	writeMetric(&output, "midori_vpn_reconciliation_observation_errors", "Core or database observation errors in the latest reconciliation pass.", "gauge", reconciliation.ObservationErrors)
 	for _, metric := range control.transports {
 		fmt.Fprintf(&output, "midori_vpn_transport_status{protocol=\"%s\",status=\"%s\"} %d\n", prometheusLabel(metric.protocol), prometheusLabel(metric.status), metric.count)
 	}

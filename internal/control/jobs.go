@@ -21,81 +21,27 @@ const (
 	peerCleanupTimeout         = 60 * time.Second
 )
 
-// StartStatsSync runs every 60s: syncs peer stats from all cores via REST
-// and broadcasts updated stats to WebSocket clients.
+// StartStatsSync reconciles immediately and every 60 seconds, then broadcasts
+// the resulting aggregate statistics to WebSocket clients.
 func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub) {
 	serverRepo := repo.NewServerRepo(pool)
 	peerRepo := repo.NewPeerRepo(pool)
-	deviceRepo := repo.NewDeviceRepo(pool)
+	reconciler := NewReconciler(pool, nil)
 
-	slog.Info("job started", "job", "stats-sync", "interval", statsSyncInterval.String())
+	slog.Info("job started", "job", "peer-reconciliation", "interval", statsSyncInterval.String())
 	ticker := time.NewTicker(statsSyncInterval)
 	defer ticker.Stop()
 
 	for {
-		select {
-		case <-parentCtx.Done():
-			slog.Info("job stopped", "job", "stats-sync")
-			return
-		case <-ticker.C:
-		}
 		ctx, cancel := context.WithTimeout(parentCtx, statsSyncTimeout)
-
-		servers, err := serverRepo.ListAll(ctx)
-		if err != nil {
-			slog.Error("stats-sync list servers error", "error", err)
-			cancel()
-			continue
-		}
-
-		for _, server := range servers {
-			if !server.IsActive {
-				continue
-			}
-
-			corePeers, err := CallCoreListPeers(&server)
-			if err != nil {
-				slog.Error("stats-sync core error", "server", server.Name, "host", server.Host, "error", err)
-				continue
-			}
-
-			// Update server peer count from actual core data
-			if err := serverRepo.SetPeerCount(ctx, server.ID, len(corePeers)); err != nil {
-				slog.Error("stats-sync set peer count error", "server", server.Name, "error", err)
-			}
-
-			// Match core peers with DB peers and update stats
-			dbPeers, err := peerRepo.ListActiveByServer(ctx, server.ID)
-			if err != nil {
-				continue
-			}
-
-			peerMap := make(map[string]*CorePeerStatsResponse, len(corePeers))
-			for i := range corePeers {
-				peerMap[corePeers[i].PublicKey] = &corePeers[i]
-			}
-
-			for _, dbPeer := range dbPeers {
-				if stats, ok := peerMap[dbPeer.PublicKey]; ok {
-					var hs *time.Time
-					if stats.LastHandshake != "" {
-						if t, err := time.Parse(time.RFC3339, stats.LastHandshake); err == nil && !t.IsZero() {
-							hs = &t
-						}
-					}
-					if err := peerRepo.UpdateStats(ctx, dbPeer.ID, stats.BytesSent, stats.BytesReceived, hs); err != nil {
-						slog.Error("stats-sync update stats error", "peer_id", dbPeer.ID, "error", err)
-					}
-					if hs != nil && dbPeer.DeviceID != nil {
-						if err := deviceRepo.TouchLastSeen(ctx, *dbPeer.DeviceID, *hs); err != nil {
-							slog.Error("stats-sync update device last seen error", "device_id", *dbPeer.DeviceID, "error", err)
-						}
-					}
-				}
-			}
-
-			slog.Info("stats-sync completed", "server", server.Name, "core_peers", len(corePeers), "db_peers", len(dbPeers))
-		}
+		report := reconciler.RunOnce(ctx)
+		slog.Info("peer reconciliation completed",
+			"observed_servers", report.ObservedServers,
+			"observation_errors", report.ObservationErrors,
+			"divergent_peers", report.DivergentPeers,
+			"orphans_removed", report.OrphansRemoved,
+			"cleanup_pending", report.CleanupPending,
+			"pending_operations", report.PendingOperations)
 
 		// Broadcast updated stats to WS clients
 		if hub != nil && hub.ClientCount() > 0 {
@@ -121,6 +67,12 @@ func StartStatsSync(parentCtx context.Context, pool *pgxpool.Pool, hub *WSHub) {
 		}
 
 		cancel()
+		select {
+		case <-parentCtx.Done():
+			slog.Info("job stopped", "job", "peer-reconciliation")
+			return
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -188,17 +140,42 @@ func StartPeerCleanup(parentCtx context.Context, pool *pgxpool.Pool) {
 
 		for _, peer := range stalePeers {
 			server, err := serverRepo.GetByID(ctx, peer.ServerID)
-			if err == nil {
-				if err := CallCoreRemoveCurrentPeer(server, peer.PublicKey); err != nil {
-					slog.Error("peer-cleanup core remove error", "peer_id", peer.ID, "error", err)
+			if err != nil {
+				slog.Error("peer-cleanup load server error", "peer_id", peer.ID, "error", err)
+				continue
+			}
+			expectedOperationID := ""
+			if peer.ProvisionOperationID != nil {
+				expectedOperationID = peer.ProvisionOperationID.String()
+			} else {
+				observed, err := CallCoreGetPeerStatsContext(ctx, server, peer.PublicKey)
+				if coreErrorHasStatus(err, 404) {
+					observed = nil
+				} else if err != nil {
+					slog.Error("peer-cleanup Core observation error", "peer_id", peer.ID, "error", err)
+					continue
 				}
-				if err := serverRepo.UpdatePeerCount(ctx, peer.ServerID, -1); err != nil {
-					slog.Error("peer-cleanup update peer count error", "server_id", peer.ServerID, "error", err)
+				if observed != nil {
+					expectedOperationID = observed.OperationID
+					if expectedOperationID == "" {
+						slog.Error("peer-cleanup Core owner unavailable", "peer_id", peer.ID)
+						continue
+					}
 				}
 			}
-
-			if err := peerRepo.Deactivate(ctx, peer.ID); err != nil {
-				slog.Error("peer-cleanup deactivate error", "peer_id", peer.ID, "error", err)
+			if expectedOperationID != "" {
+				if err := CallCoreRemovePeerContext(ctx, server, peer.PublicKey, expectedOperationID); err != nil {
+					slog.Error("peer-cleanup Core remove error", "peer_id", peer.ID, "error", err)
+					continue
+				}
+			}
+			deactivated, err := peerRepo.DeactivateAndRecount(ctx, peer.ID)
+			if err != nil {
+				slog.Error("peer-cleanup transactional deactivate error", "peer_id", peer.ID, "error", err)
+				continue
+			}
+			if !deactivated {
+				continue
 			}
 
 			auditRepo.Log(ctx, &peer.UserID, "peer.cleanup",

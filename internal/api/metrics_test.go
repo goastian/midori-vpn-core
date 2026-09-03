@@ -27,6 +27,9 @@ func TestMetricsExporterIncludesOperationalHistograms(t *testing.T) {
 		"midori_vpn_connection_provision_duration_seconds_count",
 		"midori_vpn_connection_provision_failures_total",
 		"midori_vpn_control_database_up 0",
+		"midori_vpn_reconciliation_divergent_peers",
+		"midori_vpn_reconciliation_cleanup_pending",
+		"midori_vpn_peer_operations_pending",
 	} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Fatalf("metrics output missing %q", expected)

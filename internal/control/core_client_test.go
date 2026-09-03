@@ -1,6 +1,7 @@
 package control
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -11,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/goastian/midori-vpn-core/internal/models"
 	"github.com/goastian/midori-vpn-core/internal/nodeauth"
@@ -218,5 +220,26 @@ func TestCoreConflictRemainsTyped(t *testing.T) {
 	var coreError *CoreAPIError
 	if !errors.As(err, &coreError) || coreError.Status != http.StatusConflict || coreError.Code != "peer_operation_conflict" {
 		t.Fatalf("error = %#v", err)
+	}
+}
+
+func TestCoreRetryBackoffHonorsContextCancellation(t *testing.T) {
+	server, cleanup := useTestCoreServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": false, "code": "core_peer_state_unavailable", "error": "temporary failure",
+		})
+	}))
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := CallCoreListPeersContext(ctx, server)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("CallCoreListPeersContext error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("canceled Core retry took %s", elapsed)
 	}
 }

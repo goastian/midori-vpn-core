@@ -46,6 +46,42 @@ groups:
           summary: VPN peer provisioning p95 is above two seconds
           description: Server-side peer provisioning has remained slow for ten minutes.
 
+      - alert: MidoriVPNPeerStateDivergence
+        expr: midori_vpn_reconciliation_divergent_peers > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: VPN peer state remains divergent
+          description: PostgreSQL and at least one successfully observed Core have not converged for two minutes.
+
+      - alert: MidoriVPNPeerCleanupPending
+        expr: midori_vpn_reconciliation_cleanup_pending > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: VPN peer cleanup remains pending
+          description: At least one exact peer cleanup has not converged for five minutes.
+
+      - alert: MidoriVPNPeerOperationsPending
+        expr: midori_vpn_peer_operations_pending > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Durable VPN peer operations remain pending
+          description: At least one connection or cleanup operation has remained unfinished for five minutes.
+
+      - alert: MidoriVPNReconciliationObservationErrors
+        expr: midori_vpn_reconciliation_observation_errors > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: VPN peer reconciliation cannot observe authoritative state
+          description: Core or PostgreSQL observations have failed for two minutes; destructive convergence remains disabled.
+
       - alert: MidoriVPNServerCapacityHigh
         expr: midori_vpn_server_peer_capacity > 0 and midori_vpn_server_current_peers / midori_vpn_server_peer_capacity > 0.9
         for: 10m

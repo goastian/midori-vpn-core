@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -43,6 +44,12 @@ type BeginConnectResult struct {
 
 type PeerOperationRepo struct {
 	pool *pgxpool.Pool
+}
+
+type PendingCleanupTarget struct {
+	ServerID    uuid.UUID
+	PublicKey   string
+	OperationID string
 }
 
 func NewPeerOperationRepo(pool *pgxpool.Pool) *PeerOperationRepo {
@@ -343,9 +350,10 @@ func (r *PeerOperationRepo) MarkCoreApplied(ctx context.Context, operationID uui
 	return nil
 }
 
-// CompleteConnect creates the active peer, retires the prior database session,
-// and finalizes counters and operation state atomically. Core cleanup follows
-// this commit and can be marked cleanup_pending without losing either owner.
+// CompleteConnect creates the active peer and retires the prior database
+// session atomically. Replacements remain cleanup_pending until the exact old
+// Core owner has been confirmed absent, closing the crash window between the
+// database commit and remote cleanup.
 func (r *PeerOperationRepo) CompleteConnect(ctx context.Context, operationID uuid.UUID) (*models.Peer, *models.Peer, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -412,7 +420,8 @@ func (r *PeerOperationRepo) CompleteConnect(ctx context.Context, operationID uui
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE peer_operations
-		SET state = 'completed', completed_at = NOW(), last_error = '',
+		SET state = CASE WHEN previous_peer_id IS NULL THEN 'completed' ELSE 'cleanup_pending' END,
+		    completed_at = NOW(), last_error = '',
 		    updated_at = NOW()
 		WHERE id = $1`, operation.ID); err != nil {
 		return nil, nil, fmt.Errorf("complete peer operation: %w", err)
@@ -459,7 +468,7 @@ func (r *PeerOperationRepo) MarkCleanupPending(ctx context.Context, operationID 
 	tag, err := r.pool.Exec(ctx, `
 		UPDATE peer_operations
 		SET state = 'cleanup_pending', last_error = $2, updated_at = NOW()
-		WHERE id = $1 AND state = 'completed'`, operationID, boundedOperationError(cause))
+		WHERE id = $1 AND state IN ('completed', 'cleanup_pending')`, operationID, boundedOperationError(cause))
 	if err != nil {
 		return err
 	}
@@ -467,6 +476,164 @@ func (r *PeerOperationRepo) MarkCleanupPending(ctx context.Context, operationID 
 		return ErrOperationState
 	}
 	return nil
+}
+
+// ListLiveByServer returns every operation that can still own Core state. It is
+// intentionally not limited to stale operations because the reconciler must
+// protect fresh in-flight work while classifying Core peers as orphans.
+func (r *PeerOperationRepo) ListLiveByServer(ctx context.Context, serverID uuid.UUID) ([]models.PeerOperation, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT `+operationColumns+`
+		FROM peer_operations
+		WHERE server_id = $1
+		  AND state IN ('pending', 'core_applied', 'cleanup_pending')
+		ORDER BY created_at, id`, serverID)
+	if err != nil {
+		return nil, fmt.Errorf("list live peer operations: %w", err)
+	}
+	defer rows.Close()
+
+	operations := make([]models.PeerOperation, 0)
+	for rows.Next() {
+		operation, err := scanPeerOperation(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan live peer operation: %w", err)
+		}
+		operations = append(operations, *operation)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list live peer operations rows: %w", err)
+	}
+	return operations, nil
+}
+
+func (r *PeerOperationRepo) ListStaleLive(ctx context.Context, staleAfter time.Duration) ([]models.PeerOperation, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT `+operationColumns+`
+		FROM peer_operations
+		WHERE state IN ('pending', 'core_applied', 'cleanup_pending')
+		  AND updated_at <= NOW() - $1::interval
+		ORDER BY updated_at, id`, fmt.Sprintf("%d seconds", int(staleAfter.Seconds())))
+	if err != nil {
+		return nil, fmt.Errorf("list stale peer operations: %w", err)
+	}
+	defer rows.Close()
+
+	operations := make([]models.PeerOperation, 0)
+	for rows.Next() {
+		operation, err := scanPeerOperation(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan stale peer operation: %w", err)
+		}
+		operations = append(operations, *operation)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list stale peer operations rows: %w", err)
+	}
+	return operations, nil
+}
+
+func (r *PeerOperationRepo) CountLive(ctx context.Context) (int64, error) {
+	var count int64
+	if err := r.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM peer_operations
+		WHERE state IN ('pending', 'core_applied', 'cleanup_pending')`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count live peer operations: %w", err)
+	}
+	return count, nil
+}
+
+func (r *PeerOperationRepo) CountCleanupPending(ctx context.Context) (int64, error) {
+	var count int64
+	if err := r.pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM peer_operations
+		WHERE state = 'cleanup_pending'`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count pending peer cleanups: %w", err)
+	}
+	return count, nil
+}
+
+// ListPendingCleanupTargets prevents the generic orphan pass from racing or
+// duplicating a durable replacement cleanup handled by its owning operation.
+func (r *PeerOperationRepo) ListPendingCleanupTargets(ctx context.Context) ([]PendingCleanupTarget, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT previous.server_id, previous.public_key,
+		       COALESCE(operation.previous_operation_id::text,
+		                previous.provision_operation_id::text, '')
+		FROM peer_operations operation
+		JOIN peers previous ON previous.id = operation.previous_peer_id
+		WHERE operation.state = 'cleanup_pending'
+		ORDER BY previous.server_id, previous.public_key`)
+	if err != nil {
+		return nil, fmt.Errorf("list pending peer cleanup targets: %w", err)
+	}
+	defer rows.Close()
+	targets := make([]PendingCleanupTarget, 0)
+	for rows.Next() {
+		var target PendingCleanupTarget
+		if err := rows.Scan(&target.ServerID, &target.PublicKey, &target.OperationID); err != nil {
+			return nil, fmt.Errorf("scan pending peer cleanup target: %w", err)
+		}
+		targets = append(targets, target)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list pending peer cleanup target rows: %w", err)
+	}
+	return targets, nil
+}
+
+// RecordAttemptStarted persists every remote retry before it is issued. Moving
+// updated_at also prevents a failed Core from being hammered every minute.
+func (r *PeerOperationRepo) RecordAttemptStarted(ctx context.Context, operationID uuid.UUID) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE peer_operations
+		SET attempts = attempts + 1, updated_at = NOW()
+		WHERE id = $1 AND state IN ('pending', 'core_applied', 'cleanup_pending')`, operationID)
+	if err != nil {
+		return fmt.Errorf("start peer operation attempt: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrOperationState
+	}
+	return nil
+}
+
+func (r *PeerOperationRepo) RecordAttemptFailure(ctx context.Context, operationID uuid.UUID, cause error) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE peer_operations
+		SET last_error = $2, updated_at = NOW()
+		WHERE id = $1 AND state IN ('pending', 'core_applied', 'cleanup_pending')`,
+		operationID, boundedOperationError(cause))
+	if err != nil {
+		return fmt.Errorf("record peer operation failure: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrOperationState
+	}
+	return nil
+}
+
+// CompleteCleanup closes an exact previous-peer cleanup. Repeated calls are
+// idempotent so multiple Control replicas can converge safely.
+func (r *PeerOperationRepo) CompleteCleanup(ctx context.Context, operationID uuid.UUID) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE peer_operations
+		SET state = 'completed', last_error = '', updated_at = NOW()
+		WHERE id = $1 AND state = 'cleanup_pending'`, operationID)
+	if err != nil {
+		return fmt.Errorf("complete peer cleanup: %w", err)
+	}
+	if tag.RowsAffected() == 1 {
+		return nil
+	}
+	var state models.PeerOperationState
+	if err := r.pool.QueryRow(ctx, `SELECT state FROM peer_operations WHERE id = $1`, operationID).Scan(&state); err != nil {
+		return fmt.Errorf("load completed peer cleanup: %w", err)
+	}
+	if state == models.PeerOperationCompleted {
+		return nil
+	}
+	return ErrOperationState
 }
 
 func boundedOperationError(err error) string {
