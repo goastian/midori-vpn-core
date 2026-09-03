@@ -94,6 +94,49 @@ rg -F -- "-w /external/midori-vpn-desktop/agent" "${PODMAN_LOG}" >/dev/null || f
 rg -F -- "-w /external/midori-vpn-control" "${PODMAN_LOG}" >/dev/null || fail "sibling Control audit workdir is incorrect"
 rg -F -- "-w /external/midorivpn-extension" "${PODMAN_LOG}" >/dev/null || fail "sibling extension audit workdir is incorrect"
 
+: >"${PODMAN_LOG}"
+if (
+    cd "${SIBLING}/midori-vpn-core"
+    PATH="${FAKE_BIN}:${PATH}" bash scripts/pod.sh go list ./...
+) >"${TEST_DIR}/broad-go.out" 2>"${TEST_DIR}/broad-go.err"; then
+    fail "Core root accepted an ambiguous ./... Go scope"
+fi
+rg -F 'ambiguous ./... from the Core root includes nested repositories and tmp/staging' \
+    "${TEST_DIR}/broad-go.err" >/dev/null || fail "ambiguous Go scope error is not actionable"
+[[ ! -s "${PODMAN_LOG}" ]] || fail "Podman ran for an ambiguous Core Go scope"
+
+(
+    cd "${SIBLING}/midori-vpn-core"
+    PATH="${FAKE_BIN}:${PATH}" bash scripts/pod.sh go test ./cmd/... ./internal/...
+)
+rg -F -- 'go test ./cmd/... ./internal/...' "${PODMAN_LOG}" >/dev/null || fail "explicit Core Go scopes were not forwarded"
+
+: >"${PODMAN_LOG}"
+(
+    cd "${SIBLING}/midori-vpn-desktop/agent"
+    PATH="${FAKE_BIN}:${PATH}" bash ../../midori-vpn-core/scripts/pod.sh go test ./...
+)
+rg -F -- 'go test ./...' "${PODMAN_LOG}" >/dev/null || fail "isolated agent module rejected ./..."
+
+: >"${PODMAN_LOG}"
+if (
+    cd "${SIBLING}/midori-vpn-core"
+    PATH="${FAKE_BIN}:${PATH}" bash scripts/pod.sh staticcheck ./...
+) >"${TEST_DIR}/broad-staticcheck.out" 2>"${TEST_DIR}/broad-staticcheck.err"; then
+    fail "Core root staticcheck accepted an ambiguous ./... scope"
+fi
+rg -F 'ambiguous ./... from the Core root includes nested repositories and tmp/staging' \
+    "${TEST_DIR}/broad-staticcheck.err" >/dev/null || fail "ambiguous staticcheck error is not actionable"
+[[ ! -s "${PODMAN_LOG}" ]] || fail "Podman ran for an ambiguous Core staticcheck scope"
+
+(
+    cd "${SIBLING}/midori-vpn-core"
+    PATH="${FAKE_BIN}:${PATH}" bash scripts/pod.sh shellcheck scripts/pod.sh
+)
+rg -F -- '-w /workspace' "${PODMAN_LOG}" >/dev/null || fail "ShellCheck root workdir is incorrect"
+rg -F -- 'shellcheck-alpine@sha256:c82fe42504fbc9fc68f15d36638e5ee2324ebb8b94e96a3c4e395bf361c49183 shellcheck scripts/pod.sh' \
+    "${PODMAN_LOG}" >/dev/null || fail "pinned ShellCheck command was not forwarded"
+
 retired_core_token='VPN_CORE''_TOKEN'
 printf 'package retired\nconst name = "%s"\n' "${retired_core_token}" >"${SIBLING}/midori-vpn-core/internal/retired.go"
 if (

@@ -74,12 +74,24 @@ IMAGE_GO="localhost/midori-dev-go:latest"
 IMAGE_NODE="localhost/midori-dev-node:latest"
 IMAGE_PROMETHEUS="docker.io/prom/prometheus@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0"
 IMAGE_SYFT="ghcr.io/anchore/syft@sha256:41f8289664101d6ebab30a97ac8df6b6f86b92d8343285ca90f428e2bc353106"
-PODMAN_USERNS=(--userns=keep-id:uid=0,gid=0)
+IMAGE_SHELLCHECK="docker.io/koalaman/shellcheck-alpine@sha256:c82fe42504fbc9fc68f15d36638e5ee2324ebb8b94e96a3c4e395bf361c49183"
+PODMAN_USERNS=("--userns=keep-id:uid=0,gid=0")
 
 require_repo() {
     local path="$1"
     local label="$2"
     [[ -n "${path}" ]] || die "${label} repository was not found nested under Core or beside it"
+}
+
+reject_ambiguous_core_scope() {
+    local argument
+
+    [[ "${CURRENT_DIR}" == "${ROOT_DIR}" ]] || return 0
+    for argument in "$@"; do
+        if [[ "${argument}" == "./..." ]]; then
+            die "ambiguous ./... from the Core root includes nested repositories and tmp/staging; use ./cmd/... ./internal/..."
+        fi
+    done
 }
 
 build_image_if_missing() {
@@ -101,6 +113,7 @@ cmd_build_images() {
 }
 
 cmd_go() {
+    reject_ambiguous_core_scope "$@"
     build_image_if_missing "${IMAGE_GO}" "${ROOT_DIR}/.container/Containerfile" "${ROOT_DIR}"
     podman run --rm "${PODMAN_USERNS[@]}" \
         "${PODMAN_WORKSPACE_MOUNTS[@]}" \
@@ -114,6 +127,7 @@ cmd_go() {
 cmd_go_tool() {
     local tool="$1"
     shift
+    reject_ambiguous_core_scope "$@"
     build_image_if_missing "${IMAGE_GO}" "${ROOT_DIR}/.container/Containerfile" "${ROOT_DIR}"
     podman run --rm "${PODMAN_USERNS[@]}" \
         "${PODMAN_WORKSPACE_MOUNTS[@]}" \
@@ -158,6 +172,13 @@ cmd_syft() {
         -e SYFT_CACHE_DIR=/tmp/syft-cache \
         -w "${WORKDIR_IN_CONTAINER}" \
         "${IMAGE_SYFT}" "$@"
+}
+
+cmd_shellcheck() {
+    podman run --rm "${PODMAN_USERNS[@]}" \
+        "${PODMAN_WORKSPACE_MOUNTS[@]}" \
+        -w "${WORKDIR_IN_CONTAINER}" \
+        "${IMAGE_SHELLCHECK}" shellcheck "$@"
 }
 
 cmd_audit() {
@@ -301,6 +322,10 @@ case "${1:-}" in
         shift
         cmd_syft "$@"
         ;;
+    shellcheck)
+        shift
+        cmd_shellcheck "$@"
+        ;;
     audit)
         cmd_audit
         ;;
@@ -311,13 +336,15 @@ case "${1:-}" in
         cmd_build_images
         ;;
     *)
-        echo "Uso: $0 {go|gofmt|staticcheck|govulncheck|node|npm|npx|promtool|syft|audit|debt|build-images} [argumentos...]"
+        echo "Uso: $0 {go|gofmt|staticcheck|govulncheck|node|npm|npx|promtool|syft|shellcheck|audit|debt|build-images} [argumentos...]"
         echo ""
         echo "Ejemplos:"
-        echo "  $0 go test ./..."
-        echo "  $0 go vet ./..."
-        echo "  $0 staticcheck ./..."
-        echo "  $0 govulncheck ./..."
+        echo "  $0 go test ./cmd/... ./internal/..."
+        echo "  $0 go vet ./cmd/... ./internal/..."
+        echo "  $0 staticcheck ./cmd/... ./internal/..."
+        echo "  $0 govulncheck ./cmd/... ./internal/..."
+        echo "  # Desde midori-vpn-desktop/agent, ./... sigue siendo un módulo aislado válido."
+        echo "  $0 shellcheck scripts/pod.sh scripts/test-pod-runner.sh"
         echo "  $0 npm run check"
         echo "  $0 audit"
 
