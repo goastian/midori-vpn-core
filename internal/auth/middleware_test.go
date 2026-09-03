@@ -49,6 +49,7 @@ func testJWKS(t *testing.T, privKey *rsa.PrivateKey) *auth.JWKSProvider {
 	if err != nil {
 		t.Fatalf("NewJWKSProvider: %v", err)
 	}
+	t.Cleanup(provider.Close)
 	return provider
 }
 

@@ -31,6 +31,8 @@ type refreshLimiter struct {
 	entries map[string]*refreshEntry
 	rps     rate.Limit
 	burst   int
+	now     func() time.Time
+	nextGC  time.Time
 }
 
 type refreshEntry struct {
@@ -43,8 +45,9 @@ func newRefreshLimiter(rps float64, burst int) *refreshLimiter {
 		entries: make(map[string]*refreshEntry),
 		rps:     rate.Limit(rps),
 		burst:   burst,
+		now:     time.Now,
 	}
-	go rl.cleanup()
+	rl.nextGC = rl.now().Add(10 * time.Minute)
 	return rl
 }
 
@@ -54,27 +57,28 @@ func (rl *refreshLimiter) Allow(key string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
+	now := rl.now()
+	if !now.Before(rl.nextGC) {
+		rl.cleanupLocked(now)
+		rl.nextGC = now.Add(10 * time.Minute)
+	}
+
 	e, exists := rl.entries[key]
 	if !exists {
 		l := rate.NewLimiter(rl.rps, rl.burst)
-		rl.entries[key] = &refreshEntry{limiter: l, lastSeen: time.Now()}
+		rl.entries[key] = &refreshEntry{limiter: l, lastSeen: now}
 		return l.Allow()
 	}
-	e.lastSeen = time.Now()
+	e.lastSeen = now
 	return e.limiter.Allow()
 }
 
 // cleanup expires entries unused for more than 30 minutes.
-func (rl *refreshLimiter) cleanup() {
-	for {
-		time.Sleep(10 * time.Minute)
-		rl.mu.Lock()
-		for k, e := range rl.entries {
-			if time.Since(e.lastSeen) > 30*time.Minute {
-				delete(rl.entries, k)
-			}
+func (rl *refreshLimiter) cleanupLocked(now time.Time) {
+	for key, entry := range rl.entries {
+		if now.Sub(entry.lastSeen) > 30*time.Minute {
+			delete(rl.entries, key)
 		}
-		rl.mu.Unlock()
 	}
 }
 

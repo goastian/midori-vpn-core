@@ -77,12 +77,15 @@ IMAGE_SYFT="ghcr.io/anchore/syft@sha256:41f8289664101d6ebab30a97ac8df6b6f86b92d8
 IMAGE_SHELLCHECK="docker.io/koalaman/shellcheck-alpine@sha256:c82fe42504fbc9fc68f15d36638e5ee2324ebb8b94e96a3c4e395bf361c49183"
 PODMAN_USERNS=("--userns=keep-id:uid=0,gid=0")
 PODMAN_GO_ENV=()
-if [[ -n "${TEST_DATABASE_URL:-}" ]]; then
-    PODMAN_GO_ENV+=(-e TEST_DATABASE_URL)
-fi
+for test_env in TEST_DATABASE_URL TEST_REDIS_URL; do
+    if [[ -n "${!test_env:-}" ]]; then
+        PODMAN_GO_ENV+=(-e "${test_env}")
+    fi
+done
 PODMAN_GO_NETWORK=()
 if [[ -n "${TEST_PODMAN_NETWORK:-}" ]]; then
-    [[ -n "${TEST_DATABASE_URL:-}" ]] || die "TEST_PODMAN_NETWORK requires TEST_DATABASE_URL"
+    [[ -n "${TEST_DATABASE_URL:-}" || -n "${TEST_REDIS_URL:-}" ]] || \
+        die "TEST_PODMAN_NETWORK requires TEST_DATABASE_URL or TEST_REDIS_URL"
     [[ "${TEST_PODMAN_NETWORK}" =~ ^[a-zA-Z0-9_.-]+$ ]] || die "TEST_PODMAN_NETWORK contains invalid characters"
     PODMAN_GO_NETWORK+=(--network "${TEST_PODMAN_NETWORK}")
 fi

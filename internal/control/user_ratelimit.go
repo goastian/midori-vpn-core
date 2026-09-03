@@ -15,6 +15,8 @@ type userRateLimiter struct {
 	entries map[string]*userEntry
 	rps     rate.Limit
 	burst   int
+	now     func() time.Time
+	nextGC  time.Time
 }
 
 type userEntry struct {
@@ -27,8 +29,9 @@ func newUserRateLimiter(rps float64, burst int) *userRateLimiter {
 		entries: make(map[string]*userEntry),
 		rps:     rate.Limit(rps),
 		burst:   burst,
+		now:     time.Now,
 	}
-	go ul.cleanup()
+	ul.nextGC = ul.now().Add(5 * time.Minute)
 	return ul
 }
 
@@ -37,26 +40,27 @@ func (ul *userRateLimiter) Allow(userID string) bool {
 	ul.mu.Lock()
 	defer ul.mu.Unlock()
 
+	now := ul.now()
+	if !now.Before(ul.nextGC) {
+		ul.cleanupLocked(now)
+		ul.nextGC = now.Add(5 * time.Minute)
+	}
+
 	e, exists := ul.entries[userID]
 	if !exists {
 		l := rate.NewLimiter(ul.rps, ul.burst)
-		ul.entries[userID] = &userEntry{limiter: l, lastSeen: time.Now()}
+		ul.entries[userID] = &userEntry{limiter: l, lastSeen: now}
 		return l.Allow()
 	}
-	e.lastSeen = time.Now()
+	e.lastSeen = now
 	return e.limiter.Allow()
 }
 
 // cleanup removes entries not seen in the last 10 minutes.
-func (ul *userRateLimiter) cleanup() {
-	for {
-		time.Sleep(5 * time.Minute)
-		ul.mu.Lock()
-		for id, e := range ul.entries {
-			if time.Since(e.lastSeen) > 10*time.Minute {
-				delete(ul.entries, id)
-			}
+func (ul *userRateLimiter) cleanupLocked(now time.Time) {
+	for id, entry := range ul.entries {
+		if now.Sub(entry.lastSeen) > 10*time.Minute {
+			delete(ul.entries, id)
 		}
-		ul.mu.Unlock()
 	}
 }

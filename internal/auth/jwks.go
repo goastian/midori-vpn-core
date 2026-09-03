@@ -19,67 +19,102 @@ import (
 const jwksCacheFile = "jwks_cache.json"
 
 type JWKSProvider struct {
-	cfg       *config.Config
-	mu        sync.RWMutex
-	keySet    jwk.Set
-	fetchedAt time.Time
-	cacheTTL  time.Duration
-	cacheDir  string
+	cfg             *config.Config
+	mu              sync.RWMutex
+	keySet          jwk.Set
+	fetchedAt       time.Time
+	cacheTTL        time.Duration
+	cacheDir        string
+	ctx             context.Context
+	cancel          context.CancelFunc
+	refreshRequests chan struct{}
+	workers         sync.WaitGroup
+	closeOnce       sync.Once
 }
 
 func NewJWKSProvider(cfg *config.Config) (*JWKSProvider, error) {
+	return NewJWKSProviderWithContext(context.Background(), cfg)
+}
+
+func NewJWKSProviderWithContext(parent context.Context, cfg *config.Config) (*JWKSProvider, error) {
 	cacheDir := cfg.ConfigDir
 	if cacheDir == "" {
 		cacheDir = os.TempDir()
 	}
+	ctx, cancel := context.WithCancel(parent)
 
 	p := &JWKSProvider{
-		cfg:      cfg,
-		cacheTTL: 1 * time.Hour,
-		cacheDir: cacheDir,
+		cfg:             cfg,
+		cacheTTL:        1 * time.Hour,
+		cacheDir:        cacheDir,
+		ctx:             ctx,
+		cancel:          cancel,
+		refreshRequests: make(chan struct{}, 1),
 	}
 
 	// Preload with retry (3 attempts with exponential backoff)
 	var lastErr error
 	for attempt := 1; attempt <= 3; attempt++ {
-		if err := p.refresh(); err != nil {
+		if err := p.refresh(ctx); err != nil {
 			lastErr = err
 			slog.Warn("JWKS preload attempt failed", "attempt", attempt, "error", err)
 			if attempt < 3 {
-				time.Sleep(time.Duration(attempt) * 2 * time.Second)
+				if !waitForRetry(ctx, time.Duration(attempt)*2*time.Second) {
+					lastErr = ctx.Err()
+					break
+				}
 			}
 			continue
 		}
 		lastErr = nil
 		break
 	}
+	if err := ctx.Err(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("JWKS preload canceled: %w", err)
+	}
 
 	if lastErr != nil {
 		slog.Warn("JWKS remote preload failed after 3 attempts, trying local fallback")
 		if fbErr := p.loadFromDisk(); fbErr != nil {
+			cancel()
 			return nil, fmt.Errorf("JWKS preload from %s failed and no local fallback: %w", cfg.AuthentikJWKSURL, lastErr)
 		}
 		slog.Info("JWKS loaded from local fallback", "keys", p.keySet.Len())
 	}
 
+	p.workers.Add(1)
 	go p.backgroundRefresh()
 
 	return p, nil
 }
 
-func (p *JWKSProvider) KeySet() jwk.Set {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
-	if time.Since(p.fetchedAt) > p.cacheTTL {
-		go p.refresh()
+func waitForRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
-
-	return p.keySet
 }
 
-func (p *JWKSProvider) refresh() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+func (p *JWKSProvider) KeySet() jwk.Set {
+	p.mu.RLock()
+	keySet := p.keySet
+	stale := time.Since(p.fetchedAt) > p.cacheTTL
+	p.mu.RUnlock()
+
+	if stale {
+		p.requestRefresh()
+	}
+
+	return keySet
+}
+
+func (p *JWKSProvider) refresh(parent context.Context) error {
+	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.cfg.AuthentikJWKSURL, nil)
@@ -120,15 +155,47 @@ func (p *JWKSProvider) refresh() error {
 	return nil
 }
 
+func (p *JWKSProvider) requestRefresh() {
+	select {
+	case <-p.ctx.Done():
+	case p.refreshRequests <- struct{}{}:
+	default:
+	}
+}
+
+func (p *JWKSProvider) isStale() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return time.Since(p.fetchedAt) > p.cacheTTL
+}
+
 func (p *JWKSProvider) backgroundRefresh() {
+	defer p.workers.Done()
 	ticker := time.NewTicker(p.cacheTTL)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		if err := p.refresh(); err != nil {
-			slog.Error("JWKS background refresh error", "error", err)
+	for {
+		select {
+		case <-p.ctx.Done():
+			return
+		case <-ticker.C:
+			if err := p.refresh(p.ctx); err != nil && p.ctx.Err() == nil {
+				slog.Error("JWKS background refresh error", "error", err)
+			}
+		case <-p.refreshRequests:
+			if p.isStale() {
+				if err := p.refresh(p.ctx); err != nil && p.ctx.Err() == nil {
+					slog.Error("JWKS requested refresh error", "error", err)
+				}
+			}
 		}
 	}
+}
+
+// Close stops background refresh and waits until any in-flight fetch exits.
+func (p *JWKSProvider) Close() {
+	p.closeOnce.Do(p.cancel)
+	p.workers.Wait()
 }
 
 func (p *JWKSProvider) cachePath() string {

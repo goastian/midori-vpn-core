@@ -74,10 +74,11 @@ func main() {
 			log.Fatalf("failed to run migrations: %v", err)
 		}
 
-		jwks, err := auth.NewJWKSProvider(cfg)
+		jwks, err := auth.NewJWKSProviderWithContext(shutdownCtx, cfg)
 		if err != nil {
 			log.Fatalf("failed to initialize JWKS provider: %v", err)
 		}
+		defer jwks.Close()
 
 		slog.Info("Control API enabled", "auth", "PostgreSQL + Authentik")
 		router = api.NewRouterWithDB(cfg, manager, pool, jwks, verifier, clientCertificateAuthority)
