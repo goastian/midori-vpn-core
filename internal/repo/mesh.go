@@ -573,6 +573,66 @@ func (r *MeshRepo) ListAll(ctx context.Context) ([]models.MeshNetwork, error) {
 	return meshes, nil
 }
 
+func (r *MeshRepo) ListAdminPage(ctx context.Context, options ListOptions) ([]models.MeshNetwork, int, error) {
+	clauses := []string{
+		"n.is_session = TRUE",
+		"n.country_code ~ '^[A-Z]{2}$'",
+		"n.country_code <> 'XX'",
+	}
+	args := make([]any, 0, 2)
+	if options.Search != "" {
+		args = append(args, strings.ToLower(options.Search)+"%")
+		placeholder := fmt.Sprintf("$%d", len(args))
+		clauses = append(clauses, fmt.Sprintf(
+			"(lower(n.name) LIKE %s OR lower(n.country_code) LIKE %s)",
+			placeholder, placeholder,
+		))
+	}
+	switch options.Status {
+	case "active":
+		clauses = append(clauses, "n.is_active = TRUE")
+	case "inactive":
+		clauses = append(clauses, "n.is_active = FALSE")
+	}
+	where := listWhere(clauses)
+	direction := listDirection(options.Order)
+	orderBy := "n.created_at " + direction + ", n.id " + direction
+	switch options.Sort {
+	case "name":
+		orderBy = "lower(n.name) " + direction + ", n.id " + direction
+	case "member_count":
+		orderBy = "member_count " + direction + ", n.id " + direction
+	}
+	limitPlaceholder := fmt.Sprintf("$%d", len(args)+1)
+	offsetPlaceholder := fmt.Sprintf("$%d", len(args)+2)
+	countSQL := "SELECT COUNT(*) FROM mesh_networks n" + where
+	listSQL := `
+		SELECT n.id, n.name, n.description, n.owner_id, n.subnet, n.invite_code,
+		       n.invite_expires_at, n.max_members, n.is_active, n.created_at, n.updated_at,
+		       COUNT(m.id) AS member_count, n.country_code, n.public_ip, n.is_session
+		FROM mesh_networks n
+		LEFT JOIN mesh_members m ON m.mesh_id = n.id` + where +
+		" GROUP BY n.id ORDER BY " + orderBy + " LIMIT " + limitPlaceholder + " OFFSET " + offsetPlaceholder
+	meshes, total, err := queryPage(ctx, r.pool, countSQL, listSQL, args, options.Limit, options.Offset,
+		func(rows pgx.Rows) (models.MeshNetwork, error) {
+			var mesh models.MeshNetwork
+			if err := rows.Scan(
+				&mesh.ID, &mesh.Name, &mesh.Description, &mesh.OwnerID, &mesh.Subnet,
+				&mesh.InviteCode, &mesh.InviteExpiresAt, &mesh.MaxMembers, &mesh.IsActive,
+				&mesh.CreatedAt, &mesh.UpdatedAt, &mesh.MemberCount, &mesh.CountryCode,
+				&mesh.PublicIP, &mesh.IsSession,
+			); err != nil {
+				return models.MeshNetwork{}, fmt.Errorf("scan admin mesh: %w", err)
+			}
+			normalizePublicMeshName(&mesh)
+			return mesh, nil
+		})
+	if err != nil {
+		return nil, 0, fmt.Errorf("list admin meshes: %w", err)
+	}
+	return meshes, total, nil
+}
+
 // AdminMeshMember is an enriched member row returned only to admins.
 type AdminMeshMember struct {
 	MeshIP      string    `json:"mesh_ip"`

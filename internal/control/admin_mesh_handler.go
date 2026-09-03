@@ -37,11 +37,20 @@ type adminMeshNetwork struct {
 }
 
 // GET /api/v1/admin/mesh
-// Returns all mesh networks with their members and per-member connection status.
+// Returns one filtered page of mesh networks with members and connection status.
 func (h *AdminMeshHandler) AdminListMeshes(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	meshes, err := h.meshRepo.ListAll(ctx)
+	query, ok := requirePageQuery(w, r, pageQueryConfig{
+		DefaultSort: "created_at",
+		Sorts:       []string{"created_at", "name", "member_count"},
+		Statuses:    []string{"all", "active", "inactive"},
+		AllowSearch: true,
+	})
+	if !ok {
+		return
+	}
+	meshes, total, err := h.meshRepo.ListAdminPage(ctx, query.ListOptions())
 	if err != nil {
 		respond.JsonError(w, "failed to list mesh networks", http.StatusInternalServerError)
 		return
@@ -50,26 +59,8 @@ func (h *AdminMeshHandler) AdminListMeshes(w http.ResponseWriter, r *http.Reques
 	// Fetch members for every mesh concurrently.
 	result := make([]adminMeshNetwork, len(meshes))
 	var wg sync.WaitGroup
-	var mu sync.Mutex
 
 	for i, m := range meshes {
-		wg.Add(1)
-		go func(idx int, meshID uuid.UUID, meshName string) {
-			defer wg.Done()
-			members, err := h.meshRepo.ListMembersAdmin(ctx, meshID)
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				slog.Warn("admin mesh: failed to load members", "mesh_id", meshID, "mesh", meshName, "error", err)
-				result[idx].Members = []repo.AdminMeshMember{}
-				return
-			}
-			if members == nil {
-				members = []repo.AdminMeshMember{}
-			}
-			result[idx].Members = members
-		}(i, m.ID, m.Name)
-
 		result[i] = adminMeshNetwork{
 			ID:          m.ID.String(),
 			Name:        m.Name,
@@ -81,8 +72,22 @@ func (h *AdminMeshHandler) AdminListMeshes(w http.ResponseWriter, r *http.Reques
 			IsSession:   m.IsSession,
 			CreatedAt:   m.CreatedAt,
 		}
+		wg.Add(1)
+		go func(idx int, meshID uuid.UUID, meshName string) {
+			defer wg.Done()
+			members, err := h.meshRepo.ListMembersAdmin(ctx, meshID)
+			if err != nil {
+				slog.Warn("admin mesh: failed to load members", "mesh_id", meshID, "mesh", meshName, "error", err)
+				result[idx].Members = []repo.AdminMeshMember{}
+				return
+			}
+			if members == nil {
+				members = []repo.AdminMeshMember{}
+			}
+			result[idx].Members = members
+		}(i, m.ID, m.Name)
 	}
 	wg.Wait()
 
-	respond.JsonOK(w, result, http.StatusOK)
+	respond.JsonOK(w, newPageResponse(result, query, total), http.StatusOK)
 }

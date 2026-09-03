@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/goastian/midori-vpn-core/internal/models"
@@ -16,6 +17,11 @@ import (
 
 type AuditRepo struct {
 	pool *pgxpool.Pool
+}
+
+type AdminAuditListOptions struct {
+	ListOptions
+	Action string
 }
 
 func NewAuditRepo(pool *pgxpool.Pool) *AuditRepo {
@@ -105,6 +111,56 @@ func (r *AuditRepo) ListAll(ctx context.Context, limit, offset int, action strin
 	defer rows.Close()
 
 	return scanAuditRows(rows)
+}
+
+func (r *AuditRepo) ListAdminPage(ctx context.Context, options AdminAuditListOptions) ([]models.AuditLog, int, error) {
+	clauses := make([]string, 0, 2)
+	args := make([]any, 0, 2)
+	if options.Action != "" {
+		args = append(args, options.Action)
+		clauses = append(clauses, fmt.Sprintf("al.action = $%d", len(args)))
+	}
+	if options.Search != "" {
+		args = append(args, strings.ToLower(options.Search)+"%")
+		placeholder := fmt.Sprintf("$%d", len(args))
+		clauses = append(clauses, fmt.Sprintf(
+			"(lower(al.action) LIKE %s OR lower(COALESCE(u.email, '')) LIKE %s)",
+			placeholder, placeholder,
+		))
+	}
+	where := listWhere(clauses)
+	direction := listDirection(options.Order)
+	orderBy := "al.created_at " + direction + ", al.id " + direction
+	if options.Sort == "action" {
+		orderBy = "lower(al.action) " + direction + ", al.id " + direction
+	}
+	limitPlaceholder := fmt.Sprintf("$%d", len(args)+1)
+	offsetPlaceholder := fmt.Sprintf("$%d", len(args)+2)
+	fromSQL := " FROM audit_logs al LEFT JOIN users u ON u.id = al.user_id"
+	countSQL := "SELECT COUNT(*)" + fromSQL + where
+	listSQL := `
+		SELECT al.id, al.user_id, COALESCE(u.email, ''), al.action,
+		       al.metadata, al.ip_address, al.created_at` + fromSQL + where +
+		" ORDER BY " + orderBy + " LIMIT " + limitPlaceholder + " OFFSET " + offsetPlaceholder
+	logs, total, err := queryPage(ctx, r.pool, countSQL, listSQL, args, options.Limit, options.Offset,
+		func(rows pgx.Rows) (models.AuditLog, error) {
+			var log models.AuditLog
+			var metadata []byte
+			if err := rows.Scan(
+				&log.ID, &log.UserID, &log.UserEmail, &log.Action,
+				&metadata, &log.IPAddress, &log.CreatedAt,
+			); err != nil {
+				return models.AuditLog{}, fmt.Errorf("scan admin audit log: %w", err)
+			}
+			if err := json.Unmarshal(metadata, &log.Metadata); err != nil {
+				return models.AuditLog{}, fmt.Errorf("decode admin audit metadata: %w", err)
+			}
+			return log, nil
+		})
+	if err != nil {
+		return nil, 0, fmt.Errorf("list admin audit logs: %w", err)
+	}
+	return logs, total, nil
 }
 
 func scanAuditRows(rows interface {

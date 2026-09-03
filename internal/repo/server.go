@@ -179,6 +179,56 @@ func (r *ServerRepo) ListAll(ctx context.Context) ([]models.VPNServer, error) {
 	return servers, nil
 }
 
+func (r *ServerRepo) ListAdminPage(ctx context.Context, options ListOptions) ([]models.VPNServer, int, error) {
+	clauses := make([]string, 0, 2)
+	args := make([]any, 0, 2)
+	if options.Search != "" {
+		args = append(args, strings.ToLower(options.Search)+"%")
+		placeholder := fmt.Sprintf("$%d", len(args))
+		clauses = append(clauses, fmt.Sprintf(
+			"(lower(name) LIKE %s OR lower(host) LIKE %s OR lower(location) LIKE %s OR lower(country_code) LIKE %s)",
+			placeholder, placeholder, placeholder, placeholder,
+		))
+	}
+	switch options.Status {
+	case "active":
+		clauses = append(clauses, "is_active = TRUE AND draining_at IS NULL")
+	case "inactive":
+		clauses = append(clauses, "is_active = FALSE AND draining_at IS NULL")
+	case "draining":
+		clauses = append(clauses, "draining_at IS NOT NULL")
+	}
+	where := listWhere(clauses)
+	direction := listDirection(options.Order)
+	orderBy := "lower(name) " + direction + ", id " + direction
+	switch options.Sort {
+	case "created_at":
+		orderBy = "created_at " + direction + ", id " + direction
+	case "current_peers":
+		orderBy = "current_peers " + direction + ", id " + direction
+	}
+	limitPlaceholder := fmt.Sprintf("$%d", len(args)+1)
+	offsetPlaceholder := fmt.Sprintf("$%d", len(args)+2)
+	countSQL := "SELECT COUNT(*) FROM vpn_servers" + where
+	listSQL := "SELECT " + serverColumns + " FROM vpn_servers" + where +
+		" ORDER BY " + orderBy + " LIMIT " + limitPlaceholder + " OFFSET " + offsetPlaceholder
+	servers, total, err := queryPage(ctx, r.pool, countSQL, listSQL, args, options.Limit, options.Offset,
+		func(rows pgx.Rows) (models.VPNServer, error) {
+			server, err := scanServer(rows)
+			if err != nil {
+				return models.VPNServer{}, fmt.Errorf("scan admin server: %w", err)
+			}
+			return *server, nil
+		})
+	if err != nil {
+		return nil, 0, fmt.Errorf("list admin servers: %w", err)
+	}
+	if err := r.loadTransports(ctx, servers); err != nil {
+		return nil, 0, err
+	}
+	return servers, total, nil
+}
+
 // ListForReconciliation includes active servers and inactive servers that
 // still carry durable peer intent. A newly staged inactive server with no
 // sessions is deliberately not probed or reported as an observation failure.

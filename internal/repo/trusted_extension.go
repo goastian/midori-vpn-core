@@ -3,6 +3,8 @@ package repo
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -96,6 +98,48 @@ func (r *TrustedExtensionRepo) List(ctx context.Context) ([]TrustedExtensionOrig
 		out = append(out, o)
 	}
 	return out, rows.Err()
+}
+
+func (r *TrustedExtensionRepo) ListAdminPage(ctx context.Context, options ListOptions) ([]TrustedExtensionOrigin, int, error) {
+	clauses := make([]string, 0, 2)
+	args := make([]any, 0, 2)
+	if options.Search != "" {
+		args = append(args, strings.ToLower(options.Search)+"%")
+		clauses = append(clauses, fmt.Sprintf("lower(origin) LIKE $%d", len(args)))
+	}
+	switch options.Status {
+	case "trusted":
+		clauses = append(clauses, "revoked = FALSE")
+	case "revoked":
+		clauses = append(clauses, "revoked = TRUE")
+	}
+	where := listWhere(clauses)
+	direction := listDirection(options.Order)
+	orderBy := "updated_at " + direction + ", id " + direction
+	switch options.Sort {
+	case "created_at":
+		orderBy = "created_at " + direction + ", id " + direction
+	case "origin":
+		orderBy = "lower(origin) " + direction + ", id " + direction
+	}
+	limitPlaceholder := fmt.Sprintf("$%d", len(args)+1)
+	offsetPlaceholder := fmt.Sprintf("$%d", len(args)+2)
+	countSQL := "SELECT COUNT(*) FROM trusted_extension_origins" + where
+	listSQL := `SELECT id, origin, revoked, created_at::text, updated_at::text
+		FROM trusted_extension_origins` + where + " ORDER BY " + orderBy +
+		" LIMIT " + limitPlaceholder + " OFFSET " + offsetPlaceholder
+	origins, total, err := queryPage(ctx, r.pool, countSQL, listSQL, args, options.Limit, options.Offset,
+		func(rows pgx.Rows) (TrustedExtensionOrigin, error) {
+			var origin TrustedExtensionOrigin
+			if err := rows.Scan(&origin.ID, &origin.Origin, &origin.Revoked, &origin.CreatedAt, &origin.UpdatedAt); err != nil {
+				return TrustedExtensionOrigin{}, fmt.Errorf("scan admin extension origin: %w", err)
+			}
+			return origin, nil
+		})
+	if err != nil {
+		return nil, 0, fmt.Errorf("list admin extension origins: %w", err)
+	}
+	return origins, total, nil
 }
 
 // SetRevokedByID toggles the revoked flag for an origin. Used by admin tooling.

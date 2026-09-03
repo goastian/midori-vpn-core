@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1218,14 +1217,22 @@ func (h *Handler) AdminDashboardStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) AdminListUsers(w http.ResponseWriter, r *http.Request) {
-	limit, offset := paginationParams(r)
-	users, err := h.userRepo.List(r.Context(), limit, offset)
+	query, ok := requirePageQuery(w, r, pageQueryConfig{
+		DefaultSort: "created_at",
+		Sorts:       []string{"created_at", "email", "display_name"},
+		Statuses:    []string{"all", "active", "banned"},
+		AllowSearch: true,
+	})
+	if !ok {
+		return
+	}
+	users, total, err := h.userRepo.ListAdminPage(r.Context(), query.ListOptions())
 	if err != nil {
 		slog.Error("admin list users error", "error", err)
 		respond.JsonError(w, "failed to list users", http.StatusInternalServerError)
 		return
 	}
-	respond.JsonOK(w, users, http.StatusOK)
+	respond.JsonOK(w, newPageResponse(users, query, total), http.StatusOK)
 }
 
 func (h *Handler) AdminGetUser(w http.ResponseWriter, r *http.Request) {
@@ -1241,11 +1248,27 @@ func (h *Handler) AdminGetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	peers, _ := h.peerRepo.ListByUser(r.Context(), id)
+	query, ok := requirePageQuery(w, r, pageQueryConfig{
+		DefaultSort: "created_at",
+		Sorts:       []string{"created_at", "last_handshake", "traffic"},
+		Statuses:    []string{"all", "active", "inactive"},
+		AllowSearch: true,
+	})
+	if !ok {
+		return
+	}
+	peers, total, err := h.peerRepo.ListAdminPage(r.Context(), repo.AdminPeerListOptions{
+		ListOptions: query.ListOptions(),
+		UserID:      &id,
+	})
+	if err != nil {
+		respond.SafeError(w, "failed to list user sessions", err, http.StatusInternalServerError)
+		return
+	}
 
 	respond.JsonOK(w, map[string]interface{}{
 		"user":  user,
-		"peers": peers,
+		"peers": newPageResponse(peers, query, total),
 	}, http.StatusOK)
 }
 
@@ -1472,13 +1495,22 @@ type CreateServerRequest struct {
 }
 
 func (h *Handler) AdminListServers(w http.ResponseWriter, r *http.Request) {
-	servers, err := h.serverRepo.ListAll(r.Context())
+	query, ok := requirePageQuery(w, r, pageQueryConfig{
+		DefaultSort: "name",
+		Sorts:       []string{"name", "created_at", "current_peers"},
+		Statuses:    []string{"all", "active", "inactive", "draining"},
+		AllowSearch: true,
+	})
+	if !ok {
+		return
+	}
+	servers, total, err := h.serverRepo.ListAdminPage(r.Context(), query.ListOptions())
 	if err != nil {
 		slog.Error("admin list servers error", "error", err)
 		respond.JsonError(w, "failed to list servers", http.StatusInternalServerError)
 		return
 	}
-	respond.JsonOK(w, servers, http.StatusOK)
+	respond.JsonOK(w, newPageResponse(servers, query, total), http.StatusOK)
 }
 
 func (h *Handler) AdminListNodeIdentities(w http.ResponseWriter, r *http.Request) {
@@ -1486,12 +1518,22 @@ func (h *Handler) AdminListNodeIdentities(w http.ResponseWriter, r *http.Request
 		respond.JsonError(w, "node identity registry is unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	query, ok := requirePageQuery(w, r, pageQueryConfig{
+		DefaultSort: "node_id",
+		Sorts:       []string{"node_id", "source"},
+		Statuses:    []string{"all", "active", "revoked"},
+		AllowSearch: true,
+	})
+	if !ok {
+		return
+	}
 	identities, err := h.nodeVerifier.List(r.Context())
 	if err != nil {
 		respond.JsonError(w, "failed to list node identities", http.StatusServiceUnavailable)
 		return
 	}
-	respond.JsonOK(w, identities, http.StatusOK)
+	items, total := paginateNodeIdentities(identities, query)
+	respond.JsonOK(w, newPageResponse(items, query, total), http.StatusOK)
 }
 
 func (h *Handler) AdminRegisterNodeIdentity(w http.ResponseWriter, r *http.Request) {
@@ -1782,14 +1824,24 @@ func (h *Handler) AdminDeleteServer(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) AdminListPeers(w http.ResponseWriter, r *http.Request) {
-	limit, offset := paginationParams(r)
-	peers, err := h.peerRepo.ListAll(r.Context(), limit, offset)
+	query, ok := requirePageQuery(w, r, pageQueryConfig{
+		DefaultSort: "created_at",
+		Sorts:       []string{"created_at", "last_handshake", "traffic"},
+		Statuses:    []string{"all", "active", "inactive"},
+		AllowSearch: true,
+	})
+	if !ok {
+		return
+	}
+	peers, total, err := h.peerRepo.ListAdminPage(r.Context(), repo.AdminPeerListOptions{
+		ListOptions: query.ListOptions(),
+	})
 	if err != nil {
 		slog.Error("admin list peers error", "error", err)
 		respond.JsonError(w, "failed to list peers", http.StatusInternalServerError)
 		return
 	}
-	respond.JsonOK(w, peers, http.StatusOK)
+	respond.JsonOK(w, newPageResponse(peers, query, total), http.StatusOK)
 }
 
 func (h *Handler) AdminForceDisconnectPeer(w http.ResponseWriter, r *http.Request) {
@@ -1825,15 +1877,26 @@ func (h *Handler) AdminForceDisconnectPeer(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *Handler) AdminListAuditLogs(w http.ResponseWriter, r *http.Request) {
-	limit, offset := paginationParams(r)
-	action := r.URL.Query().Get("action")
-	logs, err := h.auditRepo.ListAll(r.Context(), limit, offset, action)
+	query, ok := requirePageQuery(w, r, pageQueryConfig{
+		DefaultSort: "created_at",
+		Sorts:       []string{"created_at", "action"},
+		Statuses:    []string{"all"},
+		AllowSearch: true,
+		Extras:      []string{"action"},
+	})
+	if !ok {
+		return
+	}
+	logs, total, err := h.auditRepo.ListAdminPage(r.Context(), repo.AdminAuditListOptions{
+		ListOptions: query.ListOptions(),
+		Action:      query.Extras["action"],
+	})
 	if err != nil {
 		slog.Error("admin list audit logs error", "error", err)
 		respond.JsonError(w, "failed to list audit logs", http.StatusInternalServerError)
 		return
 	}
-	respond.JsonOK(w, logs, http.StatusOK)
+	respond.JsonOK(w, newPageResponse(logs, query, total), http.StatusOK)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1862,16 +1925,4 @@ func AdminOnly(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-func paginationParams(r *http.Request) (int, int) {
-	limit := 50
-	offset := 0
-	if l, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && l > 0 && l <= 200 {
-		limit = l
-	}
-	if o, err := strconv.Atoi(r.URL.Query().Get("offset")); err == nil && o >= 0 {
-		offset = o
-	}
-	return limit, offset
 }

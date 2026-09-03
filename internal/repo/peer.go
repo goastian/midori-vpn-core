@@ -3,6 +3,7 @@ package repo
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,6 +17,17 @@ import (
 type PeerRepo struct {
 	pool   *pgxpool.Pool
 	cipher *dataencryption.Cipher
+}
+
+type AdminPeerListOptions struct {
+	ListOptions
+	UserID *uuid.UUID
+}
+
+type DeviceSessionListOptions struct {
+	ListOptions
+	UserID   uuid.UUID
+	DeviceID uuid.UUID
 }
 
 func NewPeerRepo(pool *pgxpool.Pool, cipher ...*dataencryption.Cipher) *PeerRepo {
@@ -239,6 +251,52 @@ func (r *PeerRepo) CountByDevice(ctx context.Context, userID, deviceID uuid.UUID
 	return count, nil
 }
 
+func (r *PeerRepo) ListDevicePage(ctx context.Context, options DeviceSessionListOptions) ([]models.Peer, int, error) {
+	args := []any{options.UserID, options.DeviceID}
+	clauses := []string{"user_id = $1", "device_id = $2"}
+	switch options.Status {
+	case "active":
+		clauses = append(clauses, "is_active = TRUE")
+	case "inactive":
+		clauses = append(clauses, "is_active = FALSE")
+	}
+	where := listWhere(clauses)
+	direction := listDirection(options.Order)
+	orderBy := "created_at " + direction + ", id " + direction
+	switch options.Sort {
+	case "last_handshake":
+		orderBy = "last_handshake " + direction + " NULLS LAST, id " + direction
+	case "traffic":
+		orderBy = "(bytes_sent + bytes_received) " + direction + ", id " + direction
+	}
+	limitPlaceholder := fmt.Sprintf("$%d", len(args)+1)
+	offsetPlaceholder := fmt.Sprintf("$%d", len(args)+2)
+	countSQL := "SELECT COUNT(*) FROM peers" + where
+	listSQL := `
+		SELECT id, user_id, server_id, public_key, ''::text, assigned_ip, is_active,
+		       device_name, device_id, last_handshake, bytes_sent, bytes_received,
+		       created_at, expires_at
+		FROM peers` + where + " ORDER BY " + orderBy +
+		" LIMIT " + limitPlaceholder + " OFFSET " + offsetPlaceholder
+	peers, total, err := queryPage(ctx, r.pool, countSQL, listSQL, args, options.Limit, options.Offset,
+		func(rows pgx.Rows) (models.Peer, error) {
+			var peer models.Peer
+			if err := rows.Scan(
+				&peer.ID, &peer.UserID, &peer.ServerID, &peer.PublicKey, &peer.PresharedKey,
+				&peer.AssignedIP, &peer.IsActive, &peer.DeviceName, &peer.DeviceID,
+				&peer.LastHandshake, &peer.BytesSent, &peer.BytesReceived,
+				&peer.CreatedAt, &peer.ExpiresAt,
+			); err != nil {
+				return models.Peer{}, fmt.Errorf("scan device session: %w", err)
+			}
+			return peer, nil
+		})
+	if err != nil {
+		return nil, 0, fmt.Errorf("list device sessions: %w", err)
+	}
+	return peers, total, nil
+}
+
 func (r *PeerRepo) GetActiveByDevice(ctx context.Context, userID, deviceID uuid.UUID) (*models.Peer, error) {
 	peer, err := scanPeer(r.pool.QueryRow(ctx, `
 		SELECT id, user_id, server_id, public_key, ''::text, assigned_ip, is_active, device_name, device_id,
@@ -322,6 +380,64 @@ func (r *PeerRepo) ListAll(ctx context.Context, limit, offset int) ([]models.Pee
 		return nil, fmt.Errorf("list all peers rows: %w", err)
 	}
 	return peers, nil
+}
+
+func (r *PeerRepo) ListAdminPage(ctx context.Context, options AdminPeerListOptions) ([]models.Peer, int, error) {
+	clauses := make([]string, 0, 3)
+	args := make([]any, 0, 3)
+	if options.UserID != nil {
+		args = append(args, *options.UserID)
+		clauses = append(clauses, fmt.Sprintf("p.user_id = $%d", len(args)))
+	}
+	if options.Search != "" {
+		args = append(args, strings.ToLower(options.Search)+"%")
+		placeholder := fmt.Sprintf("$%d", len(args))
+		clauses = append(clauses, fmt.Sprintf(
+			"(lower(p.device_name) LIKE %s OR lower(COALESCE(u.email, '')) LIKE %s OR p.assigned_ip LIKE %s)",
+			placeholder, placeholder, placeholder,
+		))
+	}
+	switch options.Status {
+	case "active":
+		clauses = append(clauses, "p.is_active = TRUE")
+	case "inactive":
+		clauses = append(clauses, "p.is_active = FALSE")
+	}
+	where := listWhere(clauses)
+	direction := listDirection(options.Order)
+	orderBy := "p.created_at " + direction + ", p.id " + direction
+	switch options.Sort {
+	case "last_handshake":
+		orderBy = "p.last_handshake " + direction + " NULLS LAST, p.id " + direction
+	case "traffic":
+		orderBy = "(p.bytes_sent + p.bytes_received) " + direction + ", p.id " + direction
+	}
+	limitPlaceholder := fmt.Sprintf("$%d", len(args)+1)
+	offsetPlaceholder := fmt.Sprintf("$%d", len(args)+2)
+	fromSQL := " FROM peers p LEFT JOIN users u ON u.id = p.user_id"
+	countSQL := "SELECT COUNT(*)" + fromSQL + where
+	listSQL := `
+		SELECT p.id, p.user_id, COALESCE(u.email, ''), p.server_id, p.public_key, ''::text, p.assigned_ip,
+		       p.is_active, p.device_name, p.device_id, p.last_handshake, p.bytes_sent, p.bytes_received,
+		       p.created_at, p.expires_at` + fromSQL + where +
+		" ORDER BY " + orderBy + " LIMIT " + limitPlaceholder + " OFFSET " + offsetPlaceholder
+	peers, total, err := queryPage(ctx, r.pool, countSQL, listSQL, args, options.Limit, options.Offset,
+		func(rows pgx.Rows) (models.Peer, error) {
+			var peer models.Peer
+			if err := rows.Scan(
+				&peer.ID, &peer.UserID, &peer.UserEmail, &peer.ServerID, &peer.PublicKey,
+				&peer.PresharedKey, &peer.AssignedIP, &peer.IsActive, &peer.DeviceName,
+				&peer.DeviceID, &peer.LastHandshake, &peer.BytesSent, &peer.BytesReceived,
+				&peer.CreatedAt, &peer.ExpiresAt,
+			); err != nil {
+				return models.Peer{}, fmt.Errorf("scan admin peer: %w", err)
+			}
+			return peer, nil
+		})
+	if err != nil {
+		return nil, 0, fmt.Errorf("list admin peers: %w", err)
+	}
+	return peers, total, nil
 }
 
 func (r *PeerRepo) ListActiveByServer(ctx context.Context, serverID uuid.UUID) ([]models.Peer, error) {

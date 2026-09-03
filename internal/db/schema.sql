@@ -1,5 +1,5 @@
 -- Midori VPN v2.0.0 Canonical Consolidated PostgreSQL Schema
--- Generated from migrations 000001 - 000018
+-- Generated from migrations 000001 - 000020
 
 BEGIN;
 
@@ -20,6 +20,15 @@ CREATE TABLE IF NOT EXISTS users (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_users_admin_state_created
+    ON users (is_banned, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_users_admin_email
+    ON users (lower(email) text_pattern_ops, id);
+CREATE INDEX IF NOT EXISTS idx_users_admin_display_name
+    ON users (lower(display_name) text_pattern_ops, id);
+CREATE INDEX IF NOT EXISTS idx_users_admin_authentik_uid
+    ON users (lower(authentik_uid) text_pattern_ops, id);
 
 -- ============================================================
 -- Tables: clusters, Core nodes and desired/observed state
@@ -190,6 +199,16 @@ CREATE INDEX IF NOT EXISTS idx_vpn_servers_country_active ON vpn_servers (countr
 CREATE UNIQUE INDEX IF NOT EXISTS uq_vpn_servers_node ON vpn_servers (node_id) WHERE node_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_vpn_servers_legacy_unbound
     ON vpn_servers (legacy_node_unbound) WHERE legacy_node_unbound = TRUE;
+CREATE INDEX IF NOT EXISTS idx_vpn_servers_admin_state_created
+    ON vpn_servers (is_active, (draining_at IS NOT NULL), created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_vpn_servers_admin_name
+    ON vpn_servers (lower(name) text_pattern_ops, id);
+CREATE INDEX IF NOT EXISTS idx_vpn_servers_admin_host
+    ON vpn_servers (lower(host) text_pattern_ops, id);
+CREATE INDEX IF NOT EXISTS idx_vpn_servers_admin_location
+    ON vpn_servers (lower(location) text_pattern_ops, id);
+CREATE INDEX IF NOT EXISTS idx_vpn_servers_admin_country
+    ON vpn_servers (lower(country_code) text_pattern_ops, id);
 
 -- ============================================================
 -- Table: vpn_server_transports
@@ -363,6 +382,16 @@ CREATE INDEX IF NOT EXISTS idx_peers_device_created ON peers (device_id, created
 CREATE INDEX IF NOT EXISTS idx_peers_user_active ON peers (user_id) WHERE is_active = TRUE;
 CREATE INDEX IF NOT EXISTS idx_peers_user_created ON peers (user_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_peers_server_active ON peers (server_id) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_peers_admin_state_created
+    ON peers (is_active, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_peers_admin_device_name
+    ON peers (lower(device_name) text_pattern_ops, id);
+CREATE INDEX IF NOT EXISTS idx_peers_admin_assigned_ip
+    ON peers (assigned_ip text_pattern_ops, id);
+CREATE INDEX IF NOT EXISTS idx_peers_admin_last_handshake
+    ON peers (last_handshake DESC NULLS LAST, id DESC);
+CREATE INDEX IF NOT EXISTS idx_peers_admin_traffic
+    ON peers ((bytes_sent + bytes_received) DESC, id DESC);
 
 -- ============================================================
 -- Table: peer_operations
@@ -529,6 +558,12 @@ CREATE INDEX IF NOT EXISTS idx_mesh_networks_owner ON mesh_networks (owner_id);
 CREATE INDEX IF NOT EXISTS idx_mesh_networks_invite ON mesh_networks (invite_code);
 CREATE INDEX IF NOT EXISTS idx_mesh_networks_session ON mesh_networks (is_session) WHERE is_session = TRUE;
 CREATE INDEX IF NOT EXISTS idx_mesh_networks_public ON mesh_networks (is_public) WHERE is_public = TRUE;
+CREATE INDEX IF NOT EXISTS idx_mesh_networks_admin_state_created
+    ON mesh_networks (is_active, created_at DESC, id DESC) WHERE is_session = TRUE;
+CREATE INDEX IF NOT EXISTS idx_mesh_networks_admin_name
+    ON mesh_networks (lower(name) text_pattern_ops, id) WHERE is_session = TRUE;
+CREATE INDEX IF NOT EXISTS idx_mesh_networks_admin_country
+    ON mesh_networks (lower(country_code) text_pattern_ops, id) WHERE is_session = TRUE;
 
 -- ============================================================
 -- Table: mesh_members
@@ -599,6 +634,11 @@ CREATE TABLE IF NOT EXISTS trusted_extension_origins (
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE INDEX IF NOT EXISTS idx_extension_origins_admin_state_updated
+    ON trusted_extension_origins (revoked, updated_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_extension_origins_admin_origin
+    ON trusted_extension_origins (lower(origin) text_pattern_ops, id);
+
 -- ============================================================
 -- Table: audit_logs
 -- ============================================================
@@ -615,5 +655,9 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_admin_action_created
+    ON audit_logs (action, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_admin_action_search
+    ON audit_logs (lower(action) text_pattern_ops, id);
 
 COMMIT;

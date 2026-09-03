@@ -14,12 +14,21 @@ import (
 )
 
 func (h *Handler) AdminListTrustedExtensionOrigins(w http.ResponseWriter, r *http.Request) {
-	origins, err := h.trustedExtensionRepo.List(r.Context())
+	query, ok := requirePageQuery(w, r, pageQueryConfig{
+		DefaultSort: "updated_at",
+		Sorts:       []string{"updated_at", "created_at", "origin"},
+		Statuses:    []string{"all", "trusted", "revoked"},
+		AllowSearch: true,
+	})
+	if !ok {
+		return
+	}
+	origins, total, err := h.trustedExtensionRepo.ListAdminPage(r.Context(), query.ListOptions())
 	if err != nil {
 		respond.JsonError(w, "failed to list trusted extension origins", http.StatusInternalServerError)
 		return
 	}
-	respond.JsonOK(w, origins, http.StatusOK)
+	respond.JsonOK(w, newPageResponse(origins, query, total), http.StatusOK)
 }
 
 func (h *Handler) AdminUpdateTrustedExtensionOrigin(w http.ResponseWriter, r *http.Request) {

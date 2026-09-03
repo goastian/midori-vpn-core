@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -82,6 +83,52 @@ func (r *UserRepo) List(ctx context.Context, limit, offset int) ([]models.User, 
 		return nil, fmt.Errorf("list users rows: %w", err)
 	}
 	return users, nil
+}
+
+func (r *UserRepo) ListAdminPage(ctx context.Context, options ListOptions) ([]models.User, int, error) {
+	clauses := make([]string, 0, 2)
+	args := make([]any, 0, 2)
+	if options.Search != "" {
+		args = append(args, strings.ToLower(options.Search)+"%")
+		placeholder := fmt.Sprintf("$%d", len(args))
+		clauses = append(clauses, fmt.Sprintf(
+			"(lower(email) LIKE %s OR lower(display_name) LIKE %s OR lower(authentik_uid) LIKE %s)",
+			placeholder, placeholder, placeholder,
+		))
+	}
+	switch options.Status {
+	case "active":
+		clauses = append(clauses, "is_banned = FALSE")
+	case "banned":
+		clauses = append(clauses, "is_banned = TRUE")
+	}
+	where := listWhere(clauses)
+	direction := listDirection(options.Order)
+	orderBy := "created_at " + direction + ", id " + direction
+	switch options.Sort {
+	case "email":
+		orderBy = "lower(email) " + direction + ", id " + direction
+	case "display_name":
+		orderBy = "lower(display_name) " + direction + ", id " + direction
+	}
+	limitPlaceholder := fmt.Sprintf("$%d", len(args)+1)
+	offsetPlaceholder := fmt.Sprintf("$%d", len(args)+2)
+	countSQL := "SELECT COUNT(*) FROM users" + where
+	listSQL := "SELECT " + userColumns + " FROM users" + where +
+		" ORDER BY " + orderBy + " LIMIT " + limitPlaceholder + " OFFSET " + offsetPlaceholder
+
+	users, total, err := queryPage(ctx, r.pool, countSQL, listSQL, args, options.Limit, options.Offset,
+		func(rows pgx.Rows) (models.User, error) {
+			user, err := scanUser(rows)
+			if err != nil {
+				return models.User{}, fmt.Errorf("scan admin user: %w", err)
+			}
+			return *user, nil
+		})
+	if err != nil {
+		return nil, 0, fmt.Errorf("list admin users: %w", err)
+	}
+	return users, total, nil
 }
 
 func (r *UserRepo) Count(ctx context.Context) (int, error) {

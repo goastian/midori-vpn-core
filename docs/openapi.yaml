@@ -407,6 +407,9 @@ paths:
       - {$ref: '#/components/parameters/ID'}
       - {$ref: '#/components/parameters/Page'}
       - {$ref: '#/components/parameters/PageSize'}
+      - {name: status, in: query, schema: {type: string, enum: [all, active, inactive], default: all}}
+      - {name: sort, in: query, schema: {type: string, enum: [created_at, last_handshake, traffic], default: created_at}}
+      - {$ref: '#/components/parameters/Order'}
     get:
       operationId: listCurrentUserDeviceSessions
       tags: [Connections]
@@ -643,9 +646,15 @@ paths:
       operationId: listAdminUsers
       tags: [Administration]
       parameters:
-        - {$ref: '#/components/parameters/Limit'}
-        - {$ref: '#/components/parameters/Offset'}
-      responses: {'200': {$ref: '#/components/responses/OK'}}
+        - {$ref: '#/components/parameters/Page'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/Search'}
+        - {name: status, in: query, schema: {type: string, enum: [all, active, banned], default: all}}
+        - {name: sort, in: query, schema: {type: string, enum: [created_at, email, display_name], default: created_at}}
+        - {$ref: '#/components/parameters/Order'}
+      responses:
+        '200': {$ref: '#/components/responses/AdminUserPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
     post:
       operationId: createAdminUser
       tags: [Administration]
@@ -660,8 +669,16 @@ paths:
     get:
       operationId: getAdminUser
       tags: [Administration]
+      description: Returns the account and one server-paginated page of its session history.
+      parameters:
+        - {$ref: '#/components/parameters/Page'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/Search'}
+        - {name: status, in: query, schema: {type: string, enum: [all, active, inactive], default: all}}
+        - {name: sort, in: query, schema: {type: string, enum: [created_at, last_handshake, traffic], default: created_at}}
+        - {$ref: '#/components/parameters/Order'}
       responses:
-        '200': {$ref: '#/components/responses/OK'}
+        '200': {$ref: '#/components/responses/AdminUserDetail'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '404': {$ref: '#/components/responses/NotFound'}
     put:
@@ -706,7 +723,16 @@ paths:
     get:
       operationId: listAdminServers
       tags: [Administration, Servers]
-      responses: {'200': {$ref: '#/components/responses/OK'}}
+      parameters:
+        - {$ref: '#/components/parameters/Page'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/Search'}
+        - {name: status, in: query, schema: {type: string, enum: [all, active, inactive, draining], default: all}}
+        - {name: sort, in: query, schema: {type: string, enum: [name, created_at, current_peers], default: name}}
+        - {$ref: '#/components/parameters/Order'}
+      responses:
+        '200': {$ref: '#/components/responses/AdminServerPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
     post:
       operationId: createAdminServer
       tags: [Administration, Servers]
@@ -746,8 +772,16 @@ paths:
     get:
       operationId: listAdminNodeIdentities
       tags: [Administration, Node plane]
+      parameters:
+        - {$ref: '#/components/parameters/Page'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/Search'}
+        - {name: status, in: query, schema: {type: string, enum: [all, active, revoked], default: all}}
+        - {name: sort, in: query, schema: {type: string, enum: [node_id, source], default: node_id}}
+        - {$ref: '#/components/parameters/Order'}
       responses:
-        '200': {$ref: '#/components/responses/OK'}
+        '200': {$ref: '#/components/responses/AdminNodeIdentityPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
     post:
       operationId: registerAdminNodeIdentity
@@ -832,7 +866,16 @@ paths:
     get:
       operationId: listAdminPeers
       tags: [Administration, Connections]
-      responses: {'200': {$ref: '#/components/responses/OK'}}
+      parameters:
+        - {$ref: '#/components/parameters/Page'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/Search'}
+        - {name: status, in: query, schema: {type: string, enum: [all, active, inactive], default: all}}
+        - {name: sort, in: query, schema: {type: string, enum: [created_at, last_handshake, traffic], default: created_at}}
+        - {$ref: '#/components/parameters/Order'}
+      responses:
+        '200': {$ref: '#/components/responses/AdminPeerPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
   /api/v1/admin/peers/{id}:
     parameters:
       - {$ref: '#/components/parameters/ID'}
@@ -850,21 +893,45 @@ paths:
     get:
       operationId: listAdminMeshes
       tags: [Administration, Mesh]
-      responses: {'200': {$ref: '#/components/responses/OK'}}
+      parameters:
+        - {$ref: '#/components/parameters/Page'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/Search'}
+        - {name: status, in: query, schema: {type: string, enum: [all, active, inactive], default: all}}
+        - {name: sort, in: query, schema: {type: string, enum: [created_at, name, member_count], default: created_at}}
+        - {$ref: '#/components/parameters/Order'}
+      responses:
+        '200': {$ref: '#/components/responses/AdminMeshPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
   /api/v1/admin/audit-logs:
     get:
       operationId: listAdminAuditLogs
       tags: [Administration]
       parameters:
-        - {name: action, in: query, schema: {type: string}}
-        - {$ref: '#/components/parameters/Limit'}
-        - {$ref: '#/components/parameters/Offset'}
-      responses: {'200': {$ref: '#/components/responses/OK'}}
+        - {$ref: '#/components/parameters/Page'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/Search'}
+        - {name: status, in: query, schema: {type: string, enum: [all], default: all}}
+        - {name: sort, in: query, schema: {type: string, enum: [created_at, action], default: created_at}}
+        - {$ref: '#/components/parameters/Order'}
+        - {name: action, in: query, schema: {type: string, maxLength: 128}}
+      responses:
+        '200': {$ref: '#/components/responses/AdminAuditLogPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
   /api/v1/admin/trusted-extension-origins:
     get:
       operationId: listAdminTrustedExtensionOrigins
       tags: [Administration, OAuth]
-      responses: {'200': {$ref: '#/components/responses/OK'}}
+      parameters:
+        - {$ref: '#/components/parameters/Page'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/Search'}
+        - {name: status, in: query, schema: {type: string, enum: [all, trusted, revoked], default: all}}
+        - {name: sort, in: query, schema: {type: string, enum: [updated_at, created_at, origin], default: updated_at}}
+        - {$ref: '#/components/parameters/Order'}
+      responses:
+        '200': {$ref: '#/components/responses/AdminExtensionOriginPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
   /api/v1/admin/trusted-extension-origins/{id}:
     parameters:
       - {$ref: '#/components/parameters/ID'}
@@ -951,14 +1018,6 @@ components:
       required: true
       description: Operation that must still own the peer before it can be removed.
       schema: {type: string, format: uuid}
-    Limit:
-      name: limit
-      in: query
-      schema: {type: integer, minimum: 1, maximum: 200}
-    Offset:
-      name: offset
-      in: query
-      schema: {type: integer, minimum: 0}
     Page:
       name: page
       in: query
@@ -967,6 +1026,15 @@ components:
       name: page_size
       in: query
       schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+    Search:
+      name: search
+      in: query
+      description: Case-insensitive prefix search over the documented resource fields.
+      schema: {type: string, maxLength: 128}
+    Order:
+      name: order
+      in: query
+      schema: {type: string, enum: [asc, desc], default: desc}
   schemas:
     SuccessEnvelope:
       type: object
@@ -1219,6 +1287,184 @@ components:
         page: {type: integer, minimum: 1}
         page_size: {type: integer, minimum: 1, maximum: 100}
         total: {type: integer, minimum: 0}
+    AdminUser:
+      type: object
+      additionalProperties: false
+      required: [id, authentik_uid, email, display_name, groups, is_banned, created_at, updated_at]
+      properties:
+        id: {type: string, format: uuid}
+        authentik_uid: {type: string, minLength: 1}
+        email: {type: string, format: email}
+        display_name: {type: string}
+        groups: {type: array, items: {type: string}}
+        is_banned: {type: boolean}
+        banned_at: {type: string, format: date-time}
+        ban_reason: {type: string}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    AdminTransportCapability:
+      type: object
+      required: [protocol, host, port, enabled, priority, health_status, metadata]
+      properties:
+        protocol: {type: string, enum: [wireguard, wss, masque, openvpn, ikev2, proxy]}
+        host: {type: string}
+        port: {type: integer, minimum: 1, maximum: 65535}
+        enabled: {type: boolean}
+        priority: {type: integer, minimum: 0, maximum: 1000}
+        health_status: {type: string, enum: [unknown, healthy, degraded, disabled]}
+        last_checked_at: {type: [string, 'null'], format: date-time}
+        metadata: {type: object, additionalProperties: true}
+    AdminServer:
+      type: object
+      required: [id, name, host, endpoint, port, wg_port, public_key, location, country_code, max_peers, current_peers, is_active, supports_wireguard, supports_proxy, supports_mesh_exit, transports, created_at, updated_at]
+      properties:
+        id: {type: string, format: uuid}
+        node_id: {type: string, format: uuid}
+        name: {type: string}
+        host: {type: string}
+        endpoint: {type: string}
+        port: {type: integer, minimum: 1, maximum: 65535}
+        wg_port: {type: integer, minimum: 1, maximum: 65535}
+        public_key: {type: string}
+        location: {type: string}
+        country_code: {type: string}
+        max_peers: {type: integer, minimum: 1}
+        current_peers: {type: integer, minimum: 0}
+        is_active: {type: boolean}
+        draining_at: {type: string, format: date-time}
+        supports_wireguard: {type: boolean}
+        supports_proxy: {type: boolean}
+        supports_mesh_exit: {type: boolean}
+        transports: {type: array, items: {$ref: '#/components/schemas/AdminTransportCapability'}}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    AdminNodeIdentity:
+      type: object
+      additionalProperties: false
+      required: [node_id, public_key, revoked, source]
+      properties:
+        node_id: {type: string, minLength: 1}
+        public_key: {type: string}
+        revoked: {type: boolean}
+        source: {type: string}
+    AdminAuditLog:
+      type: object
+      additionalProperties: false
+      required: [id, action, metadata, ip_address, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        user_id: {type: string, format: uuid}
+        user_email: {type: string, format: email}
+        action: {type: string}
+        metadata: {type: object, additionalProperties: true}
+        ip_address: {type: string}
+        created_at: {type: string, format: date-time}
+    AdminMeshMember:
+      type: object
+      required: [mesh_ip, display_name, email, user_id, public_ip, connected, joined_at]
+      properties:
+        mesh_ip: {type: string}
+        display_name: {type: string}
+        email: {type: string, format: email}
+        user_id: {type: string, format: uuid}
+        public_ip: {type: string}
+        connected: {type: boolean}
+        joined_at: {type: string, format: date-time}
+    AdminMeshNetwork:
+      type: object
+      additionalProperties: false
+      required: [id, name, subnet, is_active, member_count, country_code, is_session, created_at, members]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        subnet: {type: string}
+        is_active: {type: boolean}
+        member_count: {type: integer, minimum: 0}
+        country_code: {type: string}
+        public_ip: {type: string}
+        is_session: {type: boolean}
+        created_at: {type: string, format: date-time}
+        members: {type: array, items: {$ref: '#/components/schemas/AdminMeshMember'}}
+    AdminExtensionOrigin:
+      type: object
+      additionalProperties: false
+      required: [id, origin, revoked, created_at, updated_at]
+      properties:
+        id: {type: string, format: uuid}
+        origin: {type: string}
+        revoked: {type: boolean}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    AdminUserPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, page_size, total]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/AdminUser'}}
+        page: {type: integer, minimum: 1}
+        page_size: {type: integer, minimum: 1, maximum: 100}
+        total: {type: integer, minimum: 0}
+    AdminServerPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, page_size, total]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/AdminServer'}}
+        page: {type: integer, minimum: 1}
+        page_size: {type: integer, minimum: 1, maximum: 100}
+        total: {type: integer, minimum: 0}
+    AdminNodeIdentityPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, page_size, total]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/AdminNodeIdentity'}}
+        page: {type: integer, minimum: 1}
+        page_size: {type: integer, minimum: 1, maximum: 100}
+        total: {type: integer, minimum: 0}
+    AdminPeerPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, page_size, total]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/ConnectionSummary'}}
+        page: {type: integer, minimum: 1}
+        page_size: {type: integer, minimum: 1, maximum: 100}
+        total: {type: integer, minimum: 0}
+    AdminAuditLogPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, page_size, total]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/AdminAuditLog'}}
+        page: {type: integer, minimum: 1}
+        page_size: {type: integer, minimum: 1, maximum: 100}
+        total: {type: integer, minimum: 0}
+    AdminMeshPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, page_size, total]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/AdminMeshNetwork'}}
+        page: {type: integer, minimum: 1}
+        page_size: {type: integer, minimum: 1, maximum: 100}
+        total: {type: integer, minimum: 0}
+    AdminExtensionOriginPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, page_size, total]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/AdminExtensionOrigin'}}
+        page: {type: integer, minimum: 1}
+        page_size: {type: integer, minimum: 1, maximum: 100}
+        total: {type: integer, minimum: 0}
+    AdminUserDetail:
+      type: object
+      additionalProperties: false
+      required: [user, peers]
+      properties:
+        user: {$ref: '#/components/schemas/AdminUser'}
+        peers: {$ref: '#/components/schemas/AdminPeerPage'}
     DeviceUpdateRequest:
       type: object
       additionalProperties: false
@@ -1816,6 +2062,70 @@ components:
       content:
         application/json:
           schema: {$ref: '#/components/schemas/DeviceSessionPageEnvelope'}
+    AdminUserPage:
+      description: Server-paginated administrator user list.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ok, data]
+            properties: {ok: {const: true}, data: {$ref: '#/components/schemas/AdminUserPage'}}
+    AdminUserDetail:
+      description: Administrator account detail with paginated session history.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ok, data]
+            properties: {ok: {const: true}, data: {$ref: '#/components/schemas/AdminUserDetail'}}
+    AdminServerPage:
+      description: Server-paginated administrator server list.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ok, data]
+            properties: {ok: {const: true}, data: {$ref: '#/components/schemas/AdminServerPage'}}
+    AdminNodeIdentityPage:
+      description: Deterministically paginated registered node identities.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ok, data]
+            properties: {ok: {const: true}, data: {$ref: '#/components/schemas/AdminNodeIdentityPage'}}
+    AdminPeerPage:
+      description: Server-paginated administrator connection history.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ok, data]
+            properties: {ok: {const: true}, data: {$ref: '#/components/schemas/AdminPeerPage'}}
+    AdminAuditLogPage:
+      description: Server-paginated immutable audit history.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ok, data]
+            properties: {ok: {const: true}, data: {$ref: '#/components/schemas/AdminAuditLogPage'}}
+    AdminMeshPage:
+      description: Server-paginated administrator mesh list.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ok, data]
+            properties: {ok: {const: true}, data: {$ref: '#/components/schemas/AdminMeshPage'}}
+    AdminExtensionOriginPage:
+      description: Server-paginated trusted browser-extension origin list.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ok, data]
+            properties: {ok: {const: true}, data: {$ref: '#/components/schemas/AdminExtensionOriginPage'}}
     ConnectionConfiguration:
       description: Sensitive connection configuration; clients must not persist it beyond tunnel setup.
       headers:

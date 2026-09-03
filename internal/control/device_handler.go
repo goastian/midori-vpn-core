@@ -6,7 +6,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -36,13 +35,6 @@ type deviceResponse struct {
 	RevokedAt        *time.Time               `json:"revoked_at"`
 	Status           string                   `json:"status"`
 	ActiveConnection *models.DeviceConnection `json:"active_connection"`
-}
-
-type deviceSessionPage struct {
-	Items    []models.DeviceConnection `json:"items"`
-	Page     int                       `json:"page"`
-	PageSize int                       `json:"page_size"`
-	Total    int                       `json:"total"`
 }
 
 type updateDeviceRequest struct {
@@ -169,18 +161,6 @@ func (h *Handler) UpdateMyDevice(w http.ResponseWriter, r *http.Request) {
 	respond.JsonOK(w, presentDevice(*device, active), http.StatusOK)
 }
 
-func devicePagination(r *http.Request) (int, int) {
-	page := 1
-	pageSize := 20
-	if value, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && value > 0 {
-		page = value
-	}
-	if value, err := strconv.Atoi(r.URL.Query().Get("page_size")); err == nil && value >= 1 && value <= 100 {
-		pageSize = value
-	}
-	return page, pageSize
-}
-
 func (h *Handler) ListMyDeviceSessions(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r)
 	deviceID, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -195,13 +175,19 @@ func (h *Handler) ListMyDeviceSessions(w http.ResponseWriter, r *http.Request) {
 		respond.SafeError(w, "failed to load device", err, http.StatusInternalServerError)
 		return
 	}
-	page, pageSize := devicePagination(r)
-	total, err := h.peerRepo.CountByDevice(r.Context(), user.ID, deviceID)
-	if err != nil {
-		respond.SafeError(w, "failed to count device sessions", err, http.StatusInternalServerError)
+	query, ok := requirePageQuery(w, r, pageQueryConfig{
+		DefaultSort: "created_at",
+		Sorts:       []string{"created_at", "last_handshake", "traffic"},
+		Statuses:    []string{"all", "active", "inactive"},
+	})
+	if !ok {
 		return
 	}
-	peers, err := h.peerRepo.ListByDevice(r.Context(), user.ID, deviceID, pageSize, (page-1)*pageSize)
+	peers, total, err := h.peerRepo.ListDevicePage(r.Context(), repo.DeviceSessionListOptions{
+		ListOptions: query.ListOptions(),
+		UserID:      user.ID,
+		DeviceID:    deviceID,
+	})
 	if err != nil {
 		respond.SafeError(w, "failed to list device sessions", err, http.StatusInternalServerError)
 		return
@@ -212,7 +198,7 @@ func (h *Handler) ListMyDeviceSessions(w http.ResponseWriter, r *http.Request) {
 			items = append(items, *session)
 		}
 	}
-	respond.JsonOK(w, deviceSessionPage{Items: items, Page: page, PageSize: pageSize, Total: total}, http.StatusOK)
+	respond.JsonOK(w, newPageResponse(items, query, total), http.StatusOK)
 }
 
 func (h *Handler) DeleteMyDevice(w http.ResponseWriter, r *http.Request) {
