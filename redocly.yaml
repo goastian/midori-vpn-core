@@ -1,0 +1,18 @@
+apis:
+  midorivpn@2.0.0:
+    root: docs/openapi.yaml
+
+extends:
+  - recommended-strict
+
+rules:
+  # MidoriVPN operations use stable operationId values as their concise names;
+  # longer prose is required only where the contract needs extra context.
+  operation-summary: off
+  # WebSocket handshakes correctly return 101 rather than a 2xx response. The
+  # router contract test enforces 2xx responses for every non-upgrade route.
+  operation-2xx-response: off
+  # Public probes and static PKI resources have no meaningful 4xx outcome. The
+  # router contract test enforces 401 on authenticated routes and 401/403 on
+  # every Control and administration route.
+  operation-4xx-response: off

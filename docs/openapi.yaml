@@ -8,24 +8,27 @@ info:
     administration API, PKI resources, tunnel upgrade, and Control WebSocket.
     Some operations are enabled only in the principal deployment profile or
     when their transport/PKI capability is configured.
+  license:
+    name: GNU Affero General Public License v3.0
+    identifier: AGPL-3.0-only
 servers:
   - url: /
     description: Same-origin API behind the deployment TLS reverse proxy.
 security:
   - BearerAuth: []
 tags:
-  - {name: Health}
-  - {name: Infrastructure}
-  - {name: Node plane}
-  - {name: OAuth}
-  - {name: PKI}
-  - {name: Profile}
-  - {name: Credentials}
-  - {name: Servers}
-  - {name: Connections}
-  - {name: Mesh}
-  - {name: Administration}
-  - {name: Realtime}
+  - {name: Health, description: 'Public liveness and readiness signals plus authenticated dependency health.'}
+  - {name: Infrastructure, description: 'Operational infrastructure observations exposed to authorized administrators.'}
+  - {name: Node plane, description: 'Signed Core-node enrollment, desired state, peer lifecycle, and statistics.'}
+  - {name: OAuth, description: 'Public OIDC discovery and browser or native-client token lifecycle operations.'}
+  - {name: PKI, description: 'Client-certificate enrollment, revocation, and public CA or CRL resources.'}
+  - {name: Profile, description: 'Authenticated user identity, quota, dashboard, and audit information.'}
+  - {name: Credentials, description: 'Short-lived scoped credentials for proxy and tunnel transports.'}
+  - {name: Servers, description: 'Available VPN servers and their observed reachability.'}
+  - {name: Connections, description: 'Persistent devices, active connections, session history, and tunnel upgrades.'}
+  - {name: Mesh, description: 'User mesh membership, node activation, invitations, and exit-node selection.'}
+  - {name: Administration, description: 'Privileged user, server, node, cluster, peer, mesh, and audit operations.'}
+  - {name: Realtime, description: 'WebSocket upgrades for live Control statistics and WSS tunnel traffic.'}
 
 paths:
   /health:
@@ -313,6 +316,7 @@ paths:
         '200': {$ref: '#/components/responses/ProxyCredential'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
@@ -326,6 +330,7 @@ paths:
         '200': {$ref: '#/components/responses/TunnelCredential'}
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
@@ -337,6 +342,8 @@ paths:
       tags: [Servers]
       responses:
         '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/control/servers/ping:
     get:
@@ -344,6 +351,8 @@ paths:
       tags: [Servers]
       responses:
         '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/control/certificates:
     get:
@@ -351,6 +360,8 @@ paths:
       tags: [PKI]
       responses:
         '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
     post:
       operationId: enrollDeviceCertificate
@@ -359,6 +370,8 @@ paths:
       responses:
         '201': {$ref: '#/components/responses/Created'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
@@ -371,6 +384,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
 
@@ -380,6 +395,8 @@ paths:
       tags: [Connections]
       responses:
         '200': {$ref: '#/components/responses/DeviceList'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/control/devices/{id}:
     parameters:
@@ -391,6 +408,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/Device'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
     delete:
@@ -400,6 +419,8 @@ paths:
         '200': {$ref: '#/components/responses/Device'}
         '202': {$ref: '#/components/responses/Accepted'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/control/devices/{id}/sessions:
@@ -416,6 +437,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/DeviceSessionPage'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
 
@@ -426,6 +449,8 @@ paths:
       description: Returns active sessions only; historical sessions are paginated under their device.
       responses:
         '200': {$ref: '#/components/responses/ConnectionList'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
     post:
       operationId: createConnection
@@ -435,6 +460,8 @@ paths:
         '200': {$ref: '#/components/responses/ConnectionConfiguration'}
         '201': {$ref: '#/components/responses/ConnectionConfiguration'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '429': {$ref: '#/components/responses/TooManyRequests'}
@@ -449,6 +476,7 @@ paths:
         '200': {$ref: '#/components/responses/OK'}
         '202': {$ref: '#/components/responses/Accepted'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
@@ -466,6 +494,7 @@ paths:
             Cache-Control: {schema: {type: string, const: no-store}}
           content: {text/plain: {schema: {type: string}}}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
   /api/v1/control/connections/{id}/qr:
@@ -481,6 +510,7 @@ paths:
             Cache-Control: {schema: {type: string, const: no-store}}
           content: {image/png: {schema: {type: string, contentEncoding: base64}}}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
@@ -490,6 +520,8 @@ paths:
       tags: [Profile]
       responses:
         '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
 
   /api/v1/control/mesh:
@@ -498,6 +530,8 @@ paths:
       tags: [Mesh]
       responses:
         '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
     post:
       operationId: createMesh
@@ -506,6 +540,8 @@ paths:
       responses:
         '201': {$ref: '#/components/responses/Created'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/control/mesh/join:
@@ -516,6 +552,8 @@ paths:
       responses:
         '201': {$ref: '#/components/responses/Created'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '410': {$ref: '#/components/responses/Gone'}
@@ -526,6 +564,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '201': {$ref: '#/components/responses/Created'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '422': {$ref: '#/components/responses/UnprocessableEntity'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
     delete:
@@ -533,6 +573,8 @@ paths:
       tags: [Mesh]
       responses:
         '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/control/mesh/node:
     get:
@@ -540,12 +582,16 @@ paths:
       tags: [Mesh]
       responses:
         '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
     post:
       operationId: activateMeshNode
       tags: [Mesh]
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '201': {$ref: '#/components/responses/Created'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '422': {$ref: '#/components/responses/UnprocessableEntity'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
     delete:
@@ -553,6 +599,8 @@ paths:
       tags: [Mesh]
       responses:
         '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/control/mesh/exit-nodes:
     get:
@@ -560,6 +608,8 @@ paths:
       tags: [Mesh]
       responses:
         '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/control/mesh/exit-node/register:
     post:
@@ -569,6 +619,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/control/mesh/exit-node/register/{meshID}:
     parameters:
@@ -580,6 +632,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/control/mesh/exit-node:
     put:
@@ -589,12 +643,16 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
     delete:
       operationId: clearMeshExitNode
       tags: [Mesh]
       responses:
         '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/control/mesh/{id}:
     parameters:
@@ -605,6 +663,7 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
     delete:
@@ -613,6 +672,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/control/mesh/{id}/invite:
@@ -625,6 +686,7 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
@@ -633,13 +695,18 @@ paths:
     get:
       operationId: getAdminDashboardStats
       tags: [Administration]
-      responses: {'200': {$ref: '#/components/responses/OK'}}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
   /api/v1/admin/health:
     get:
       operationId: getAdminDetailedHealth
       tags: [Administration, Health]
       responses:
         '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/admin/users:
     get:
@@ -655,6 +722,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/AdminUserPage'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
     post:
       operationId: createAdminUser
       tags: [Administration]
@@ -662,6 +731,8 @@ paths:
       responses:
         '201': {$ref: '#/components/responses/Created'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/admin/users/{id}:
     parameters:
@@ -680,6 +751,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/AdminUserDetail'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
     put:
       operationId: updateAdminUser
@@ -688,6 +761,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
     delete:
       operationId: deleteAdminUser
@@ -695,6 +770,7 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
@@ -710,6 +786,8 @@ paths:
         '200': {$ref: '#/components/responses/OK'}
         '202': {$ref: '#/components/responses/Accepted'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
     delete:
@@ -718,6 +796,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
   /api/v1/admin/servers:
     get:
@@ -733,6 +813,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/AdminServerPage'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
     post:
       operationId: createAdminServer
       tags: [Administration, Servers]
@@ -740,13 +822,18 @@ paths:
       responses:
         '201': {$ref: '#/components/responses/Created'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/admin/servers/ping:
     get:
       operationId: pingAdminServers
       tags: [Administration, Servers]
-      responses: {'200': {$ref: '#/components/responses/OK'}}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
   /api/v1/admin/servers/{id}:
     parameters:
       - {$ref: '#/components/parameters/ID'}
@@ -757,6 +844,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
     delete:
@@ -765,6 +854,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
@@ -782,6 +873,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/AdminNodeIdentityPage'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
     post:
       operationId: registerAdminNodeIdentity
@@ -790,6 +883,8 @@ paths:
       responses:
         '201': {$ref: '#/components/responses/Created'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/admin/node-identities/{nodeID}:
     parameters:
@@ -800,6 +895,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/admin/node-identities/{nodeID}/restore:
     parameters:
@@ -810,6 +907,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/admin/clusters:
     post:
@@ -819,6 +918,8 @@ paths:
       responses:
         '201': {$ref: '#/components/responses/Created'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
   /api/v1/admin/clusters/{clusterID}/nodes:
     parameters:
       - {$ref: '#/components/parameters/ClusterID'}
@@ -829,6 +930,8 @@ paths:
       responses:
         '201': {$ref: '#/components/responses/Created'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
   /api/v1/admin/nodes/{nodeID}/enrollment-token:
     parameters:
       - {$ref: '#/components/parameters/NodeID'}
@@ -839,6 +942,8 @@ paths:
       responses:
         '201': {$ref: '#/components/responses/NodeEnrollmentToken'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/admin/nodes/{nodeID}/revoke:
     parameters:
@@ -849,6 +954,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/admin/nodes/{nodeID}/desired-state:
     parameters:
@@ -860,6 +967,8 @@ paths:
       responses:
         '201': {$ref: '#/components/responses/SignedDesiredState'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/admin/peers:
@@ -876,6 +985,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/AdminPeerPage'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
   /api/v1/admin/peers/{id}:
     parameters:
       - {$ref: '#/components/parameters/ID'}
@@ -886,6 +997,8 @@ paths:
         '200': {$ref: '#/components/responses/OK'}
         '202': {$ref: '#/components/responses/Accepted'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
@@ -903,6 +1016,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/AdminMeshPage'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
   /api/v1/admin/audit-logs:
     get:
       operationId: listAdminAuditLogs
@@ -918,6 +1033,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/AdminAuditLogPage'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
   /api/v1/admin/trusted-extension-origins:
     get:
       operationId: listAdminTrustedExtensionOrigins
@@ -932,6 +1049,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/AdminExtensionOriginPage'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
   /api/v1/admin/trusted-extension-origins/{id}:
     parameters:
       - {$ref: '#/components/parameters/ID'}
@@ -942,6 +1061,8 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/OK'}
         '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/NotFound'}
         '500': {$ref: '#/components/responses/InternalError'}
 
@@ -1213,7 +1334,7 @@ components:
         - required: [device_name]
       properties:
         server_id: {type: string, format: uuid}
-        public_key: {type: string}
+        public_key: {$ref: '#/components/schemas/WireGuardKey'}
         device_name:
           type: string
           maxLength: 64
@@ -1492,6 +1613,25 @@ components:
       properties:
         ok: {const: true}
         data: {$ref: '#/components/schemas/DeviceSessionPage'}
+    DurableOperationStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [disconnect_pending, ban_cleanup_pending, device_cleanup_pending]
+        operation_id:
+          type: string
+          format: uuid
+          description: Present when the pending transition is backed by a durable peer operation.
+    DurableOperationStatusEnvelope:
+      type: object
+      additionalProperties: false
+      required: [ok, data]
+      properties:
+        ok: {const: true}
+        data: {$ref: '#/components/schemas/DurableOperationStatus'}
     ConnectionSummary:
       type: object
       description: A persisted connection summary. It never includes a preshared key.
@@ -1987,7 +2127,7 @@ components:
       description: Durable operation accepted and pending convergence.
       headers:
         Retry-After: {schema: {type: integer, minimum: 1}}
-      content: {application/json: {schema: {$ref: '#/components/schemas/SuccessEnvelope'}}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/DurableOperationStatusEnvelope'}}}
     NodePeerProvision:
       description: Peer provisioning result. HTTP 201 is new; HTTP 200 is an idempotent replay.
       content: {application/json: {schema: {$ref: '#/components/schemas/NodePeerProvisionEnvelope'}}}
@@ -2177,4 +2317,3 @@ components:
       content:
         application/json:
           schema: {$ref: '#/components/schemas/ErrorEnvelope'}
-    NotImplemented: {description: Registered operation is not implemented., content: {application/json: {schema: {$ref: '#/components/schemas/ErrorEnvelope'}}}}

@@ -55,6 +55,28 @@ func TestRouterMatchesOpenAPIContract(t *testing.T) {
 			operationID, ok := operation["operationId"].(string)
 			require.Truef(t, ok && operationID != "", "%s %s has no operationId", upperMethod, path)
 
+			responses, ok := operation["responses"].(map[string]any)
+			require.Truef(t, ok && len(responses) > 0, "%s %s has no responses", upperMethod, path)
+			if path == "/api/v1/tunnel/ws" || path == "/ws" {
+				require.Containsf(t, responses, "101", "%s %s must document its protocol switch", upperMethod, path)
+			} else {
+				require.Truef(t, hasResponseClass(responses, '2'), "%s %s has no successful 2xx response", upperMethod, path)
+			}
+
+			if operationUsesAuthentication(operation) {
+				if _, documented := responses["401"]; !documented {
+					t.Errorf("%s %s does not document authentication failure", upperMethod, path)
+				}
+			}
+			if strings.HasPrefix(path, "/api/v1/control/") || strings.HasPrefix(path, "/api/v1/admin/") {
+				if _, documented := responses["401"]; !documented {
+					t.Errorf("%s %s does not document JWT authentication failure", upperMethod, path)
+				}
+				if _, documented := responses["403"]; !documented {
+					t.Errorf("%s %s does not document authorization failure", upperMethod, path)
+				}
+			}
+
 			key := upperMethod + " " + path
 			require.Emptyf(t, specOperations[key], "duplicate OpenAPI operation %s", key)
 			require.Emptyf(t, operationIDs[operationID], "operationId %q is shared by %s and %s", operationID, operationIDs[operationID], key)
@@ -94,6 +116,24 @@ func TestRouterMatchesOpenAPIContract(t *testing.T) {
 	require.Empty(t, operationDifference(routerOperations, specOperations), "router operations missing from OpenAPI")
 	require.Empty(t, operationDifference(specOperations, routerOperations), "OpenAPI operations missing from router")
 	require.NotEmpty(t, routerOperations)
+}
+
+func hasResponseClass(responses map[string]any, class byte) bool {
+	for status := range responses {
+		if len(status) == 3 && status[0] == class {
+			return true
+		}
+	}
+	return false
+}
+
+func operationUsesAuthentication(operation map[string]any) bool {
+	security, overridden := operation["security"]
+	if !overridden {
+		return true // The document-level BearerAuth requirement applies.
+	}
+	securityRequirements, ok := security.([]any)
+	return !ok || len(securityRequirements) > 0
 }
 
 func operationDifference[T, U any](left map[string]T, right map[string]U) []string {
