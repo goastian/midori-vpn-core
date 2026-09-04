@@ -238,6 +238,53 @@ func recordFleetAuthenticationFailure(err error) {
 	telemetry.RecordNodeAuthFailure(reason)
 }
 
+var multiclusterStates = []string{
+	"all", "enrolling", "inactive", "active", "draining", "revoked", "retired",
+}
+
+func (h *Handler) AdminListClusters(w http.ResponseWriter, r *http.Request) {
+	query, ok := requirePageQuery(w, r, pageQueryConfig{
+		DefaultSort: "name",
+		Sorts:       []string{"name", "region", "node_count", "created_at"},
+		Statuses:    multiclusterStates,
+		AllowSearch: true,
+	})
+	if !ok {
+		return
+	}
+	clusters, total, err := h.multiclusterRepo.ListAdminClusters(r.Context(), query.ListOptions())
+	if err != nil {
+		slog.Error("admin list clusters error", "error", err)
+		respond.JsonError(w, "failed to list clusters", http.StatusInternalServerError)
+		return
+	}
+	respond.JsonOK(w, newPageResponse(clusters, query, total), http.StatusOK)
+}
+
+func (h *Handler) AdminListCoreNodes(w http.ResponseWriter, r *http.Request) {
+	clusterID, err := uuid.Parse(chi.URLParam(r, "clusterID"))
+	if err != nil || clusterID == uuid.Nil {
+		respond.JsonError(w, "invalid cluster ID", http.StatusBadRequest)
+		return
+	}
+	query, ok := requirePageQuery(w, r, pageQueryConfig{
+		DefaultSort: "name",
+		Sorts:       []string{"name", "created_at", "last_seen_at", "core_version"},
+		Statuses:    multiclusterStates,
+		AllowSearch: true,
+	})
+	if !ok {
+		return
+	}
+	nodes, total, err := h.multiclusterRepo.ListAdminNodes(r.Context(), clusterID, query.ListOptions())
+	if err != nil {
+		slog.Error("admin list Core nodes error", "cluster_id", clusterID, "error", err)
+		respond.JsonError(w, "failed to list Core nodes", http.StatusInternalServerError)
+		return
+	}
+	respond.JsonOK(w, newPageResponse(nodes, query, total), http.StatusOK)
+}
+
 func (h *Handler) AdminCreateCluster(w http.ResponseWriter, r *http.Request) {
 	var request struct {
 		Name         string            `json:"name"`
@@ -281,6 +328,10 @@ func (h *Handler) AdminCreateCoreNode(w http.ResponseWriter, r *http.Request) {
 		State: models.ClusterStateEnrolling,
 	}
 	if err := h.multiclusterRepo.CreateNode(r.Context(), node); err != nil {
+		if errors.Is(err, repo.ErrClusterUnavailable) {
+			respond.JsonErrorCode(w, "cluster cannot accept Core nodes", "cluster_unavailable", http.StatusConflict)
+			return
+		}
 		respond.JsonError(w, "failed to create Core node", http.StatusBadRequest)
 		return
 	}

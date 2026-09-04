@@ -35,6 +35,7 @@ var (
 	ErrNodeIdentityUnavailable = errors.New("core node identity is unavailable")
 	ErrNodeIdentityConflict    = errors.New("core node identity is already assigned")
 	ErrNodeRevoked             = errors.New("core node or cluster is revoked")
+	ErrClusterUnavailable      = errors.New("cluster cannot accept Core nodes")
 	ErrDesiredRevisionConflict = errors.New("desired state revision conflicts with the current sequence")
 )
 
@@ -89,16 +90,206 @@ func (r *MulticlusterRepo) GetCluster(ctx context.Context, id uuid.UUID) (*model
 	return &cluster, nil
 }
 
+func (r *MulticlusterRepo) ListAdminClusters(ctx context.Context, options ListOptions) ([]models.AdminClusterSummary, int, error) {
+	clauses := make([]string, 0, 2)
+	args := make([]any, 0, 2)
+	if options.Search != "" {
+		args = append(args, strings.ToLower(options.Search)+"%")
+		placeholder := fmt.Sprintf("$%d", len(args))
+		clauses = append(clauses, fmt.Sprintf(
+			"(lower(cluster.name) LIKE %s OR lower(cluster.region) LIKE %s)", placeholder, placeholder,
+		))
+	}
+	if options.Status != "all" {
+		args = append(args, options.Status)
+		clauses = append(clauses, fmt.Sprintf("cluster.state = $%d", len(args)))
+	}
+	where := listWhere(clauses)
+	direction := listDirection(options.Order)
+	orderBy := "lower(cluster.name) " + direction + ", cluster.id " + direction
+	switch options.Sort {
+	case "created_at":
+		orderBy = "cluster.created_at " + direction + ", cluster.id " + direction
+	case "region":
+		orderBy = "lower(cluster.region) " + direction + ", cluster.id " + direction
+	case "node_count":
+		orderBy = "node_count " + direction + ", cluster.id " + direction
+	}
+	limitPlaceholder := fmt.Sprintf("$%d", len(args)+1)
+	offsetPlaceholder := fmt.Sprintf("$%d", len(args)+2)
+	countSQL := "SELECT COUNT(*) FROM clusters cluster" + where
+	listSQL := `
+		SELECT cluster.id, cluster.name, cluster.region, cluster.state,
+		       cluster.policy_labels, cluster.is_principal,
+		       COUNT(node.id)::INTEGER AS node_count,
+		       COUNT(node.id) FILTER (WHERE node.state = 'active')::INTEGER AS active_node_count,
+		       COUNT(node.id) FILTER (
+		           WHERE node.state = 'active'
+		             AND observation.health_status = 'healthy'
+		             AND observation.version_compatible = TRUE
+		             AND observation.received_at >= CURRENT_TIMESTAMP - INTERVAL '90 seconds'
+		       )::INTEGER AS healthy_node_count,
+		       cluster.created_at, cluster.updated_at
+		FROM clusters cluster
+		LEFT JOIN core_nodes node ON node.cluster_id = cluster.id
+		LEFT JOIN LATERAL (
+			SELECT health_status, version_compatible, received_at
+			FROM node_observations
+			WHERE node_id = node.id
+			ORDER BY received_at DESC, id DESC LIMIT 1
+		) observation ON TRUE` + where + `
+		GROUP BY cluster.id
+		ORDER BY ` + orderBy + ` LIMIT ` + limitPlaceholder + ` OFFSET ` + offsetPlaceholder
+	items, total, err := queryPage(ctx, r.pool, countSQL, listSQL, args, options.Limit, options.Offset,
+		func(rows pgx.Rows) (models.AdminClusterSummary, error) {
+			var item models.AdminClusterSummary
+			var labels []byte
+			if err := rows.Scan(
+				&item.ID, &item.Name, &item.Region, &item.State, &labels, &item.IsPrincipal,
+				&item.NodeCount, &item.ActiveNodeCount, &item.HealthyNodeCount,
+				&item.CreatedAt, &item.UpdatedAt,
+			); err != nil {
+				return item, fmt.Errorf("scan admin cluster: %w", err)
+			}
+			if err := json.Unmarshal(labels, &item.PolicyLabels); err != nil {
+				return item, fmt.Errorf("decode admin cluster policy labels: %w", err)
+			}
+			return item, nil
+		})
+	if err != nil {
+		return nil, 0, fmt.Errorf("list admin clusters: %w", err)
+	}
+	return items, total, nil
+}
+
+func (r *MulticlusterRepo) ListAdminNodes(ctx context.Context, clusterID uuid.UUID, options ListOptions) ([]models.AdminCoreNodeSummary, int, error) {
+	clauses := []string{"node.cluster_id = $1"}
+	args := []any{clusterID}
+	if options.Search != "" {
+		args = append(args, strings.ToLower(options.Search)+"%")
+		placeholder := fmt.Sprintf("$%d", len(args))
+		clauses = append(clauses, fmt.Sprintf(
+			"(lower(node.name) LIKE %s OR lower(node.management_host) LIKE %s OR lower(node.core_version) LIKE %s)",
+			placeholder, placeholder, placeholder,
+		))
+	}
+	if options.Status != "all" {
+		args = append(args, options.Status)
+		clauses = append(clauses, fmt.Sprintf("node.state = $%d", len(args)))
+	}
+	where := listWhere(clauses)
+	direction := listDirection(options.Order)
+	orderBy := "lower(node.name) " + direction + ", node.id " + direction
+	switch options.Sort {
+	case "created_at":
+		orderBy = "node.created_at " + direction + ", node.id " + direction
+	case "last_seen_at":
+		orderBy = "node.last_seen_at " + direction + " NULLS LAST, node.id " + direction
+	case "core_version":
+		orderBy = "lower(node.core_version) " + direction + ", node.id " + direction
+	}
+	limitPlaceholder := fmt.Sprintf("$%d", len(args)+1)
+	offsetPlaceholder := fmt.Sprintf("$%d", len(args)+2)
+	countSQL := "SELECT COUNT(*) FROM core_nodes node" + where
+	listSQL := `
+		SELECT node.id, node.cluster_id, node.name, node.management_host, node.state,
+		       node.core_version, node.identity_public_key IS NOT NULL, node.enrolled_at,
+		       node.last_seen_at, desired.revision, desired.expires_at,
+		       COALESCE(desired.minimum_core_version, ''), observation.applied_revision,
+		       COALESCE(observation.health_status, ''), observation.version_compatible,
+		       observation.current_peers, observation.max_peers,
+		       COALESCE(observation.transport_states, '{}'::jsonb),
+		       COALESCE(observation.last_error_code, ''), observation.received_at,
+		       server.id, COALESCE(server.name, ''), readiness.reason = 'ready', readiness.reason,
+		       node.created_at, node.updated_at
+		FROM core_nodes node
+		JOIN clusters cluster ON cluster.id = node.cluster_id
+		LEFT JOIN LATERAL (
+			SELECT revision, expires_at, minimum_core_version
+			FROM desired_revisions
+			WHERE node_id = node.id
+			ORDER BY revision DESC LIMIT 1
+		) desired ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT applied_revision, core_version, health_status, version_compatible,
+			       current_peers, max_peers, transport_states, last_error_code, received_at
+			FROM node_observations
+			WHERE node_id = node.id
+			ORDER BY received_at DESC, id DESC LIMIT 1
+		) observation ON TRUE
+		LEFT JOIN vpn_servers server ON server.node_id = node.id
+		CROSS JOIN LATERAL (
+			SELECT CASE
+				WHEN cluster.state <> 'active' THEN 'cluster_not_active'
+				WHEN node.state <> 'active' THEN 'node_not_active'
+				WHEN node.identity_public_key IS NULL THEN 'identity_not_enrolled'
+				WHEN server.id IS NULL THEN 'server_unbound'
+				WHEN server.is_active = FALSE THEN 'server_inactive'
+				WHEN desired.revision IS NULL THEN 'desired_missing'
+				WHEN desired.expires_at <= CURRENT_TIMESTAMP THEN 'desired_expired'
+				WHEN observation.received_at IS NULL THEN 'observation_missing'
+				WHEN observation.received_at < CURRENT_TIMESTAMP - INTERVAL '90 seconds' THEN 'heartbeat_stale'
+				WHEN observation.health_status <> 'healthy' THEN 'health_unavailable'
+				WHEN observation.version_compatible = FALSE THEN 'version_incompatible'
+				WHEN observation.core_version <> node.core_version THEN 'version_drift'
+				WHEN observation.applied_revision IS DISTINCT FROM desired.revision THEN 'revision_drift'
+				WHEN observation.current_peers >= observation.max_peers OR server.current_peers >= server.max_peers THEN 'capacity_full'
+				WHEN NOT EXISTS (
+					SELECT 1 FROM vpn_server_transports transport
+					WHERE transport.server_id = server.id
+					  AND transport.enabled = TRUE
+					  AND transport.health_status = 'healthy'
+					  AND transport.last_checked_at >= CURRENT_TIMESTAMP - INTERVAL '90 seconds'
+					  AND observation.transport_states @> jsonb_build_object(
+						transport.protocol, jsonb_build_object('status', 'healthy', 'certified', TRUE)
+					  )
+				) THEN 'transport_unavailable'
+				ELSE 'ready'
+			END AS reason
+		) readiness` + where + `
+		ORDER BY ` + orderBy + ` LIMIT ` + limitPlaceholder + ` OFFSET ` + offsetPlaceholder
+	items, total, err := queryPage(ctx, r.pool, countSQL, listSQL, args, options.Limit, options.Offset,
+		func(rows pgx.Rows) (models.AdminCoreNodeSummary, error) {
+			var item models.AdminCoreNodeSummary
+			var transports []byte
+			if err := rows.Scan(
+				&item.ID, &item.ClusterID, &item.Name, &item.ManagementHost, &item.State,
+				&item.CoreVersion, &item.Enrolled, &item.EnrolledAt, &item.LastSeenAt,
+				&item.DesiredRevision, &item.DesiredExpiresAt, &item.MinimumCoreVersion,
+				&item.AppliedRevision, &item.HealthStatus, &item.VersionCompatible,
+				&item.CurrentPeers, &item.MaxPeers, &transports, &item.LastErrorCode,
+				&item.ObservedAt, &item.ServerID, &item.ServerName, &item.PlacementReady,
+				&item.PlacementReason, &item.CreatedAt, &item.UpdatedAt,
+			); err != nil {
+				return item, fmt.Errorf("scan admin Core node: %w", err)
+			}
+			if err := json.Unmarshal(transports, &item.TransportStates); err != nil {
+				return item, fmt.Errorf("decode admin Core node transports: %w", err)
+			}
+			return item, nil
+		})
+	if err != nil {
+		return nil, 0, fmt.Errorf("list admin Core nodes: %w", err)
+	}
+	return items, total, nil
+}
+
 func (r *MulticlusterRepo) CreateNode(ctx context.Context, node *models.CoreNode) error {
 	if node == nil || !node.State.Valid() {
 		return errors.New("valid node state is required")
 	}
-	return r.pool.QueryRow(ctx, `
+	err := r.pool.QueryRow(ctx, `
 		INSERT INTO core_nodes (cluster_id, name, management_host, state, core_version)
-		VALUES ($1, $2, $3, $4, $5)
+		SELECT cluster.id, $2, $3, $4, $5
+		FROM clusters cluster
+		WHERE cluster.id = $1 AND cluster.state NOT IN ('revoked', 'retired')
 		RETURNING id, last_seen_at, created_at, updated_at`,
 		node.ClusterID, node.Name, node.ManagementHost, node.State, node.CoreVersion,
 	).Scan(&node.ID, &node.LastSeenAt, &node.CreatedAt, &node.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrClusterUnavailable
+	}
+	return err
 }
 
 // IssueEnrollmentToken returns the only plaintext copy of a bounded one-use

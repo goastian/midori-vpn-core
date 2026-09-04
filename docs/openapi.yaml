@@ -911,6 +911,22 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '503': {$ref: '#/components/responses/ServiceUnavailable'}
   /api/v1/admin/clusters:
+    get:
+      operationId: listAdminClusters
+      tags: [Administration, Node plane]
+      parameters:
+        - {$ref: '#/components/parameters/Page'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/Search'}
+        - {name: status, in: query, schema: {type: string, enum: [all, enrolling, inactive, active, draining, revoked, retired], default: all}}
+        - {name: sort, in: query, schema: {type: string, enum: [name, region, node_count, created_at], default: name}}
+        - {$ref: '#/components/parameters/Order'}
+      responses:
+        '200': {$ref: '#/components/responses/AdminClusterPage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
     post:
       operationId: createAdminCluster
       tags: [Administration, Node plane]
@@ -923,6 +939,22 @@ paths:
   /api/v1/admin/clusters/{clusterID}/nodes:
     parameters:
       - {$ref: '#/components/parameters/ClusterID'}
+    get:
+      operationId: listAdminCoreNodes
+      tags: [Administration, Node plane]
+      parameters:
+        - {$ref: '#/components/parameters/Page'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/Search'}
+        - {name: status, in: query, schema: {type: string, enum: [all, enrolling, inactive, active, draining, revoked, retired], default: all}}
+        - {name: sort, in: query, schema: {type: string, enum: [name, created_at, last_seen_at, core_version], default: name}}
+        - {$ref: '#/components/parameters/Order'}
+      responses:
+        '200': {$ref: '#/components/responses/AdminCoreNodePage'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
     post:
       operationId: createAdminCoreNode
       tags: [Administration, Node plane]
@@ -932,6 +964,7 @@ paths:
         '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/admin/nodes/{nodeID}/enrollment-token:
     parameters:
       - {$ref: '#/components/parameters/NodeID'}
@@ -1531,6 +1564,86 @@ components:
       required: [items, page, page_size, total]
       properties:
         items: {type: array, items: {$ref: '#/components/schemas/AdminServer'}}
+        page: {type: integer, minimum: 1}
+        page_size: {type: integer, minimum: 1, maximum: 100}
+        total: {type: integer, minimum: 0}
+    ClusterState:
+      type: string
+      enum: [enrolling, inactive, active, draining, revoked, retired]
+    AdminCluster:
+      type: object
+      additionalProperties: false
+      required: [id, name, region, state, policy_labels, is_principal, node_count, active_node_count, healthy_node_count, created_at, updated_at]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string, minLength: 1, maxLength: 64}
+        region: {type: string, minLength: 1, maxLength: 64}
+        state: {$ref: '#/components/schemas/ClusterState'}
+        policy_labels: {type: object, additionalProperties: {type: string}}
+        is_principal: {type: boolean}
+        node_count: {type: integer, minimum: 0}
+        active_node_count: {type: integer, minimum: 0}
+        healthy_node_count: {type: integer, minimum: 0}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    AdminClusterPage:
+      type: object
+      additionalProperties: false
+      required: [items, page, page_size, total]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/AdminCluster'}}
+        page: {type: integer, minimum: 1}
+        page_size: {type: integer, minimum: 1, maximum: 100}
+        total: {type: integer, minimum: 0}
+    AdminNodeTransportState:
+      type: object
+      additionalProperties: false
+      required: [status, certified]
+      properties:
+        status: {type: string, enum: [unknown, healthy, degraded, error, disabled]}
+        certified: {type: boolean}
+    AdminCoreNode:
+      type: object
+      additionalProperties: false
+      required: [id, cluster_id, name, management_host, state, core_version, enrolled, enrolled_at, last_seen_at, desired_revision, desired_expires_at, minimum_core_version, applied_revision, health_status, version_compatible, current_peers, max_peers, transport_states, last_error_code, observed_at, server_id, server_name, placement_ready, placement_reason, created_at, updated_at]
+      properties:
+        id: {type: string, format: uuid}
+        cluster_id: {type: string, format: uuid}
+        name: {type: string}
+        management_host: {type: string}
+        state: {$ref: '#/components/schemas/ClusterState'}
+        core_version: {type: string}
+        enrolled: {type: boolean}
+        enrolled_at: {type: [string, 'null'], format: date-time}
+        last_seen_at: {type: [string, 'null'], format: date-time}
+        desired_revision: {type: [integer, 'null'], format: int64, minimum: 1}
+        desired_expires_at: {type: [string, 'null'], format: date-time}
+        minimum_core_version: {type: string}
+        applied_revision: {type: [integer, 'null'], format: int64, minimum: 1}
+        health_status: {type: string, enum: ['', unknown, healthy, degraded, error]}
+        version_compatible: {type: [boolean, 'null']}
+        current_peers: {type: [integer, 'null'], minimum: 0}
+        max_peers: {type: [integer, 'null'], minimum: 0}
+        transport_states:
+          type: object
+          maxProperties: 6
+          additionalProperties: {$ref: '#/components/schemas/AdminNodeTransportState'}
+        last_error_code: {type: string, pattern: '^$|^[a-z0-9_]{1,64}$'}
+        observed_at: {type: [string, 'null'], format: date-time}
+        server_id: {type: [string, 'null'], format: uuid}
+        server_name: {type: string}
+        placement_ready: {type: boolean}
+        placement_reason:
+          type: string
+          enum: [ready, cluster_not_active, node_not_active, identity_not_enrolled, server_unbound, server_inactive, desired_missing, desired_expired, observation_missing, heartbeat_stale, health_unavailable, version_incompatible, version_drift, revision_drift, capacity_full, transport_unavailable]
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    AdminCoreNodePage:
+      type: object
+      additionalProperties: false
+      required: [items, page, page_size, total]
+      properties:
+        items: {type: array, items: {$ref: '#/components/schemas/AdminCoreNode'}}
         page: {type: integer, minimum: 1}
         page_size: {type: integer, minimum: 1, maximum: 100}
         total: {type: integer, minimum: 0}
@@ -2226,6 +2339,22 @@ components:
             type: object
             required: [ok, data]
             properties: {ok: {const: true}, data: {$ref: '#/components/schemas/AdminServerPage'}}
+    AdminClusterPage:
+      description: Paginated non-sensitive cluster inventory with node health totals.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ok, data]
+            properties: {ok: {const: true}, data: {$ref: '#/components/schemas/AdminClusterPage'}}
+    AdminCoreNodePage:
+      description: Paginated non-sensitive Core-node inventory with latest desired and observed state.
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [ok, data]
+            properties: {ok: {const: true}, data: {$ref: '#/components/schemas/AdminCoreNodePage'}}
     AdminNodeIdentityPage:
       description: Deterministically paginated registered node identities.
       content:
