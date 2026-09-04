@@ -183,6 +183,40 @@ restored_probe="$(podman exec -e PGPASSWORD="$admin_password" "$postgres_contain
   psql -U "$admin_user" -d "$restore_database" -Atc 'SELECT count(*) FROM pgbouncer_probe')"
 [[ "$restored_probe" == 1 ]] || die "encrypted backup restore did not preserve probe data"
 
+podman run --rm --network "$network" \
+  -e PGPASSWORD="$migrator_password" "$POSTGRES_IMAGE" \
+  psql -h "$postgres_ip" -U "$migrator_user" -d "$database_name" -v ON_ERROR_STOP=1 -c "
+    INSERT INTO users (id, authentik_uid, email, display_name)
+    VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'db02-plan-user', 'plan@example.invalid', 'DB02 Plan');
+    INSERT INTO vpn_servers (id, name, host, legacy_node_unbound)
+    SELECT md5('server-' || value)::uuid, 'plan-' || value, 'plan-' || value || '.invalid', TRUE
+    FROM generate_series(1, 100) value;
+    INSERT INTO devices (id, user_id, client_instance_id, reported_name, device_type, first_seen_at, last_seen_at)
+    SELECT md5('device-' || value)::uuid,
+           'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+           md5('instance-' || value)::uuid,
+           'plan-' || value, 'desktop',
+           NOW() - make_interval(secs => value),
+           NOW() - make_interval(secs => value)
+    FROM generate_series(1, 10000) value;
+    INSERT INTO peers (
+      user_id, server_id, public_key, assigned_ip, is_active,
+      device_name, device_id, created_at
+    )
+    SELECT 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+           md5('server-' || ((value % 100) + 1))::uuid,
+           'plan-peer-' || value,
+           '10.200.' || value || '/32', FALSE,
+           'plan-' || ((value % 100) + 1),
+           md5('device-' || ((value % 100) + 1))::uuid,
+           NOW() - make_interval(secs => value)
+    FROM generate_series(1, 20000) value;
+    ANALYZE users;
+    ANALYZE vpn_servers;
+    ANALYZE devices;
+    ANALYZE peers;
+  " >/dev/null
+
 podman run -d --name "$pooler_container" --network "$network" \
   --read-only --cap-drop=ALL --security-opt no-new-privileges \
   --tmpfs /run/pgbouncer:rw,noexec,nosuid,nodev,size=4m,mode=1733 \
@@ -229,6 +263,46 @@ grep -q '^max_client_conn|200|' <<<"$pooler_config" || die "client ceiling does 
 grep -q '^default_pool_size|16|' <<<"$pooler_config" || die "default pool does not match the measured envelope"
 grep -q '^max_db_connections|24|' <<<"$pooler_config" || die "database ceiling does not match the measured envelope"
 podman top "$pooler_container" user comm | grep -Eq '^pgbouncer[[:space:]]+pgbouncer$' || die "PgBouncer is not running as its dedicated user"
+
+device_list_plan="$(podman run --rm --network "$network" \
+  -e PGPASSWORD="$runtime_password" "$POSTGRES_IMAGE" \
+  psql -h "$pooler_ip" -p 6432 -U "$runtime_user" -d "$database_name" -At -v ON_ERROR_STOP=1 -c "
+    EXPLAIN (ANALYZE, BUFFERS, WAL, SETTINGS)
+    SELECT id FROM devices
+    WHERE user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' AND revoked_at IS NULL
+    ORDER BY last_seen_at DESC LIMIT 50")"
+grep -q 'idx_devices_user_last_seen' <<<"$device_list_plan" || die "device list plan did not use its bounded ordering index"
+
+device_sessions_plan="$(podman run --rm --network "$network" \
+  -e PGPASSWORD="$runtime_password" "$POSTGRES_IMAGE" \
+  psql -h "$pooler_ip" -p 6432 -U "$runtime_user" -d "$database_name" -At -v ON_ERROR_STOP=1 -c "
+    EXPLAIN (ANALYZE, BUFFERS, WAL, SETTINGS)
+    SELECT id FROM peers
+    WHERE user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+      AND device_id = md5('device-1')::uuid
+    ORDER BY created_at DESC, id DESC LIMIT 50")"
+grep -q 'idx_peers_device_created' <<<"$device_sessions_plan" || die "device session plan did not use its history index"
+
+recent_sessions_plan="$(podman run --rm --network "$network" \
+  -e PGPASSWORD="$runtime_password" "$POSTGRES_IMAGE" \
+  psql -h "$pooler_ip" -p 6432 -U "$runtime_user" -d "$database_name" -At -v ON_ERROR_STOP=1 -c "
+    EXPLAIN (ANALYZE, BUFFERS, WAL, SETTINGS)
+    SELECT id FROM peers
+    WHERE user_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    ORDER BY created_at DESC, id DESC LIMIT 10")"
+grep -q 'idx_peers_user_created' <<<"$recent_sessions_plan" || die "recent session plan did not use its dashboard index"
+
+server_history_plan="$(podman run --rm --network "$network" \
+  -e PGPASSWORD="$runtime_password" "$POSTGRES_IMAGE" \
+  psql -h "$pooler_ip" -p 6432 -U "$runtime_user" -d "$database_name" -At -v ON_ERROR_STOP=1 -c "
+    EXPLAIN (ANALYZE, BUFFERS, WAL, SETTINGS)
+    SELECT id FROM peers
+    WHERE server_id = md5('server-1')::uuid
+    ORDER BY created_at DESC")"
+grep -q 'idx_peers_server_fk' <<<"$server_history_plan" || die "server history plan did not use the full foreign-key index"
+printf '%s\n%s\n%s\n%s\n' \
+  "$device_list_plan" "$device_sessions_plan" "$recent_sessions_plan" "$server_history_plan" \
+  > "$work_dir/query-plans.txt"
 
 podman exec -e PGPASSWORD="$runtime_password" "$postgres_container" sh -ceu '
   pids=""
