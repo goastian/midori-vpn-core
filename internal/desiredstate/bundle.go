@@ -440,6 +440,24 @@ func ParseSecretFingerprints(encoded string) (map[string]string, error) {
 	return result, nil
 }
 
+// ParseExternalTransports returns host gateways that belong to the logical
+// Core node but run outside the Core process. In-process transports remain
+// derived from their concrete runtime switches.
+func ParseExternalTransports(encoded string) (map[string]bool, error) {
+	result := make(map[string]bool)
+	for _, entry := range strings.Split(encoded, ",") {
+		protocol := strings.TrimSpace(entry)
+		if protocol == "" {
+			continue
+		}
+		if protocol != strings.ToLower(protocol) || (protocol != "openvpn" && protocol != "ikev2") || result[protocol] {
+			return nil, errors.New("external transports must contain unique lowercase openvpn or ikev2 values")
+		}
+		result[protocol] = true
+	}
+	return result, nil
+}
+
 func parseStableVersion(value string) ([3]uint64, error) {
 	var parsed [3]uint64
 	parts := strings.Split(value, ".")

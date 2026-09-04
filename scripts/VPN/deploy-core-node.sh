@@ -63,6 +63,20 @@ validate_secret_fingerprints() {
   done
 }
 
+validate_external_transports() {
+  local entry
+  local seen=","
+  local -a entries
+  [[ -n "${NODE_EXTERNAL_TRANSPORTS:-}" ]] || return 0
+  IFS=',' read -ra entries <<< "${NODE_EXTERNAL_TRANSPORTS}"
+  for entry in "${entries[@]}"; do
+    [[ "${entry}" == "openvpn" || "${entry}" == "ikev2" ]] || \
+      die "NODE_EXTERNAL_TRANSPORTS accepts only lowercase openvpn and ikev2"
+    [[ "${seen}" != *",${entry},"* ]] || die "NODE_EXTERNAL_TRANSPORTS entries must be unique"
+    seen+="${entry},"
+  done
+}
+
 wait_healthy() {
   local container="$1" state
   for _ in {1..60}; do
@@ -133,6 +147,7 @@ fi
 [[ "${CORE_NODE_MAX_PEERS}" =~ ^[1-9][0-9]*$ ]] || die "CORE_NODE_MAX_PEERS must be positive"
 (( CORE_NODE_MAX_PEERS <= 65536 )) || die "CORE_NODE_MAX_PEERS must not exceed 65536"
 validate_secret_fingerprints
+validate_external_transports
 require_port VPN_CORE_PORT
 require_port VPN_CORE_HOST_PORT
 require_port WG_PORT

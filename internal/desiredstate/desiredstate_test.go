@@ -187,6 +187,32 @@ func TestActivatorRejectsDesiredStateForAnotherConfiguredCluster(t *testing.T) {
 	}
 }
 
+func TestActivatorAcceptsExplicitExternalGatewayCapability(t *testing.T) {
+	signer, trust := testSignerAndTrust(t)
+	bundle := testBundle(time.Now().UTC().Truncate(time.Second))
+	bundle.PublicEndpoints = append(bundle.PublicEndpoints,
+		PublicEndpoint{Name: "openvpn", Host: "vpn.example.test", Port: 1194})
+	bundle.Transports = append(bundle.Transports,
+		Transport{Protocol: "openvpn", Enabled: true, Priority: 20, Endpoint: "openvpn"})
+	signed, _, _, err := signer.Sign(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transports, err := ParseExternalTransports("openvpn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	transports["wireguard"] = true
+	activator, err := NewActivator(t.TempDir(), testNodeID, "2.0.0", trust,
+		LocalCapabilities{Transports: transports}, &limitRecorder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := activator.Apply(*signed); err != nil {
+		t.Fatalf("apply desired state with declared external gateway: %v", err)
+	}
+}
+
 var (
 	testNodeID    = uuid.MustParse("33333333-3333-4333-8333-333333333333")
 	testClusterID = uuid.MustParse("44444444-4444-4444-8444-444444444444")
@@ -270,5 +296,21 @@ func TestSecretFingerprintsRequireCanonicalUniqueEntries(t *testing.T) {
 		if _, err := ParseSecretFingerprints(value); err == nil {
 			t.Fatalf("non-canonical fingerprint %q accepted", value)
 		}
+	}
+}
+
+func TestExternalTransportsRequireExplicitGatewayProtocols(t *testing.T) {
+	parsed, err := ParseExternalTransports("openvpn,ikev2")
+	if err != nil || !parsed["openvpn"] || !parsed["ikev2"] || len(parsed) != 2 {
+		t.Fatalf("external transports = %#v, %v", parsed, err)
+	}
+	for _, value := range []string{"OpenVPN", "wireguard", "openvpn,openvpn", "openvpn,proxy"} {
+		if _, err := ParseExternalTransports(value); err == nil {
+			t.Fatalf("invalid external transports %q accepted", value)
+		}
+	}
+	empty, err := ParseExternalTransports("")
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty external transports = %#v, %v", empty, err)
 	}
 }

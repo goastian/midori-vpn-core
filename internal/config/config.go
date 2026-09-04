@@ -39,6 +39,7 @@ type Config struct {
 	CoreNodeEnrollmentTokenFile string
 	CoreNodeMaxPeers            int
 	NodeSecretFingerprints      string
+	NodeExternalTransports      string
 	RuntimePolicy               RuntimePolicy
 
 	// Control-signed Ed25519 transport credentials. Regional nodes receive only
@@ -188,6 +189,7 @@ func Load() *Config {
 		CoreNodeEnrollmentTokenFile:    env("CORE_NODE_ENROLLMENT_TOKEN_FILE"),
 		CoreNodeMaxPeers:               envIntDefault("CORE_NODE_MAX_PEERS", 0),
 		NodeSecretFingerprints:         env("NODE_SECRET_FINGERPRINTS"),
+		NodeExternalTransports:         env("NODE_EXTERNAL_TRANSPORTS"),
 		TransportTokenIssuer:           strings.TrimSpace(env("TRANSPORT_TOKEN_ISSUER")),
 		TransportTokenAuthorizedKeys:   env("TRANSPORT_TOKEN_AUTHORIZED_KEYS"),
 		TransportClusterID:             env("TRANSPORT_CLUSTER_ID"),

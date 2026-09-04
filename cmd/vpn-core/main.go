@@ -120,6 +120,13 @@ func main() {
 			"masque":    cfg.MasqueEnabled,
 			"proxy":     cfg.ProxyEnabled,
 		}
+		externalTransports, err := desiredstate.ParseExternalTransports(cfg.NodeExternalTransports)
+		if err != nil {
+			log.Fatalf("failed to parse external node transports: %v", err)
+		}
+		for protocol := range externalTransports {
+			localTransports[protocol] = true
+		}
 		transportClusterID, _ := uuid.Parse(cfg.TransportClusterID)
 		activator, err := desiredstate.NewActivator(
 			cfg.CoreNodeStateDir, nodeID, coreVersion, cfg.NodeAuthorizedKeys,

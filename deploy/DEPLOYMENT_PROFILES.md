@@ -87,6 +87,7 @@ CORE_NODE_STATE_DIR=/var/lib/midorivpn-node
 CORE_NODE_ENROLLMENT_TOKEN_FILE=/var/lib/midorivpn-node/enrollment-token
 CORE_NODE_MAX_PEERS=100
 NODE_SECRET_FINGERPRINTS=
+NODE_EXTERNAL_TRANSPORTS=openvpn,ikev2
 ```
 
 The host state directory must be `0700` and an initial token file must be a
@@ -97,6 +98,13 @@ empty for the first bootstrap so the administrator API can create the cluster,
 node and token. Configure the complete set and restart immediately afterward;
 the bootstrap instance remains ineligible for modeled placement and is not a
 release-ready state. Partial configuration always fails startup.
+
+`NODE_EXTERNAL_TRANSPORTS` declares host gateways that belong to the logical
+node but execute outside Core. It accepts only unique lowercase `openvpn`
+and/or `ikev2` values. In-process WireGuard/WSS/MASQUE/proxy capabilities remain
+derived from their actual runtime switches. An external protocol must not be
+declared unless its private health adapter is installed; central health and
+certification gates remain independently fail-closed.
 
 Transport placement combines three independent authorities: the signed desired
 bundle must enable the protocol, the latest signed node observation must match
@@ -127,6 +135,7 @@ TRANSPORT_TOKEN_ISSUER=https://vpn.example.test
 TRANSPORT_TOKEN_AUTHORIZED_KEYS=<cluster-control-identity>=<public-ed25519-key>
 TRANSPORT_CLUSTER_ID=<control-issued-cluster-uuid>
 ALLOW_LEGACY_HMAC_TRANSPORT_TOKENS=false
+NODE_EXTERNAL_TRANSPORTS=
 ```
 
 Set `DEPLOYMENT_PROFILE=core-node`, choose a unique `CORE_NODE_NAME`, and run
@@ -140,6 +149,9 @@ requires the host state directory to be `0700`, accepts only a regular `0600`
 token file, and mounts the state directory at the exact configured container
 path. It fails closed if Control, database, Authentik or CA signing secrets are
 present.
+
+Regional nodes normally leave `NODE_EXTERNAL_TRANSPORTS` empty until an
+external gateway and its private health adapter are installed on that node.
 
 The regional receives no credential signing secret or private key. Its proxy,
 WSS and MASQUE gateways accept only `mvpn2` credentials signed by one of the
