@@ -11,6 +11,20 @@ CURRENT_DIR="$(pwd -P)"
 # shellcheck source=scripts/lib/workspace-layout.sh
 source "${SCRIPT_DIR}/lib/workspace-layout.sh"
 
+node_modules_volume_for() {
+    local container_dir="$1"
+    local cache_key
+
+    if midorivpn_path_is_within "${container_dir}" "/workspace"; then
+        cache_key="${container_dir#/workspace}"
+        cache_key="${cache_key#/}"
+    else
+        cache_key="${container_dir#/}"
+    fi
+    cache_key="${cache_key//\//_}"
+    printf 'midori_npm_modules_%s' "${cache_key:-root}"
+}
+
 die() {
     echo "error: $*" >&2
     exit 1
@@ -48,14 +62,7 @@ done
 REL_PATH="${CURRENT_DIR#"${CURRENT_REPO_DIR}"}"
 REL_PATH="${REL_PATH#/}"
 WORKDIR_IN_CONTAINER="${CURRENT_CONTAINER_DIR}${REL_PATH:+/${REL_PATH}}"
-if midorivpn_path_is_within "${WORKDIR_IN_CONTAINER}" "/workspace"; then
-    CACHE_KEY="${WORKDIR_IN_CONTAINER#/workspace}"
-    CACHE_KEY="${CACHE_KEY#/}"
-else
-    CACHE_KEY="${WORKDIR_IN_CONTAINER#/}"
-fi
-CACHE_KEY="${CACHE_KEY//\//_}"
-NODE_MODULES_VOLUME="midori_npm_modules_${CACHE_KEY:-root}"
+NODE_MODULES_VOLUME="$(node_modules_volume_for "${WORKDIR_IN_CONTAINER}")"
 
 PODMAN_WORKSPACE_MOUNTS=(-v "${ROOT_DIR}:/workspace:z")
 for repo_spec in \
@@ -217,7 +224,7 @@ cmd_audit() {
     require_repo "${CONTROL_DIR}" "Control"
     require_repo "${DESKTOP_DIR}" "Desktop"
     require_repo "${EXTENSION_DIR}" "Extension"
-    echo "🛡️ [1/2] Ejecutando govulncheck en Core y Agente..."
+    echo "🛡️ [1/3] Ejecutando govulncheck en Core y Agente..."
     build_image_if_missing "${IMAGE_GO}" "${ROOT_DIR}/.container/Containerfile" "${ROOT_DIR}"
     podman run --rm "${PODMAN_USERNS[@]}" \
         "${PODMAN_WORKSPACE_MOUNTS[@]}" \
@@ -229,7 +236,7 @@ cmd_audit() {
         -w "${DESKTOP_CONTAINER_DIR}/agent" \
         "${IMAGE_GO}" govulncheck ./...
 
-    echo "🛡️ [2/2] Ejecutando npm audit en Frontends..."
+    echo "🛡️ [2/3] Ejecutando auditorías npm de producción..."
     build_image_if_missing "${IMAGE_NODE}" "${CONTROL_DIR}/.container/Containerfile" "${CONTROL_DIR}"
     for repo_spec in \
         "midori-vpn-control|${CONTROL_CONTAINER_DIR}" \
@@ -237,13 +244,43 @@ cmd_audit() {
         "midori-vpn-desktop|${DESKTOP_CONTAINER_DIR}"; do
         repo_name="${repo_spec%%|*}"
         container_dir="${repo_spec#*|}"
-        echo " → Auditando ${repo_name}..."
+        echo " → Auditando producción de ${repo_name}..."
+        podman run --rm "${PODMAN_USERNS[@]}" \
+            "${PODMAN_WORKSPACE_MOUNTS[@]}" \
+            -w "${container_dir}" \
+            "${IMAGE_NODE}" npm audit --omit=dev --audit-level=high
+    done
+
+    echo "🛡️ [3/3] Ejecutando auditorías completas y excepciones acotadas..."
+    for repo_spec in \
+        "midori-vpn-control|${CONTROL_CONTAINER_DIR}" \
+        "midori-vpn-desktop|${DESKTOP_CONTAINER_DIR}"; do
+        repo_name="${repo_spec%%|*}"
+        container_dir="${repo_spec#*|}"
+        echo " → Auditando grafo completo de ${repo_name}..."
         podman run --rm "${PODMAN_USERNS[@]}" \
             "${PODMAN_WORKSPACE_MOUNTS[@]}" \
             -w "${container_dir}" \
             "${IMAGE_NODE}" npm audit --audit-level=high
     done
-    
+    echo " → Auditando grafo completo y excepción de tooling de midorivpn-extension..."
+    local extension_node_modules_volume
+    extension_node_modules_volume="$(node_modules_volume_for "${EXTENSION_CONTAINER_DIR}")"
+    podman run --rm "${PODMAN_USERNS[@]}" \
+        "${PODMAN_WORKSPACE_MOUNTS[@]}" \
+        -v midori_npm_cache:/tmp/npm-cache:z \
+        -v "${extension_node_modules_volume}:${EXTENSION_CONTAINER_DIR}/node_modules:z" \
+        -e npm_config_cache=/tmp/npm-cache \
+        -w "${EXTENSION_CONTAINER_DIR}" \
+        "${IMAGE_NODE}" npm ci --no-audit
+    podman run --rm "${PODMAN_USERNS[@]}" \
+        "${PODMAN_WORKSPACE_MOUNTS[@]}" \
+        -v midori_npm_cache:/tmp/npm-cache:z \
+        -v "${extension_node_modules_volume}:${EXTENSION_CONTAINER_DIR}/node_modules:z" \
+        -e npm_config_cache=/tmp/npm-cache \
+        -w "${EXTENSION_CONTAINER_DIR}" \
+        "${IMAGE_NODE}" npm run audit:security
+
     echo "✅ Auditoría de seguridad completada."
 }
 

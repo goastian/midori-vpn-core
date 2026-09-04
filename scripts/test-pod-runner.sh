@@ -93,6 +93,8 @@ rg -F -- "-w /external/midori-vpn-desktop/agent" "${PODMAN_LOG}" >/dev/null || f
 rg -F -- "-w /external/midori-vpn-desktop/agent" "${PODMAN_LOG}" >/dev/null || fail "sibling agent audit workdir is incorrect"
 rg -F -- "-w /external/midori-vpn-control" "${PODMAN_LOG}" >/dev/null || fail "sibling Control audit workdir is incorrect"
 rg -F -- "-w /external/midorivpn-extension" "${PODMAN_LOG}" >/dev/null || fail "sibling extension audit workdir is incorrect"
+rg -F -- 'npm audit --omit=dev --audit-level=high' "${PODMAN_LOG}" >/dev/null || fail "production audit is not blocking"
+rg -F -- 'npm run audit:security' "${PODMAN_LOG}" >/dev/null || fail "extension audit policy is not enforced"
 
 : >"${PODMAN_LOG}"
 if (

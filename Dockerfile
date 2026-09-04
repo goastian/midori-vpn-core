@@ -16,6 +16,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -mod=readonly -trimpath -ldflags="-s -w" -
 FROM docker.io/library/alpine:3.24.1@sha256:79ff19e9084a00eece421b2523fb93e22d730e2c0e525905de047e848e56d95f
 
 RUN apk add --no-cache \
+    libcrypto3=3.5.8-r0 \
+    libssl3=3.5.8-r0 \
     wireguard-tools \
     wireguard-tools-wg \
     wireguard-tools-wg-quick \
