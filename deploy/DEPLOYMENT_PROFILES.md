@@ -47,9 +47,27 @@ Validate the pooler against an isolated PostgreSQL instance before deployment:
 
 ```text
 PGBOUNCER_IMAGE=localhost/midorivpn-pgbouncer:2.0.0 \
+CORE_IMAGE=localhost/midori-vpn-core:2.0.0 \
 POSTGRES_IMAGE=<postgres-18-image-by-digest> \
 bash scripts/test-pgbouncer.sh
 ```
+
+The principal uses four distinct database identities: a no-login owner, a
+one-shot migrator, a DML-only runtime role, and a PgBouncer console
+administrator. The PostgreSQL bootstrap administrator is reserved for the
+idempotent role policy and recovery. `scripts/deploy-pod.sh` applies
+`deploy/postgres/configure-roles.sql`, runs migrations directly on port 5432,
+then starts Core through transaction-pooled port 6432. Privileged database
+credentials are removed from the generated Core and Control environment files
+and those temporary files are mode 0600 and deleted on exit.
+
+The checked-in starting envelope is 16 Core connections, 16 normal PgBouncer
+backends, four reserve backends and a 24-backend database ceiling. Treat those
+as measured deployment inputs, not universal PostgreSQL tuning constants;
+rerun the DB-02 pool and lock gates before increasing them.
+
+PostgreSQL operations, encrypted backup/restore and incident steps are in
+`deploy/POSTGRESQL.md`.
 
 For an existing Quadlet deployment, adapt
 `deploy/pgbouncer/control-pgbouncer.container.example` to the service account

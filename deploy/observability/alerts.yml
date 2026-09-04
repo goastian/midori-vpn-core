@@ -82,6 +82,51 @@ groups:
           summary: Control database metrics are unavailable
           description: Core could not read aggregate transport and capacity state from PostgreSQL.
 
+      - alert: MidoriVPNDatabaseStatementStatsUnavailable
+        expr: midori_vpn_control_database_up{role="principal"} == 1 and midori_vpn_database_statement_stats_available{role="principal"} == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Aggregate PostgreSQL statement statistics are unavailable
+          description: The private exporter cannot read pg_stat_statements; no query text is exported.
+
+      - alert: MidoriVPNDatabasePoolSaturated
+        expr: midori_vpn_database_pool_max_connections{role="principal"} > 0 and midori_vpn_database_pool_acquired_connections{role="principal"} / midori_vpn_database_pool_max_connections{role="principal"} > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Control database pool is saturated
+          description: More than ninety percent of the bounded Core pool has remained acquired for five minutes.
+
+      - alert: MidoriVPNDatabasePoolAcquireCanceled
+        expr: increase(midori_vpn_database_pool_canceled_acquires_total{role="principal"}[10m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Control database pool acquisitions were canceled
+          description: At least one request stopped waiting for a database connection during the last ten minutes.
+
+      - alert: MidoriVPNDatabaseLocksWaiting
+        expr: midori_vpn_database_waiting_locks{role="principal"} > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: PostgreSQL locks remain blocked
+          description: One or more database locks have remained ungranted for two minutes.
+
+      - alert: MidoriVPNDatabaseDeadlockDetected
+        expr: increase(midori_vpn_database_deadlocks_total{role="principal"}[10m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: PostgreSQL detected a deadlock
+          description: The Control database reported a deadlock during the last ten minutes.
+
       - alert: MidoriVPNElevatedServerErrors
         expr: rate(midori_vpn_http_5xx_total[5m]) / clamp_min(rate(midori_vpn_http_requests_total[5m]), 0.01) > 0.05
         for: 10m

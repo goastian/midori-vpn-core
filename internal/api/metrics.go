@@ -111,11 +111,31 @@ type transportMetric struct {
 }
 
 type controlMetrics struct {
-	databaseUp  int
-	transports  []transportMetric
-	currentPeer int64
-	maxPeers    int64
-	nodes       []fleetNodeMetric
+	databaseUp                int
+	databaseSizeBytes         int64
+	databaseDeadlocks         int64
+	databaseWaitingLocks      int64
+	databaseDeadTuples        int64
+	databaseLastAutovacuum    float64
+	statementStatsAvailable   int
+	statementCalls            int64
+	statementExecSecondsTotal float64
+	transports                []transportMetric
+	currentPeer               int64
+	maxPeers                  int64
+	nodes                     []fleetNodeMetric
+}
+
+type databasePoolMetrics struct {
+	maxConnections         int32
+	totalConnections       int32
+	idleConnections        int32
+	acquiredConnections    int32
+	acquireCount           int64
+	canceledAcquireCount   int64
+	emptyAcquireCount      int64
+	newConnectionsCount    int64
+	acquireDurationSeconds float64
 }
 
 type fleetNodeMetric struct {
@@ -139,6 +159,32 @@ func (m *MetricsExporter) controlMetrics(parent context.Context) controlMetrics 
 	defer cancel()
 
 	result := controlMetrics{databaseUp: 1}
+	if err := m.pool.QueryRow(ctx, `
+		SELECT pg_database_size(current_database()),
+		       COALESCE((SELECT deadlocks FROM pg_stat_database WHERE datname = current_database()), 0),
+		       (SELECT COUNT(*) FROM pg_locks WHERE NOT granted),
+		       COALESCE((SELECT SUM(n_dead_tup)::BIGINT FROM pg_stat_user_tables), 0),
+		       COALESCE((SELECT EXTRACT(EPOCH FROM MAX(last_autovacuum)) FROM pg_stat_user_tables), 0)`).Scan(
+		&result.databaseSizeBytes,
+		&result.databaseDeadlocks,
+		&result.databaseWaitingLocks,
+		&result.databaseDeadTuples,
+		&result.databaseLastAutovacuum,
+	); err != nil {
+		result.databaseUp = 0
+		return result
+	}
+	if err := m.pool.QueryRow(ctx, `
+		SELECT COALESCE(SUM(calls), 0)::BIGINT,
+		       COALESCE(SUM(total_exec_time), 0) / 1000
+		FROM pg_stat_statements
+		WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())`).Scan(
+		&result.statementCalls,
+		&result.statementExecSecondsTotal,
+	); err == nil {
+		result.statementStatsAvailable = 1
+	}
+
 	rows, err := m.pool.Query(ctx, `
 		SELECT t.protocol, t.health_status, COUNT(*)
 		FROM vpn_server_transports t
@@ -224,6 +270,24 @@ func (m *MetricsExporter) controlMetrics(parent context.Context) controlMetrics 
 	return result
 }
 
+func (m *MetricsExporter) databasePoolMetrics() databasePoolMetrics {
+	if m.pool == nil {
+		return databasePoolMetrics{}
+	}
+	stats := m.pool.Stat()
+	return databasePoolMetrics{
+		maxConnections:         stats.MaxConns(),
+		totalConnections:       stats.TotalConns(),
+		idleConnections:        stats.IdleConns(),
+		acquiredConnections:    stats.AcquiredConns(),
+		acquireCount:           stats.AcquireCount(),
+		canceledAcquireCount:   stats.CanceledAcquireCount(),
+		emptyAcquireCount:      stats.EmptyAcquireCount(),
+		newConnectionsCount:    stats.NewConnsCount(),
+		acquireDurationSeconds: stats.AcquireDuration().Seconds(),
+	}
+}
+
 // Handler outputs Prometheus text format on the private Core listener.
 func (m *MetricsExporter) Handler(w http.ResponseWriter, r *http.Request) {
 	var mem runtime.MemStats
@@ -239,6 +303,7 @@ func (m *MetricsExporter) Handler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	control := m.controlMetrics(r.Context())
+	databasePool := m.databasePoolMetrics()
 	reconciliation := controlpkg.ReconciliationMetricsSnapshot()
 
 	var output strings.Builder
@@ -255,6 +320,23 @@ func (m *MetricsExporter) Handler(w http.ResponseWriter, r *http.Request) {
 	writeMetric(&output, "midori_vpn_goroutines", "Number of running goroutines.", "gauge", runtime.NumGoroutine())
 	writeMetric(&output, "midori_vpn_uptime_seconds", "Core uptime in seconds.", "gauge", int64(time.Since(startTime).Seconds()))
 	writeMetric(&output, "midori_vpn_control_database_up", "Whether the Control database was available to the metrics exporter.", "gauge", control.databaseUp)
+	writeMetric(&output, "midori_vpn_database_size_bytes", "Current size of the Control database in bytes.", "gauge", control.databaseSizeBytes)
+	writeMetric(&output, "midori_vpn_database_deadlocks_total", "Cumulative deadlocks detected in the current Control database.", "counter", control.databaseDeadlocks)
+	writeMetric(&output, "midori_vpn_database_waiting_locks", "Current number of ungranted PostgreSQL locks.", "gauge", control.databaseWaitingLocks)
+	writeMetric(&output, "midori_vpn_database_dead_tuples", "Estimated dead tuples across Control user tables.", "gauge", control.databaseDeadTuples)
+	writeMetric(&output, "midori_vpn_database_last_autovacuum_timestamp_seconds", "Latest autovacuum timestamp across Control user tables.", "gauge", control.databaseLastAutovacuum)
+	writeMetric(&output, "midori_vpn_database_statement_stats_available", "Whether aggregate pg_stat_statements counters were readable.", "gauge", control.statementStatsAvailable)
+	writeMetric(&output, "midori_vpn_database_statement_calls_total", "Aggregate calls observed by pg_stat_statements without query text.", "counter", control.statementCalls)
+	writeMetric(&output, "midori_vpn_database_statement_exec_seconds_total", "Aggregate execution seconds observed by pg_stat_statements without query text.", "counter", control.statementExecSecondsTotal)
+	writeMetric(&output, "midori_vpn_database_pool_max_connections", "Configured maximum connections in the Core PostgreSQL pool.", "gauge", databasePool.maxConnections)
+	writeMetric(&output, "midori_vpn_database_pool_total_connections", "Current total connections in the Core PostgreSQL pool.", "gauge", databasePool.totalConnections)
+	writeMetric(&output, "midori_vpn_database_pool_idle_connections", "Current idle connections in the Core PostgreSQL pool.", "gauge", databasePool.idleConnections)
+	writeMetric(&output, "midori_vpn_database_pool_acquired_connections", "Current acquired connections in the Core PostgreSQL pool.", "gauge", databasePool.acquiredConnections)
+	writeMetric(&output, "midori_vpn_database_pool_acquires_total", "Successful acquisitions from the Core PostgreSQL pool.", "counter", databasePool.acquireCount)
+	writeMetric(&output, "midori_vpn_database_pool_canceled_acquires_total", "Canceled acquisitions from the Core PostgreSQL pool.", "counter", databasePool.canceledAcquireCount)
+	writeMetric(&output, "midori_vpn_database_pool_empty_acquires_total", "Acquisitions that waited because the Core PostgreSQL pool was empty.", "counter", databasePool.emptyAcquireCount)
+	writeMetric(&output, "midori_vpn_database_pool_new_connections_total", "Connections established by the Core PostgreSQL pool.", "counter", databasePool.newConnectionsCount)
+	writeMetric(&output, "midori_vpn_database_pool_acquire_duration_seconds_total", "Cumulative time spent acquiring Core PostgreSQL connections.", "counter", databasePool.acquireDurationSeconds)
 	writeMetric(&output, "midori_vpn_server_current_peers", "Current peers across active configured servers.", "gauge", control.currentPeer)
 	writeMetric(&output, "midori_vpn_server_peer_capacity", "Maximum peer capacity across active configured servers.", "gauge", control.maxPeers)
 	writeMetric(&output, "midori_vpn_reconciliation_divergent_peers", "Peers divergent in the latest reconciliation pass.", "gauge", reconciliation.DivergentPeers)

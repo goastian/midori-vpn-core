@@ -76,6 +76,8 @@ type Config struct {
 
 	// PostgreSQL
 	DatabaseURL              string
+	DatabasePoolMaxConns     int
+	DatabasePoolMinConns     int
 	ControlDataEncryptionKey []byte
 
 	// Redis
@@ -166,6 +168,7 @@ var wgInterfaceRe = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,15}$`)
 var coreNodeNameRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 func Load() *Config {
+	appEnv := requireEnv("APP_ENV")
 	issuer := strings.TrimRight(env("AUTHENTIK_ISSUER"), "/")
 
 	jwksURL := env("AUTHENTIK_JWKS_URL")
@@ -174,7 +177,7 @@ func Load() *Config {
 	}
 
 	cfg := &Config{
-		AppEnv:                         requireEnv("APP_ENV"),
+		AppEnv:                         appEnv,
 		DeploymentProfile:              env("DEPLOYMENT_PROFILE"),
 		CoreNodeName:                   env("CORE_NODE_NAME"),
 		Port:                           requireEnv("VPN_CORE_PORT"),
@@ -212,6 +215,8 @@ func Load() *Config {
 		ExtensionCallbackPath:   requireEnv("EXTENSION_CALLBACK_PATH"),
 
 		DatabaseURL:                       databaseURLFromEnv(),
+		DatabasePoolMaxConns:              envIntDefault("DATABASE_POOL_MAX_CONNS", 16),
+		DatabasePoolMinConns:              envIntDefault("DATABASE_POOL_MIN_CONNS", 2),
 		RedisURL:                          redisURLFromEnv(),
 		AuthentikIssuer:                   issuer,
 		AuthentikClientID:                 env("AUTHENTIK_CLIENT_ID"),
@@ -502,6 +507,12 @@ func Load() *Config {
 	if cfg.ConnectRateLimitBurst < 1 && cfg.ConnectRateLimitRPS > 0 {
 		log.Fatalf("FATAL: CONNECT_RATE_LIMIT_BURST must be >= 1 when connect rate limiting is enabled, got %d", cfg.ConnectRateLimitBurst)
 	}
+	if cfg.DatabasePoolMaxConns < 1 || cfg.DatabasePoolMaxConns > 256 {
+		log.Fatalf("FATAL: DATABASE_POOL_MAX_CONNS must be between 1 and 256, got %d", cfg.DatabasePoolMaxConns)
+	}
+	if cfg.DatabasePoolMinConns < 0 || cfg.DatabasePoolMinConns > cfg.DatabasePoolMaxConns {
+		log.Fatalf("FATAL: DATABASE_POOL_MIN_CONNS must be between 0 and DATABASE_POOL_MAX_CONNS, got %d", cfg.DatabasePoolMinConns)
+	}
 	if cfg.ProxyPort < 1 || cfg.ProxyPort > 65535 {
 		log.Fatalf("FATAL: PROXY_PORT must be between 1 and 65535, got %d", cfg.ProxyPort)
 	}
@@ -719,18 +730,46 @@ func databaseURLFromEnv() string {
 	if v := env("DATABASE_URL"); v != "" {
 		return v
 	}
+	if anyEnvNonEmpty("POSTGRES_RUNTIME_USER", "POSTGRES_RUNTIME_PASSWORD") {
+		return postgresURLFromEnv(
+			"POSTGRES_RUNTIME_USER", "POSTGRES_RUNTIME_PASSWORD",
+			"POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_DB", "POSTGRES_SSLMODE",
+		)
+	}
 	if !anyEnvNonEmpty("POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_DB", "POSTGRES_SSLMODE") {
 		return ""
 	}
+	return postgresURLFromEnv(
+		"POSTGRES_USER", "POSTGRES_PASSWORD",
+		"POSTGRES_HOST", "POSTGRES_PORT", "POSTGRES_DB", "POSTGRES_SSLMODE",
+	)
+}
 
+func MigrationDatabaseURLFromEnv() string {
+	if v := env("MIGRATION_DATABASE_URL"); v != "" {
+		return v
+	}
+	if !anyEnvNonEmpty(
+		"POSTGRES_MIGRATOR_USER", "POSTGRES_MIGRATOR_PASSWORD",
+		"POSTGRES_MIGRATION_HOST", "POSTGRES_MIGRATION_PORT", "POSTGRES_MIGRATION_SSLMODE",
+	) {
+		return ""
+	}
+	return postgresURLFromEnv(
+		"POSTGRES_MIGRATOR_USER", "POSTGRES_MIGRATOR_PASSWORD",
+		"POSTGRES_MIGRATION_HOST", "POSTGRES_MIGRATION_PORT", "POSTGRES_DB", "POSTGRES_MIGRATION_SSLMODE",
+	)
+}
+
+func postgresURLFromEnv(userKey, passwordKey, hostKey, portKey, databaseKey, sslModeKey string) string {
 	u := &url.URL{
 		Scheme: "postgres",
-		User:   databaseUserInfo(requireEnv("POSTGRES_USER"), requireEnv("POSTGRES_PASSWORD")),
-		Host:   net.JoinHostPort(requireEnv("POSTGRES_HOST"), strconv.Itoa(requireEnvInt("POSTGRES_PORT"))),
-		Path:   requireEnv("POSTGRES_DB"),
+		User:   databaseUserInfo(requireEnv(userKey), requireEnv(passwordKey)),
+		Host:   net.JoinHostPort(requireEnv(hostKey), strconv.Itoa(requireEnvInt(portKey))),
+		Path:   requireEnv(databaseKey),
 	}
 	q := u.Query()
-	q.Set("sslmode", requireEnv("POSTGRES_SSLMODE"))
+	q.Set("sslmode", requireEnv(sslModeKey))
 	u.RawQuery = q.Encode()
 	return u.String()
 }

@@ -1,5 +1,5 @@
 -- Midori VPN v2.0.0 Canonical Consolidated PostgreSQL Schema
--- Generated from migrations 000001 - 000021
+-- Generated from migrations 000001 - 000022
 
 BEGIN;
 
@@ -578,17 +578,22 @@ CREATE TABLE IF NOT EXISTS mesh_members (
     id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     mesh_id        UUID        NOT NULL REFERENCES mesh_networks(id) ON DELETE CASCADE,
     user_id        UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    public_key     TEXT        NOT NULL,
+    peer_id        UUID        REFERENCES peers(id) ON DELETE SET NULL,
+    public_key     TEXT        NOT NULL DEFAULT '',
     preshared_key  TEXT        NOT NULL DEFAULT '',
     preshared_key_ciphertext BYTEA,
     preshared_key_version SMALLINT,
-    assigned_ip    TEXT        NOT NULL,
+    mesh_ip        TEXT        NOT NULL,
     endpoint       TEXT        NOT NULL DEFAULT '',
-    is_active      BOOLEAN     NOT NULL DEFAULT TRUE,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_mesh_members_mesh_ip UNIQUE (mesh_id, assigned_ip),
+    is_exit_node   BOOLEAN     NOT NULL DEFAULT FALSE,
+    proxy_port     INTEGER     NOT NULL DEFAULT 0,
+    joined_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    proxy_scheme   VARCHAR(20) NOT NULL DEFAULT 'socks5',
+    supports_tcp   BOOLEAN     NOT NULL DEFAULT TRUE,
+    supports_udp   BOOLEAN     NOT NULL DEFAULT FALSE,
+    CONSTRAINT uq_mesh_members_mesh_ip UNIQUE (mesh_id, mesh_ip),
     CONSTRAINT uq_mesh_members_mesh_user UNIQUE (mesh_id, user_id),
+    CONSTRAINT chk_mesh_members_proxy_scheme CHECK (proxy_scheme IN ('socks5', 'http-connect')),
     CONSTRAINT chk_mesh_members_preshared_key_encryption CHECK (
         (preshared_key_ciphertext IS NULL AND preshared_key_version IS NULL)
         OR (preshared_key_ciphertext IS NOT NULL AND preshared_key_version = 1 AND octet_length(preshared_key_ciphertext) >= 40)
@@ -598,26 +603,24 @@ CREATE TABLE IF NOT EXISTS mesh_members (
     )
 );
 
-CREATE INDEX IF NOT EXISTS idx_mesh_members_user_active ON mesh_members (user_id, is_active) WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_mesh_members_mesh ON mesh_members (mesh_id);
+CREATE INDEX IF NOT EXISTS idx_mesh_members_user ON mesh_members (user_id);
+CREATE INDEX IF NOT EXISTS idx_mesh_members_exit_node
+    ON mesh_members (mesh_id, is_exit_node) WHERE is_exit_node = TRUE;
 
 -- ============================================================
--- Table: exit_nodes
+-- Table: user_exit_node
 -- ============================================================
-CREATE TABLE IF NOT EXISTS exit_nodes (
-    id             UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    mesh_id        UUID        NOT NULL REFERENCES mesh_networks(id) ON DELETE CASCADE,
-    member_id      UUID        NOT NULL REFERENCES mesh_members(id) ON DELETE CASCADE,
-    user_id        UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    is_active      BOOLEAN     NOT NULL DEFAULT TRUE,
-    country_code   TEXT        NOT NULL DEFAULT '',
-    public_ip      TEXT        NOT NULL DEFAULT '',
-    allow_traffic  BOOLEAN     NOT NULL DEFAULT TRUE,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+CREATE TABLE IF NOT EXISTS user_exit_node (
+    user_id        UUID        PRIMARY KEY,
+    mesh_ip        TEXT        NOT NULL,
+    proxy_port     INTEGER     NOT NULL,
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_exit_nodes_mesh UNIQUE (mesh_id)
+    proxy_scheme   VARCHAR(20) NOT NULL DEFAULT 'socks5',
+    supports_tcp   BOOLEAN     NOT NULL DEFAULT TRUE,
+    supports_udp   BOOLEAN     NOT NULL DEFAULT FALSE,
+    CONSTRAINT chk_user_exit_node_proxy_scheme CHECK (proxy_scheme IN ('socks5', 'http-connect'))
 );
-
-CREATE INDEX IF NOT EXISTS idx_exit_nodes_mesh_active ON exit_nodes (mesh_id, is_active) WHERE is_active = TRUE;
 
 -- ============================================================
 -- Table: ip_country_cache
@@ -665,5 +668,35 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_admin_action_created
     ON audit_logs (action, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_admin_action_search
     ON audit_logs (lower(action) text_pattern_ops, id);
+
+-- Complete referencing-side indexes for foreign-key maintenance, including
+-- inactive and historical rows that are intentionally omitted by hot-path
+-- partial indexes.
+CREATE INDEX IF NOT EXISTS idx_audit_logs_user_fk
+    ON audit_logs (user_id);
+CREATE INDEX IF NOT EXISTS idx_desired_revisions_previous_fk
+    ON desired_revisions (node_id, previous_revision);
+CREATE INDEX IF NOT EXISTS idx_device_certificates_server_fk
+    ON device_certificates (server_id);
+CREATE INDEX IF NOT EXISTS idx_device_certificates_device_owner_fk
+    ON device_certificates (device_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_mesh_members_peer_fk
+    ON mesh_members (peer_id);
+CREATE INDEX IF NOT EXISTS idx_node_enrollment_tokens_node_fk
+    ON node_enrollment_tokens (node_id);
+CREATE INDEX IF NOT EXISTS idx_node_observations_revision_fk
+    ON node_observations (node_id, applied_revision);
+CREATE INDEX IF NOT EXISTS idx_peer_operations_device_owner_fk
+    ON peer_operations (device_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_peer_operations_previous_peer_fk
+    ON peer_operations (previous_peer_id);
+CREATE INDEX IF NOT EXISTS idx_peers_device_owner_fk
+    ON peers (device_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_peers_provision_operation_fk
+    ON peers (provision_operation_id);
+CREATE INDEX IF NOT EXISTS idx_peers_server_fk
+    ON peers (server_id);
+CREATE INDEX IF NOT EXISTS idx_vpn_servers_node_fk
+    ON vpn_servers (node_id);
 
 COMMIT;

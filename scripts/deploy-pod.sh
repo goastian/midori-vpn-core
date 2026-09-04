@@ -7,6 +7,11 @@ set -Eeuo pipefail
 
 POD_NAME="midori-vpn-pod"
 ENV_FILE="${ENV_FILE:-.env}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+POSTGRES_ROLE_SQL="${SCRIPT_DIR}/../deploy/postgres/configure-roles.sql"
+POSTGRES_POLICY_SQL="${SCRIPT_DIR}/../deploy/postgres/check-policy.sql"
+POSTGRES_BACKUP_SCRIPT="${SCRIPT_DIR}/backup-postgres.sh"
+POSTGRES_RESTORE_SCRIPT="${SCRIPT_DIR}/restore-postgres-backup.sh"
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -24,6 +29,11 @@ require_bool() {
     true|false) ;;
     *) die "${name} must be true or false" ;;
   esac
+}
+
+require_identifier() {
+  local name="$1"
+  [[ "${!name:-}" =~ ^[A-Za-z_][A-Za-z0-9_]{0,62}$ ]] || die "${name} must be a simple PostgreSQL identifier"
 }
 
 require_spiffe_uri() {
@@ -76,11 +86,27 @@ if [ "$(id -u)" -eq 0 ]; then
 fi
 
 [ -f "${ENV_FILE}" ] || die "environment file not found: ${ENV_FILE}"
+[[ -f "${POSTGRES_ROLE_SQL}" && ! -L "${POSTGRES_ROLE_SQL}" ]] || die "PostgreSQL role policy not found: ${POSTGRES_ROLE_SQL}"
+[[ -f "${POSTGRES_POLICY_SQL}" && ! -L "${POSTGRES_POLICY_SQL}" ]] || die "PostgreSQL policy check not found: ${POSTGRES_POLICY_SQL}"
+[[ -f "${POSTGRES_BACKUP_SCRIPT}" && ! -L "${POSTGRES_BACKUP_SCRIPT}" ]] || die "PostgreSQL backup script not found: ${POSTGRES_BACKUP_SCRIPT}"
+[[ -f "${POSTGRES_RESTORE_SCRIPT}" && ! -L "${POSTGRES_RESTORE_SCRIPT}" ]] || die "PostgreSQL restore script not found: ${POSTGRES_RESTORE_SCRIPT}"
 
 set -a
 # shellcheck disable=SC1090
 source "${ENV_FILE}"
 set +a
+
+core_env_file="$(mktemp "${TMPDIR:-/tmp}/midorivpn-core-env.XXXXXX")"
+control_env_file="$(mktemp "${TMPDIR:-/tmp}/midorivpn-control-env.XXXXXX")"
+chmod 0600 "${core_env_file}" "${control_env_file}"
+cleanup_env_files() {
+  rm -f -- "${core_env_file}" "${control_env_file}"
+}
+trap cleanup_env_files EXIT
+awk -F= '$1 !~ /^(POSTGRES_ADMIN_|POSTGRES_OWNER_|POSTGRES_MIGRATOR_|POSTGRES_BACKUP_|POSTGRES_DATA_|PGBOUNCER_ADMIN_|BACKUP_|MIGRATION_DATABASE_URL$|POSTGRES_USER$|POSTGRES_PASSWORD$)/' \
+  "${ENV_FILE}" > "${core_env_file}"
+awk -F= '$1 !~ /^(POSTGRES_|PGBOUNCER_|DATABASE_URL$|MIGRATION_DATABASE_URL$|DATABASE_POOL_)/' \
+  "${ENV_FILE}" > "${control_env_file}"
 
 if [ "${DEPLOYMENT_PROFILE:-}" != "principal" ]; then
   die "DEPLOYMENT_PROFILE must be principal"
@@ -93,7 +119,15 @@ for required_var in \
   CORE_IMAGE CONTROL_IMAGE POSTGRES_IMAGE PGBOUNCER_IMAGE REDIS_IMAGE \
   VPN_CORE_PORT VPN_CORE_HOST_PORT CONTROL_CONTAINER_PORT CONTROL_HOST_PORT \
   WG_PORT WG_INTERFACE WG_SUBNET WG_CONFIG_DIR WG_ENDPOINT VPN_DNS \
-  POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB REDIS_PASSWORD \
+  POSTGRES_ADMIN_USER POSTGRES_ADMIN_PASSWORD POSTGRES_OWNER_ROLE \
+  POSTGRES_MIGRATOR_USER POSTGRES_MIGRATOR_PASSWORD \
+  POSTGRES_RUNTIME_USER POSTGRES_RUNTIME_PASSWORD POSTGRES_DB \
+  POSTGRES_BACKUP_USER POSTGRES_BACKUP_PASSWORD \
+  POSTGRES_DATA_AT_REST_ENCRYPTED POSTGRES_BACKUP_DIR BACKUP_GPG_RECIPIENT \
+  PGBOUNCER_ADMIN_USER PGBOUNCER_ADMIN_PASSWORD \
+  PGBOUNCER_MAX_CLIENT_CONN PGBOUNCER_DEFAULT_POOL_SIZE PGBOUNCER_MIN_POOL_SIZE \
+  PGBOUNCER_RESERVE_POOL_SIZE PGBOUNCER_MAX_DB_CONNECTIONS \
+  DATABASE_POOL_MAX_CONNS DATABASE_POOL_MIN_CONNS REDIS_PASSWORD \
   CONTROL_NODE_ID CONTROL_NODE_PRIVATE_KEY NODE_AUTHORIZED_KEYS NODE_AUTH_REDIS_URL CONTROL_DATA_ENCRYPTION_KEY \
   TRANSPORT_TOKEN_ISSUER TRANSPORT_TOKEN_AUTHORIZED_KEYS ALLOW_LEGACY_HMAC_TRANSPORT_TOKENS \
   APP_ENV PUBLIC_BASE_URL CORS_ALLOWED_ORIGINS EXTENSION_CALLBACK_PATH \
@@ -110,6 +144,26 @@ for required_var in \
   WS_MAX_GLOBAL WS_MAX_FREE WS_MAX_BASIC WS_MAX_MEDIUM WS_MAX_PRO WS_MAX_ADMIN; do
   require_value "${required_var}"
 done
+
+for postgres_identifier in POSTGRES_ADMIN_USER POSTGRES_OWNER_ROLE POSTGRES_MIGRATOR_USER POSTGRES_RUNTIME_USER POSTGRES_BACKUP_USER POSTGRES_DB PGBOUNCER_ADMIN_USER; do
+  require_identifier "${postgres_identifier}"
+done
+[[ "${POSTGRES_OWNER_ROLE}" != "${POSTGRES_MIGRATOR_USER}" ]] || die "POSTGRES_OWNER_ROLE and POSTGRES_MIGRATOR_USER must differ"
+[[ "${POSTGRES_OWNER_ROLE}" != "${POSTGRES_RUNTIME_USER}" ]] || die "POSTGRES_OWNER_ROLE and POSTGRES_RUNTIME_USER must differ"
+[[ "${POSTGRES_MIGRATOR_USER}" != "${POSTGRES_RUNTIME_USER}" ]] || die "POSTGRES_MIGRATOR_USER and POSTGRES_RUNTIME_USER must differ"
+[[ "${POSTGRES_BACKUP_USER}" != "${POSTGRES_RUNTIME_USER}" && "${POSTGRES_BACKUP_USER}" != "${POSTGRES_MIGRATOR_USER}" ]] || die "POSTGRES_BACKUP_USER must differ from runtime and migrator roles"
+[[ "${PGBOUNCER_ADMIN_USER}" != "${POSTGRES_RUNTIME_USER}" ]] || die "PGBOUNCER_ADMIN_USER and POSTGRES_RUNTIME_USER must differ"
+require_bool POSTGRES_DATA_AT_REST_ENCRYPTED
+[[ "${POSTGRES_DATA_AT_REST_ENCRYPTED}" == true ]] || die "PostgreSQL data volume must be verified as encrypted at rest before deployment"
+[[ "${POSTGRES_BACKUP_DIR}" == /* && -d "${POSTGRES_BACKUP_DIR}" && ! -L "${POSTGRES_BACKUP_DIR}" ]] || die "POSTGRES_BACKUP_DIR must be an absolute real directory"
+[[ "$(stat -c '%a' "${POSTGRES_BACKUP_DIR}")" == 700 ]] || die "POSTGRES_BACKUP_DIR must have mode 0700"
+[[ "${BACKUP_GPG_RECIPIENT}" =~ ^[A-Fa-f0-9]{40}$ ]] || die "BACKUP_GPG_RECIPIENT must be an exact 40-hex fingerprint"
+if [[ ! "${DATABASE_POOL_MAX_CONNS}" =~ ^[1-9][0-9]*$ ]] || (( DATABASE_POOL_MAX_CONNS > 256 )); then
+  die "DATABASE_POOL_MAX_CONNS must be between 1 and 256"
+fi
+if [[ ! "${DATABASE_POOL_MIN_CONNS}" =~ ^[0-9]+$ ]] || (( DATABASE_POOL_MIN_CONNS > DATABASE_POOL_MAX_CONNS )); then
+  die "DATABASE_POOL_MIN_CONNS must not exceed DATABASE_POOL_MAX_CONNS"
+fi
 
 [[ "${OBSERVABILITY_MTLS_PORT}" == "9443" ]] || die "OBSERVABILITY_MTLS_PORT must use fleet-standard port 9443"
 require_spiffe_uri OBSERVABILITY_ALLOWED_CLIENT_URI
@@ -187,6 +241,23 @@ fi
 
 echo "🚀 Iniciando despliegue de Midori VPN Pod (${POD_NAME})..."
 
+predeploy_backup_file=""
+if podman container exists midori-postgres 2>/dev/null && \
+  [[ "$(podman inspect --format '{{.State.Running}}' midori-postgres)" == true ]]; then
+  echo "🔒 Creando backup cifrado previo al reinicio..."
+  backup_output="$(env \
+    POSTGRES_CONTAINER=midori-postgres \
+    POSTGRES_DB="${POSTGRES_DB}" \
+    POSTGRES_BACKUP_USER="${POSTGRES_ADMIN_USER}" \
+    POSTGRES_BACKUP_PASSWORD="${POSTGRES_ADMIN_PASSWORD}" \
+    BACKUP_DIR="${POSTGRES_BACKUP_DIR}" \
+    BACKUP_GPG_RECIPIENT="${BACKUP_GPG_RECIPIENT}" \
+    bash "${POSTGRES_BACKUP_SCRIPT}")"
+  printf '%s\n' "${backup_output}"
+  predeploy_backup_file="$(awk -F': ' '$1 == "Encrypted PostgreSQL backup created" {print $2; exit}' <<<"${backup_output}")"
+  [[ -n "${predeploy_backup_file}" && -f "${predeploy_backup_file}" ]] || die "pre-deployment backup path could not be verified"
+fi
+
 if podman pod exists "${POD_NAME}" 2>/dev/null; then
   echo "🧹 Deteniendo y eliminando pod anterior..."
   podman pod rm -f "${POD_NAME}"
@@ -214,15 +285,22 @@ podman run -d \
   --pod "${POD_NAME}" \
   --name midori-postgres \
   --restart always \
-  -e POSTGRES_USER="${POSTGRES_USER}" \
-  -e POSTGRES_PASSWORD="${POSTGRES_PASSWORD}" \
+  -e POSTGRES_USER="${POSTGRES_ADMIN_USER}" \
+  -e POSTGRES_PASSWORD="${POSTGRES_ADMIN_PASSWORD}" \
   -e POSTGRES_DB="${POSTGRES_DB}" \
+  -e POSTGRES_INITDB_ARGS="--auth-host=scram-sha-256 --auth-local=scram-sha-256" \
+  -e POSTGRES_HOST_AUTH_METHOD=scram-sha-256 \
   -v midori-pgdata-v18:/var/lib/postgresql:Z \
   --health-cmd 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
   --health-interval 2s \
   --health-timeout 3s \
   --health-retries 30 \
-  "${POSTGRES_IMAGE}"
+  "${POSTGRES_IMAGE}" postgres \
+    -c shared_preload_libraries=pg_stat_statements \
+    -c password_encryption=scram-sha-256 \
+    -c log_connections=off \
+    -c log_disconnections=off \
+    -c log_statement=none
 
 echo "⚡ Iniciando midori-redis..."
 podman run -d \
@@ -241,6 +319,88 @@ echo "⏳ Esperando PostgreSQL y Redis..."
 wait_healthy midori-postgres
 wait_healthy midori-redis
 
+echo "🔐 Aplicando roles y privilegios mínimos de PostgreSQL..."
+podman exec -i \
+  -e PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" \
+  -e POSTGRES_DB="${POSTGRES_DB}" \
+  -e POSTGRES_OWNER_ROLE="${POSTGRES_OWNER_ROLE}" \
+  -e POSTGRES_MIGRATOR_USER="${POSTGRES_MIGRATOR_USER}" \
+  -e POSTGRES_MIGRATOR_PASSWORD="${POSTGRES_MIGRATOR_PASSWORD}" \
+  -e POSTGRES_RUNTIME_USER="${POSTGRES_RUNTIME_USER}" \
+  -e POSTGRES_RUNTIME_PASSWORD="${POSTGRES_RUNTIME_PASSWORD}" \
+  -e POSTGRES_BACKUP_USER="${POSTGRES_BACKUP_USER}" \
+  -e POSTGRES_BACKUP_PASSWORD="${POSTGRES_BACKUP_PASSWORD}" \
+  midori-postgres psql \
+    --username "${POSTGRES_ADMIN_USER}" --dbname postgres --no-psqlrc \
+    --set ON_ERROR_STOP=1 < "${POSTGRES_ROLE_SQL}"
+
+podman exec -i \
+  -e PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" \
+  -e POSTGRES_DB="${POSTGRES_DB}" \
+  -e POSTGRES_OWNER_ROLE="${POSTGRES_OWNER_ROLE}" \
+  -e POSTGRES_MIGRATOR_USER="${POSTGRES_MIGRATOR_USER}" \
+  -e POSTGRES_RUNTIME_USER="${POSTGRES_RUNTIME_USER}" \
+  -e POSTGRES_BACKUP_USER="${POSTGRES_BACKUP_USER}" \
+  midori-postgres psql \
+    --username "${POSTGRES_ADMIN_USER}" --dbname "${POSTGRES_DB}" --no-psqlrc \
+    --set ON_ERROR_STOP=1 < "${POSTGRES_POLICY_SQL}"
+
+echo "🧱 Ejecutando migraciones con el rol dedicado..."
+podman run --rm \
+  --pod "${POD_NAME}" \
+  --name midori-db-migrate \
+  --read-only \
+  --cap-drop=ALL \
+  --security-opt no-new-privileges \
+  --entrypoint /usr/local/bin/midorivpn-migrate \
+  -e POSTGRES_MIGRATOR_USER="${POSTGRES_MIGRATOR_USER}" \
+  -e POSTGRES_MIGRATOR_PASSWORD="${POSTGRES_MIGRATOR_PASSWORD}" \
+  -e POSTGRES_MIGRATION_HOST=127.0.0.1 \
+  -e POSTGRES_MIGRATION_PORT=5432 \
+  -e POSTGRES_DB="${POSTGRES_DB}" \
+  -e POSTGRES_MIGRATION_SSLMODE=disable \
+  "${CORE_IMAGE}"
+
+# Reapply grants to existing objects as a defense-in-depth step for databases
+# that predate the default-privilege policy.
+podman exec -i \
+  -e PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" \
+  -e POSTGRES_DB="${POSTGRES_DB}" \
+  -e POSTGRES_OWNER_ROLE="${POSTGRES_OWNER_ROLE}" \
+  -e POSTGRES_MIGRATOR_USER="${POSTGRES_MIGRATOR_USER}" \
+  -e POSTGRES_MIGRATOR_PASSWORD="${POSTGRES_MIGRATOR_PASSWORD}" \
+  -e POSTGRES_RUNTIME_USER="${POSTGRES_RUNTIME_USER}" \
+  -e POSTGRES_RUNTIME_PASSWORD="${POSTGRES_RUNTIME_PASSWORD}" \
+  -e POSTGRES_BACKUP_USER="${POSTGRES_BACKUP_USER}" \
+  -e POSTGRES_BACKUP_PASSWORD="${POSTGRES_BACKUP_PASSWORD}" \
+  midori-postgres psql \
+    --username "${POSTGRES_ADMIN_USER}" --dbname postgres --no-psqlrc \
+    --set ON_ERROR_STOP=1 < "${POSTGRES_ROLE_SQL}"
+
+if [[ -n "${predeploy_backup_file}" ]]; then
+  restore_database="midorivpn_restore_predeploy_$(date -u +%Y%m%d_%H%M%S)_$$"
+  echo "🧪 Probando restore aislado del backup previo..."
+  env \
+    POSTGRES_CONTAINER=midori-postgres \
+    POSTGRES_ADMIN_USER="${POSTGRES_ADMIN_USER}" \
+    POSTGRES_ADMIN_PASSWORD="${POSTGRES_ADMIN_PASSWORD}" \
+    POSTGRES_OWNER_ROLE="${POSTGRES_OWNER_ROLE}" \
+    RESTORE_DATABASE="${restore_database}" \
+    BACKUP_FILE="${predeploy_backup_file}" \
+    bash "${POSTGRES_RESTORE_SCRIPT}"
+  for table_name in users devices peers device_certificates schema_migrations; do
+    source_count="$(podman exec -e PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" midori-postgres \
+      psql -U "${POSTGRES_ADMIN_USER}" -d "${POSTGRES_DB}" -Atc "SELECT count(*) FROM ${table_name}")"
+    restored_count="$(podman exec -e PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" midori-postgres \
+      psql -U "${POSTGRES_ADMIN_USER}" -d "${restore_database}" -Atc "SELECT count(*) FROM ${table_name}")"
+    [[ "${source_count}" =~ ^[0-9]+$ && "${source_count}" == "${restored_count}" ]] || \
+      die "isolated restore count differs for ${table_name}; preserved ${restore_database} for inspection"
+  done
+  podman exec -e PGPASSWORD="${POSTGRES_ADMIN_PASSWORD}" midori-postgres \
+    dropdb --force -U "${POSTGRES_ADMIN_USER}" "${restore_database}"
+  echo "✅ Backup previo restaurado y comparado correctamente."
+fi
+
 echo "🔗 Iniciando PgBouncer..."
 podman run -d \
   --pod "${POD_NAME}" \
@@ -252,10 +412,17 @@ podman run -d \
   --tmpfs /run/pgbouncer:rw,noexec,nosuid,nodev,size=4m,mode=1733 \
   -e POSTGRES_HOST=127.0.0.1 \
   -e POSTGRES_PORT=5432 \
-  -e POSTGRES_USER="${POSTGRES_USER}" \
-  -e POSTGRES_PASSWORD="${POSTGRES_PASSWORD}" \
+  -e POSTGRES_RUNTIME_USER="${POSTGRES_RUNTIME_USER}" \
+  -e POSTGRES_RUNTIME_PASSWORD="${POSTGRES_RUNTIME_PASSWORD}" \
   -e POSTGRES_DB="${POSTGRES_DB}" \
-  --health-cmd 'PGPASSWORD="$POSTGRES_PASSWORD" pg_isready -h 127.0.0.1 -p 6432 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
+  -e PGBOUNCER_ADMIN_USER="${PGBOUNCER_ADMIN_USER}" \
+  -e PGBOUNCER_ADMIN_PASSWORD="${PGBOUNCER_ADMIN_PASSWORD}" \
+  -e PGBOUNCER_MAX_CLIENT_CONN="${PGBOUNCER_MAX_CLIENT_CONN}" \
+  -e PGBOUNCER_DEFAULT_POOL_SIZE="${PGBOUNCER_DEFAULT_POOL_SIZE}" \
+  -e PGBOUNCER_MIN_POOL_SIZE="${PGBOUNCER_MIN_POOL_SIZE}" \
+  -e PGBOUNCER_RESERVE_POOL_SIZE="${PGBOUNCER_RESERVE_POOL_SIZE}" \
+  -e PGBOUNCER_MAX_DB_CONNECTIONS="${PGBOUNCER_MAX_DB_CONNECTIONS}" \
+  --health-cmd 'PGPASSWORD="$POSTGRES_RUNTIME_PASSWORD" pg_isready -h 127.0.0.1 -p 6432 -U "$POSTGRES_RUNTIME_USER" -d "$POSTGRES_DB"' \
   --health-interval 2s \
   --health-timeout 3s \
   --health-retries 30 \
@@ -286,10 +453,11 @@ podman run -d \
   --cap-drop=ALL \
   --cap-add=NET_ADMIN \
   --cap-add=NET_RAW \
-  --env-file "${ENV_FILE}" \
+  --env-file "${core_env_file}" \
   -e DATABASE_URL= \
   -e POSTGRES_HOST=127.0.0.1 \
   -e POSTGRES_PORT=6432 \
+  -e POSTGRES_SSLMODE=disable \
   -e REDIS_HOST=127.0.0.1 \
   "${core_volume_args[@]}" \
   --health-cmd 'wget -q -O /dev/null "http://127.0.0.1:$VPN_CORE_PORT/readyz"' \
@@ -305,7 +473,7 @@ podman run -d \
   --pod "${POD_NAME}" \
   --name midori-vpn-control \
   --restart always \
-  --env-file "${ENV_FILE}" \
+  --env-file "${control_env_file}" \
   --health-cmd 'wget -q -O /dev/null "http://127.0.0.1:$CONTROL_CONTAINER_PORT/"' \
   --health-interval 5s \
   --health-timeout 4s \

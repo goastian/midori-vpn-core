@@ -166,10 +166,6 @@ func main() {
 			log.Fatalf("failed to connect to database: %v", err)
 		}
 		defer pool.Close()
-
-		if err := db.RunMigrations(cfg.DatabaseURL); err != nil {
-			log.Fatalf("failed to run migrations: %v", err)
-		}
 		dataCipher, err := dataencryption.New(cfg.ControlDataEncryptionKey)
 		if err != nil {
 			log.Fatalf("failed to initialize Control data encryption: %v", err)

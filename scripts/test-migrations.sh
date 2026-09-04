@@ -77,6 +77,12 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000020_admin_list_pagination.up.sql >/dev/null
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000021_central_transport_certification.up.sql >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000022_foreign_key_indexes.up.sql >/dev/null
+
+foreign_key_indexes="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname ~ '^idx_.*_fk$'")"
+[ "${foreign_key_indexes}" = "13" ] || { printf 'error: migration 22 created %s of 13 foreign-key indexes\n' "${foreign_key_indexes}" >&2; exit 1; }
 
 multicluster_tables="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('clusters','core_nodes','node_enrollment_tokens','desired_revisions','node_observations')")"
@@ -274,6 +280,12 @@ cascade_rows="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
 [ "${cascade_rows}" = "0" ] || { printf 'error: user cascade left %s device-related rows\n' "${cascade_rows}" >&2; exit 1; }
 
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000022_foreign_key_indexes.down.sql >/dev/null
+foreign_key_indexes="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname ~ '^idx_.*_fk$'")"
+[ "${foreign_key_indexes}" = "0" ] || { printf 'error: migration 22 rollback left %s foreign-key indexes\n' "${foreign_key_indexes}" >&2; exit 1; }
+
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000021_central_transport_certification.down.sql >/dev/null
 placement_authority="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT position('observation.transport_states' in pg_get_functiondef('vpn_server_placement_eligible(uuid,text,interval,boolean)'::regprocedure)) > 0")"
@@ -427,6 +439,8 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000020_admin_list_pagination.up.sql >/dev/null
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000021_central_transport_certification.up.sql >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000022_foreign_key_indexes.up.sql >/dev/null
 
 # The device-based certificate key permits equal hostnames on distinct
 # registered installations without merging either device.
@@ -480,5 +494,11 @@ schema_admin_list_indexes="$(podman exec "${container}" psql -U midori -d midori
 schema_placement_authority="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
   "SELECT position('transport.metadata' in definition) > 0 AND position('observation.transport_states' in definition) = 0 FROM (SELECT pg_get_functiondef('vpn_server_placement_eligible(uuid,text,interval,boolean)'::regprocedure) AS definition) inspected")"
 [ "${schema_placement_authority}" = "t" ] || { printf 'error: consolidated schema did not preserve central transport certification authority\n' >&2; exit 1; }
+schema_foreign_key_indexes="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
+  "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname ~ '^idx_.*_fk$'")"
+[ "${schema_foreign_key_indexes}" = "13" ] || { printf 'error: consolidated schema created %s of 13 foreign-key indexes\n' "${schema_foreign_key_indexes}" >&2; exit 1; }
+schema_mesh_columns="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
+  "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'mesh_members' AND column_name IN ('peer_id','mesh_ip','joined_at','is_exit_node','proxy_port','proxy_scheme','supports_tcp','supports_udp')")"
+[ "${schema_mesh_columns}" = "8" ] || { printf 'error: consolidated schema created %s of 8 final mesh-member columns\n' "${schema_mesh_columns}" >&2; exit 1; }
 
-printf 'Migration chain 1-21, migrations 9-21 rollback, and consolidated schema verified on PostgreSQL 18.\n'
+printf 'Migration chain 1-22, migrations 9-22 rollback, and consolidated schema verified on PostgreSQL 18.\n'

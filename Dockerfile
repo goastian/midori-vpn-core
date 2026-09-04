@@ -11,6 +11,7 @@ RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 RUN CGO_ENABLED=0 GOOS=linux go build -mod=readonly -trimpath -ldflags="-s -w" -o /vpn-core ./cmd/vpn-core
+RUN CGO_ENABLED=0 GOOS=linux go build -mod=readonly -trimpath -ldflags="-s -w" -o /midorivpn-migrate ./cmd/midorivpn-migrate
 
 # ── Stage 2: Runtime ──
 FROM docker.io/library/alpine:3.24.1@sha256:79ff19e9084a00eece421b2523fb93e22d730e2c0e525905de047e848e56d95f
@@ -29,5 +30,6 @@ RUN apk add --no-cache \
     : > /var/log/apk.log
 
 COPY --from=builder /vpn-core /usr/local/bin/vpn-core
+COPY --from=builder /midorivpn-migrate /usr/local/bin/midorivpn-migrate
 
 ENTRYPOINT ["/usr/local/bin/vpn-core"]

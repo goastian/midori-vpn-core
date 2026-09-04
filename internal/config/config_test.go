@@ -68,6 +68,8 @@ func TestDatabaseURLFromEnvPrefersExplicitURL(t *testing.T) {
 
 func TestDatabaseURLFromPostgresEnv(t *testing.T) {
 	t.Setenv("DATABASE_URL", "")
+	t.Setenv("POSTGRES_RUNTIME_USER", "")
+	t.Setenv("POSTGRES_RUNTIME_PASSWORD", "")
 	t.Setenv("POSTGRES_USER", "vpn_user")
 	t.Setenv("POSTGRES_PASSWORD", "vpn_secret")
 	t.Setenv("POSTGRES_HOST", "postgres.internal")
@@ -79,6 +81,38 @@ func TestDatabaseURLFromPostgresEnv(t *testing.T) {
 	want := "postgres://vpn_user:vpn_secret@postgres.internal:15432/vpn_db?sslmode=require"
 	if got != want {
 		t.Fatalf("databaseURLFromEnv() = %q, want %q", got, want)
+	}
+}
+
+func TestDatabaseURLFromDedicatedRuntimeRole(t *testing.T) {
+	t.Setenv("DATABASE_URL", "")
+	t.Setenv("POSTGRES_RUNTIME_USER", "vpn_runtime")
+	t.Setenv("POSTGRES_RUNTIME_PASSWORD", "runtime_secret")
+	t.Setenv("POSTGRES_HOST", "pgbouncer.internal")
+	t.Setenv("POSTGRES_PORT", "6432")
+	t.Setenv("POSTGRES_DB", "vpn_db")
+	t.Setenv("POSTGRES_SSLMODE", "require")
+
+	got := databaseURLFromEnv()
+	want := "postgres://vpn_runtime:runtime_secret@pgbouncer.internal:6432/vpn_db?sslmode=require"
+	if got != want {
+		t.Fatalf("databaseURLFromEnv() = %q, want %q", got, want)
+	}
+}
+
+func TestMigrationDatabaseURLFromDedicatedRole(t *testing.T) {
+	t.Setenv("MIGRATION_DATABASE_URL", "")
+	t.Setenv("POSTGRES_MIGRATOR_USER", "vpn_migrator")
+	t.Setenv("POSTGRES_MIGRATOR_PASSWORD", "migration_secret")
+	t.Setenv("POSTGRES_MIGRATION_HOST", "postgres.internal")
+	t.Setenv("POSTGRES_MIGRATION_PORT", "5432")
+	t.Setenv("POSTGRES_DB", "vpn_db")
+	t.Setenv("POSTGRES_MIGRATION_SSLMODE", "verify-full")
+
+	got := MigrationDatabaseURLFromEnv()
+	want := "postgres://vpn_migrator:migration_secret@postgres.internal:5432/vpn_db?sslmode=verify-full"
+	if got != want {
+		t.Fatalf("migrationDatabaseURLFromEnv() = %q, want %q", got, want)
 	}
 }
 
