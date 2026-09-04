@@ -1,4 +1,4 @@
-ARG GO_IMAGE=docker.io/library/golang:1.27.0-bookworm
+ARG GO_IMAGE=docker.io/library/golang:1.27.0-bookworm@sha256:ba5ef6614ca131b80a635fc6a7b715d9ee8a7f333debdbb81afb68259c7d48d4
 ARG RUNTIME_IMAGE=registry.opensuse.org/opensuse/tumbleweed@sha256:c249e585be229e74c59e28725f9381d3c433aeb6497d4108e423dd14383487dd
 ARG OPENVPN_VERSION=2.7.5-1.1
 

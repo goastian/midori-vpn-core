@@ -69,9 +69,24 @@ for repo_spec in \
     fi
 done
 
+# Builder image tags are content-addressed by their definitions. A changed
+# Containerfile therefore cannot silently reuse an older local :latest image.
+GO_BUILDER_FILE="${ROOT_DIR}/.container/Containerfile"
+[[ -f "${GO_BUILDER_FILE}" ]] || die "Go builder definition not found: ${GO_BUILDER_FILE}"
+GO_BUILDER_SHA256="$(sha256sum "${GO_BUILDER_FILE}")"
+GO_BUILDER_SHA256="${GO_BUILDER_SHA256%% *}"
+NODE_BUILDER_FILE=""
+NODE_BUILDER_SHA256=""
+if [[ -n "${CONTROL_DIR}" ]]; then
+    NODE_BUILDER_FILE="${CONTROL_DIR}/.container/Containerfile"
+    [[ -f "${NODE_BUILDER_FILE}" ]] || die "Node builder definition not found: ${NODE_BUILDER_FILE}"
+    NODE_BUILDER_SHA256="$(sha256sum "${NODE_BUILDER_FILE}")"
+    NODE_BUILDER_SHA256="${NODE_BUILDER_SHA256%% *}"
+fi
+
 # Image Names
-IMAGE_GO="localhost/midori-dev-go:latest"
-IMAGE_NODE="localhost/midori-dev-node:latest"
+IMAGE_GO="localhost/midori-dev-go:${GO_BUILDER_SHA256}"
+IMAGE_NODE="${NODE_BUILDER_SHA256:+localhost/midori-dev-node:${NODE_BUILDER_SHA256}}"
 IMAGE_PROMETHEUS="docker.io/prom/prometheus@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0"
 IMAGE_SYFT="ghcr.io/anchore/syft@sha256:41f8289664101d6ebab30a97ac8df6b6f86b92d8343285ca90f428e2bc353106"
 IMAGE_SHELLCHECK="docker.io/koalaman/shellcheck-alpine@sha256:c82fe42504fbc9fc68f15d36638e5ee2324ebb8b94e96a3c4e395bf361c49183"
@@ -120,8 +135,8 @@ build_image_if_missing() {
 cmd_build_images() {
     require_repo "${CONTROL_DIR}" "Control"
     echo "🔨 Construyendo todas las imágenes de desarrollo Podman Rootless..."
-    podman build -t "${IMAGE_GO}" -f "${ROOT_DIR}/.container/Containerfile" "${ROOT_DIR}"
-    podman build -t "${IMAGE_NODE}" -f "${CONTROL_DIR}/.container/Containerfile" "${CONTROL_DIR}"
+    podman build -t "${IMAGE_GO}" -f "${GO_BUILDER_FILE}" "${ROOT_DIR}"
+    podman build -t "${IMAGE_NODE}" -f "${NODE_BUILDER_FILE}" "${CONTROL_DIR}"
     echo "✅ Todas las imágenes construidas exitosamente."
 }
 

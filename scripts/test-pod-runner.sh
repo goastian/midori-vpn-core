@@ -110,6 +110,12 @@ rg -F 'ambiguous ./... from the Core root includes nested repositories and tmp/s
     PATH="${FAKE_BIN}:${PATH}" bash scripts/pod.sh go test ./cmd/... ./internal/...
 )
 rg -F -- 'go test ./cmd/... ./internal/...' "${PODMAN_LOG}" >/dev/null || fail "explicit Core Go scopes were not forwarded"
+empty_sha256='e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
+rg -F -- "image exists localhost/midori-dev-go:${empty_sha256}" "${PODMAN_LOG}" >/dev/null || \
+    fail "Go builder tag is not derived from its Containerfile SHA-256"
+if rg -F -- 'midori-dev-go:latest' "${PODMAN_LOG}" >/dev/null; then
+    fail "Go builder still uses a floating latest tag"
+fi
 
 : >"${PODMAN_LOG}"
 (
@@ -129,6 +135,17 @@ fi
     PATH="${FAKE_BIN}:${PATH}" bash ../../midori-vpn-core/scripts/pod.sh go test ./...
 )
 rg -F -- 'go test ./...' "${PODMAN_LOG}" >/dev/null || fail "isolated agent module rejected ./..."
+
+: >"${PODMAN_LOG}"
+(
+    cd "${SIBLING}/midori-vpn-control"
+    PATH="${FAKE_BIN}:${PATH}" bash ../midori-vpn-core/scripts/pod.sh npm --version
+)
+rg -F -- "image exists localhost/midori-dev-node:${empty_sha256}" "${PODMAN_LOG}" >/dev/null || \
+    fail "Node builder tag is not derived from its Containerfile SHA-256"
+if rg -F -- 'midori-dev-node:latest' "${PODMAN_LOG}" >/dev/null; then
+    fail "Node builder still uses a floating latest tag"
+fi
 
 : >"${PODMAN_LOG}"
 if (
