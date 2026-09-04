@@ -17,16 +17,27 @@ regional production gates.
 Version 2.0.0 is an active rework. Linux x86_64 RPM is the only Desktop target;
 the abandoned Tauri/Rust and non-Linux client sources have been removed.
 
-## Verified transports
+## Release status
+
+| Category | Current state |
+|---|---|
+| Implemented | The source tree contains the central Control/Core plane, durable device and peer lifecycle, signed node management, private observability and the transports described below. |
+| Certified | The principal staging baseline and its enabled transports have completed their component-specific gates. Certification is deployment- and transport-specific, not a claim about every server. |
+| Pending | 2.0.0 remains **Unreleased**. A new independent regional server and the final rebuilt artifacts must complete their acceptance gates before release. |
+
+The changelog and source describe work in the unreleased line; they are not a
+substitute for a published artifact or a deployment acceptance record.
+
+## Transport implementation
 
 | Transport | Public port | State |
 |---|---:|---|
-| WireGuard | `51820/udp` | Production, real kernel handshake |
-| WireGuard over WSS | `443/tcp` | Authenticated, health-gated |
-| WireGuard over MASQUE | `443/udp` | RFC 9298 CONNECT-UDP, TLS 1.3, authenticated, health-gated |
-| HTTPS CONNECT proxy | configured TLS endpoint | Browser extension only, scoped token |
-| OpenVPN DCO | `1194/udp` | Native Linux client and rootful gateway certified; advertised only while healthy and explicitly certified |
-| IKEv2 | `500/udp`, `4500/udp` | Native EAP-TLS client and rootful gateway certified; advertised only while healthy and explicitly certified |
+| WireGuard | `51820/udp` | Implemented with a real kernel handshake; certification is server-specific |
+| WireGuard over WSS | `443/tcp` | Implemented, authenticated and health-gated; certification is server-specific |
+| WireGuard over MASQUE | `443/udp` | Implemented with RFC 9298 CONNECT-UDP, TLS 1.3 and authentication; certification is server-specific |
+| HTTPS CONNECT proxy | configured TLS endpoint | Implemented for the browser extension with a scoped token; exact package/server E2E is required |
+| OpenVPN DCO | `1194/udp` | Native Linux client and rootful gateway implemented and certified on principal staging; each server repeats the gate |
+| IKEv2 | `500/udp`, `4500/udp` | Native EAP-TLS client and rootful gateway implemented and certified on principal staging; each server repeats the gate |
 
 OpenVPN and IKEv2 share a client-certificate authority. Devices generate an
 ECDSA P-256 private key locally and submit only a signed CSR to Core. Core
@@ -203,3 +214,6 @@ GitHub release.
 ## License
 
 AGPL-3.0-or-later. See `LICENSE`.
+
+Security reports and contributions are governed by [SECURITY.md](SECURITY.md)
+and [CONTRIBUTING.md](CONTRIBUTING.md).

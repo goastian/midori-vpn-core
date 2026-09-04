@@ -415,16 +415,16 @@ upgrade; a migration requiring destructive rollback blocks the rollout.
 | TLS host allowlist and production fail-closed checks | Implemented |
 | Central server/transport inventory and capacity reservation | Implemented |
 | Per-host retries and circuit breaker | Implemented in memory |
-| Persistent cluster/node lifecycle model | Implemented locally in migrations 17–18; not deployed |
-| Node-generated Ed25519 enrollment with hashed one-use token | Implemented locally; not deployed |
-| Signed node-to-Control heartbeat and replay rejection | Implemented locally; not deployed |
-| Desired/observed history and fail-closed placement gate | Implemented locally; not deployed |
-| Signed desired revisions and last-known-good activation | Implemented locally; not deployed |
+| Persistent cluster/node lifecycle model | Implemented and deployed for the principal; regional rollout pending |
+| Node-generated Ed25519 enrollment with hashed one-use token | Implemented and exercised on the principal; regional rollout pending |
+| Signed node-to-Control heartbeat and replay rejection | Implemented and exercised on the principal; regional rollout pending |
+| Desired/observed history and fail-closed placement gate | Implemented and active for the principal; regional acceptance pending |
+| Signed desired revisions and last-known-good activation | Implemented and active for the principal; regional acceptance pending |
 | Fleet identity revocation | Node-to-Control database revocation implemented; Control-to-Core trust rotation remains coordinated node configuration |
-| Durable heartbeat, version compatibility and revision drift | Implemented locally; deployment and regional certification pending |
-| Private central scrape of regional metrics | TLS 1.3/mTLS listener, central HTTP discovery, fleet metrics and alerts implemented locally; not deployed |
-| Cross-cluster-safe asymmetric transport credentials | Implemented locally with scoped Ed25519 `mvpn2`; not deployed |
-| First regional acceptance and failure-isolation E2E | Paused; not certified |
+| Durable heartbeat, version compatibility and revision drift | Implemented for the principal; regional deployment and certification pending |
+| Private central scrape of regional metrics | TLS 1.3/mTLS listener, central discovery, fleet metrics and alerts deployed for the principal; regional scrape pending |
+| Cross-cluster-safe asymmetric transport credentials | Implemented with scoped Ed25519 `mvpn2`; independent regional validation pending |
+| First regional acceptance and failure-isolation E2E | Future release gate; not certified |
 
 ## Regional production gate
 

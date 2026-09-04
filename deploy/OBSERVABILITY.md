@@ -82,7 +82,7 @@ never becomes ready.
 Example local access from an administrator workstation:
 
 ```bash
-ssh -N -L 3000:127.0.0.1:${GRAFANA_HOST_PORT} Main
+ssh -N -L 3000:127.0.0.1:${GRAFANA_HOST_PORT} principal.example.net
 ```
 
 Then open `http://127.0.0.1:3000`. Prometheus alert rules are visible through
@@ -113,11 +113,11 @@ verification or lower TLS to recover a target.
 
 ## Multi-cluster extension
 
-The private fleet contract is implemented locally; the principal remains the
+The private fleet contract is implemented on the principal, which remains the
 only certified deployment target. The regional contract is defined in
 [`docs/CENTRAL_CONTROL_ARCHITECTURE.md`](../docs/CENTRAL_CONTROL_ARCHITECTURE.md):
 the regional deployer requires an exact RFC1918 bind for TCP/9443, while the
 principal permits access only through its private Podman network. The first
-real gate must use a new server and leave `Main` as the principal. Never publish
+real gate must use a new server and leave the existing principal in place. Never publish
 a regional observability listener to the Internet merely to make central
 scraping possible.

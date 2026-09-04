@@ -2,6 +2,13 @@
 
 ## 2.0.0 - Unreleased
 
+### Governance
+
+- Added repository-local security and contribution policies, reconciled the
+  canonical AGPL-3.0-or-later license text and made public release status
+  distinguish source implementation, deployment certification and pending
+  release gates.
+
 ### Security
 
 - Removed metrics from the public Core router and added a dedicated TLS
