@@ -10,6 +10,12 @@ PROMETHEUS_HEALTH_URL="${PROMETHEUS_HEALTH_URL:-http://127.0.0.1:9090/-/ready}"
 GRAFANA_HEALTH_URL="${GRAFANA_HEALTH_URL:-http://127.0.0.1:3000/api/health}"
 GRAFANA_STARTUP_ATTEMPTS="${GRAFANA_STARTUP_ATTEMPTS:-900}"
 core_unit="${QUADLET_DIR}/control-api.container"
+observability_units=(
+  midorivpn-prometheus.container
+  midorivpn-grafana.container
+  midorivpn-prometheus-data.volume
+  midorivpn-grafana-data.volume
+)
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 backup_dir="${HOME}/backups/midorivpn-observability-${timestamp}"
 core_changed=false
@@ -47,8 +53,24 @@ wait_principal_target() {
   return 1
 }
 
+prepare_prometheus_volume() {
+  local prometheus_image
+  prometheus_image="$(awk -F= '$1 == "Image" { print $2; exit }' "${OBSERVABILITY_CONFIG_DIR}/midorivpn-prometheus.container")"
+  [[ "${prometheus_image}" =~ @sha256:[0-9a-f]{64}$ ]] || die "rendered Prometheus image must be pinned by digest"
+  podman image exists "${prometheus_image}" || die "pinned Prometheus image is not loaded"
+  systemctl --user start midorivpn-prometheus-data-volume.service
+  podman volume exists midorivpn-prometheus-data || die "Prometheus data volume was not created"
+  podman run --rm \
+    --pull=never \
+    --user 0 \
+    --entrypoint /bin/sh \
+    --volume midorivpn-prometheus-data:/prometheus:Z \
+    "${prometheus_image}" -ceu 'chown -R 0:0 /prometheus'
+}
+
 rollback() {
   local status="$1"
+  local unit_name restored_observability=false
   trap - ERR
   printf 'Deployment failed; restoring the prior Core Quadlet.\n' >&2
   systemctl --user stop midorivpn-grafana.service midorivpn-prometheus.service >/dev/null 2>&1 || true
@@ -57,12 +79,21 @@ rollback() {
     "${QUADLET_DIR}/midorivpn-prometheus.container" \
     "${QUADLET_DIR}/midorivpn-grafana-data.volume" \
     "${QUADLET_DIR}/midorivpn-prometheus-data.volume"
+  for unit_name in "${observability_units[@]}"; do
+    if [[ -f "${backup_dir}/${unit_name}" ]]; then
+      install -m 0644 "${backup_dir}/${unit_name}" "${QUADLET_DIR}/${unit_name}"
+      restored_observability=true
+    fi
+  done
   if [[ "${core_changed}" = true ]]; then
     cp -a -- "${backup_dir}/control-api.container" "${core_unit}"
   fi
   systemctl --user daemon-reload
   if [[ "${core_changed}" = true ]]; then
     systemctl --user restart control-api.service
+  fi
+  if [[ "${restored_observability}" = true ]]; then
+    systemctl --user restart midorivpn-prometheus.service midorivpn-grafana.service >/dev/null 2>&1 || true
   fi
   exit "${status}"
 }
@@ -85,6 +116,11 @@ done
 
 install -d -m 0700 "${backup_dir}"
 cp -a -- "${core_unit}" "${backup_dir}/control-api.container"
+for unit_name in "${observability_units[@]}"; do
+  if [[ -f "${QUADLET_DIR}/${unit_name}" ]]; then
+    cp -a -- "${QUADLET_DIR}/${unit_name}" "${backup_dir}/${unit_name}"
+  fi
+done
 trap 'rollback $?' ERR
 
 temporary_unit="$(mktemp "${core_unit}.XXXXXX")"
@@ -109,6 +145,7 @@ install -m 0644 \
   "${QUADLET_DIR}/"
 
 systemctl --user daemon-reload
+prepare_prometheus_volume
 if [[ "${core_changed}" = true ]]; then
   systemctl --user restart control-api.service
 fi

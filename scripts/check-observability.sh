@@ -82,5 +82,10 @@ rg -Fq -- '--publish "${OBSERVABILITY_HOST_BIND}:${OBSERVABILITY_MTLS_PORT}:${OB
 rg -Fq 'for name in PROMETHEUS_MTLS_CLIENT_CERT PROMETHEUS_MTLS_CLIENT_KEY; do' "${ROOT_DIR}/scripts/VPN/deploy-core-node.sh"
 rg -Fq -- '--network "${OBSERVABILITY_NETWORK}"' "${ROOT_DIR}/scripts/deploy-pod.sh"
 rg -Fq 'wait_principal_target' "${ROOT_DIR}/scripts/deploy-observability.sh"
+rg -Fq 'prepare_prometheus_volume' "${ROOT_DIR}/scripts/deploy-observability.sh"
+rg -Fq 'podman volume exists midorivpn-prometheus-data' "${ROOT_DIR}/scripts/deploy-observability.sh"
+rg -Fq -- '--pull=never' "${ROOT_DIR}/scripts/deploy-observability.sh"
+rg -Fq 'cp -a -- "${QUADLET_DIR}/${unit_name}" "${backup_dir}/${unit_name}"' "${ROOT_DIR}/scripts/deploy-observability.sh"
+rg -Fq 'restored_observability=true' "${ROOT_DIR}/scripts/deploy-observability.sh"
 
 printf 'Observability configuration is valid and remains private.\n'
