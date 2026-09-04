@@ -98,6 +98,14 @@ node and token. Configure the complete set and restart immediately afterward;
 the bootstrap instance remains ineligible for modeled placement and is not a
 release-ready state. Partial configuration always fails startup.
 
+Transport placement combines three independent authorities: the signed desired
+bundle must enable the protocol, the latest signed node observation must match
+the active revision and report a healthy compatible node, and Control's
+`vpn_server_transports` inventory must have a fresh healthy probe. OpenVPN and
+IKEv2 additionally require central `metadata.certified=true`. A node-reported
+`certified` value is retained only for protocol compatibility and never grants
+or revokes certification; nodes cannot certify themselves.
+
 The principal also requires its dedicated observability server identity,
 public client-CA certificate and exact Prometheus client URI SAN. TCP/9443 is
 attached to `OBSERVABILITY_NETWORK`, never public ingress. The Prometheus

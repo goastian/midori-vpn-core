@@ -69,6 +69,15 @@ func TestMulticlusterPlacementRequiresCurrentHealthyObservedState(t *testing.T) 
 		Priority:     100,
 		HealthStatus: "healthy",
 		LastChecked:  &checkedAt,
+	}, {
+		Protocol:     "openvpn",
+		Host:         "modeled.test.invalid",
+		Port:         1194,
+		Enabled:      true,
+		Priority:     90,
+		HealthStatus: "healthy",
+		LastChecked:  &checkedAt,
+		Metadata:     map[string]interface{}{"certified": false},
 	}}
 	if err := serverRepo.CreateWithTransports(ctx, server, transports); err != nil {
 		t.Fatalf("CreateWithTransports: %v", err)
@@ -133,7 +142,7 @@ func TestMulticlusterPlacementRequiresCurrentHealthyObservedState(t *testing.T) 
 		Revision:           1,
 		SchemaVersion:      1,
 		MinimumCoreVersion: "2.0.0",
-		Payload:            []byte(`{"schema_version":1}`),
+		Payload:            []byte(`{"transports":[{"enabled":true,"protocol":"openvpn"},{"enabled":true,"protocol":"wireguard"}]}`),
 		PayloadSHA256:      make([]byte, 32),
 		Signature:          make([]byte, 64),
 		SigningKeyID:       "test-signing-key",
@@ -153,7 +162,7 @@ func TestMulticlusterPlacementRequiresCurrentHealthyObservedState(t *testing.T) 
 		CurrentPeers:      0,
 		MaxPeers:          10,
 		TransportStates: map[string]models.NodeTransportState{
-			"wireguard": {Status: "healthy", Certified: true},
+			"wireguard": {Status: "healthy", Certified: false},
 		},
 		ReportedAt: time.Now().UTC(),
 	}
@@ -161,6 +170,20 @@ func TestMulticlusterPlacementRequiresCurrentHealthyObservedState(t *testing.T) 
 		t.Fatalf("RecordObservation: %v", err)
 	}
 	assertEligibility(true, "matching healthy observation")
+	openVPNEligible, err := multiclusterRepo.ServerPlacementEligible(ctx, server.ID, "openvpn", repo.DefaultNodeFreshness)
+	if err != nil || openVPNEligible {
+		t.Fatalf("uncertified central OpenVPN state must be ineligible: eligible=%v err=%v", openVPNEligible, err)
+	}
+	if _, err := pool.Exec(ctx, `
+		UPDATE vpn_server_transports
+		SET metadata = jsonb_set(metadata, '{certified}', 'true'::jsonb), last_checked_at = NOW()
+		WHERE server_id = $1 AND protocol = 'openvpn'`, server.ID); err != nil {
+		t.Fatalf("certify central OpenVPN state: %v", err)
+	}
+	openVPNEligible, err = multiclusterRepo.ServerPlacementEligible(ctx, server.ID, "openvpn", repo.DefaultNodeFreshness)
+	if err != nil || !openVPNEligible {
+		t.Fatalf("centrally certified OpenVPN state must be eligible: eligible=%v err=%v", openVPNEligible, err)
+	}
 	credentialClusterID, err := multiclusterRepo.TransportCredentialCluster(ctx, server.ID, "wireguard", repo.DefaultNodeFreshness)
 	if err != nil || credentialClusterID != cluster.ID {
 		t.Fatalf("TransportCredentialCluster = %s, %v; want %s", credentialClusterID, err, cluster.ID)
@@ -202,13 +225,18 @@ func TestMulticlusterPlacementRequiresCurrentHealthyObservedState(t *testing.T) 
 		UPDATE node_observations
 		SET transport_states = '{"wireguard":{"status":"healthy","certified":false}}'::jsonb
 		WHERE id = $1`, observation.ID); err != nil {
-		t.Fatalf("remove transport certification: %v", err)
+		t.Fatalf("record non-certifying node observation: %v", err)
 	}
-	assertEligibility(false, "uncertified observed transport")
+	assertEligibility(true, "node observation cannot revoke central eligibility")
 	_, _ = pool.Exec(ctx, `
-		UPDATE node_observations
-		SET transport_states = '{"wireguard":{"status":"healthy","certified":true}}'::jsonb
-		WHERE id = $1`, observation.ID)
+		UPDATE desired_revisions
+		SET payload = '{"transports":[{"enabled":true,"protocol":"openvpn"}]}'::jsonb
+		WHERE id = $1`, revision.ID)
+	assertEligibility(false, "transport absent from desired state")
+	_, _ = pool.Exec(ctx, `
+		UPDATE desired_revisions
+		SET payload = '{"transports":[{"enabled":true,"protocol":"openvpn"},{"enabled":true,"protocol":"wireguard"}]}'::jsonb
+		WHERE id = $1`, revision.ID)
 
 	if _, err := pool.Exec(ctx, `UPDATE vpn_server_transports SET health_status = 'degraded' WHERE server_id = $1`, server.ID); err != nil {
 		t.Fatalf("degrade inventory transport: %v", err)
@@ -239,7 +267,7 @@ func TestMulticlusterPlacementRequiresCurrentHealthyObservedState(t *testing.T) 
 		PreviousRevision:   &missingRevision,
 		SchemaVersion:      1,
 		MinimumCoreVersion: "2.0.0",
-		Payload:            []byte(`{"schema_version":1,"revision":2}`),
+		Payload:            []byte(`{"revision":2,"transports":[{"enabled":true,"protocol":"openvpn"},{"enabled":true,"protocol":"wireguard"}]}`),
 		PayloadSHA256:      make([]byte, 32),
 		Signature:          make([]byte, 64),
 		SigningKeyID:       "test-signing-key",
@@ -255,7 +283,7 @@ func TestMulticlusterPlacementRequiresCurrentHealthyObservedState(t *testing.T) 
 		PreviousRevision:   &previousRevision,
 		SchemaVersion:      1,
 		MinimumCoreVersion: "2.0.0",
-		Payload:            []byte(`{"schema_version":1,"revision":2}`),
+		Payload:            []byte(`{"revision":2,"transports":[{"enabled":true,"protocol":"openvpn"},{"enabled":true,"protocol":"wireguard"}]}`),
 		PayloadSHA256:      make([]byte, 32),
 		Signature:          make([]byte, 64),
 		SigningKeyID:       "test-signing-key",
@@ -276,7 +304,7 @@ func TestMulticlusterPlacementRequiresCurrentHealthyObservedState(t *testing.T) 
 		CurrentPeers:      0,
 		MaxPeers:          10,
 		TransportStates: map[string]models.NodeTransportState{
-			"wireguard": {Status: "healthy", Certified: true},
+			"wireguard": {Status: "healthy", Certified: false},
 		},
 		ReportedAt: time.Now().UTC(),
 	}

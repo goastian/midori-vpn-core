@@ -75,6 +75,8 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000019_dashboard_recent_sessions_index.up.sql >/dev/null
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000020_admin_list_pagination.up.sql >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000021_central_transport_certification.up.sql >/dev/null
 
 multicluster_tables="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('clusters','core_nodes','node_enrollment_tokens','desired_revisions','node_observations')")"
@@ -100,6 +102,12 @@ dashboard_sessions_index="$(podman exec "${container}" psql -U midori -d midori_
 admin_list_indexes="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname ~ '^(idx_users_admin_|idx_vpn_servers_admin_|idx_peers_admin_|idx_mesh_networks_admin_|idx_extension_origins_admin_|idx_audit_logs_admin_)'")"
 [ "${admin_list_indexes}" = "21" ] || { printf 'error: migration 20 created %s of 21 administrative list indexes\n' "${admin_list_indexes}" >&2; exit 1; }
+placement_authority="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT position('transport.metadata' in definition) > 0 AND position('observation.transport_states' in definition) = 0 FROM (SELECT pg_get_functiondef('vpn_server_placement_eligible(uuid,text,interval,boolean)'::regprocedure) AS definition) inspected")"
+[ "${placement_authority}" = "t" ] || {
+  printf 'error: migration 21 did not make central transport certification authoritative\n' >&2
+  exit 1
+}
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c \
   "INSERT INTO clusters (id, name, region) VALUES ('80000000-0000-4000-8000-000000000019', 'DNS label guard', 'test')" >/dev/null
 if podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c \
@@ -266,6 +274,15 @@ cascade_rows="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
 [ "${cascade_rows}" = "0" ] || { printf 'error: user cascade left %s device-related rows\n' "${cascade_rows}" >&2; exit 1; }
 
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000021_central_transport_certification.down.sql >/dev/null
+placement_authority="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT position('observation.transport_states' in pg_get_functiondef('vpn_server_placement_eligible(uuid,text,interval,boolean)'::regprocedure)) > 0")"
+[ "${placement_authority}" = "t" ] || {
+  printf 'error: migration 21 rollback did not restore the migration-17 placement definition\n' >&2
+  exit 1
+}
+
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000020_admin_list_pagination.down.sql >/dev/null
 admin_list_indexes="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname ~ '^(idx_users_admin_|idx_vpn_servers_admin_|idx_peers_admin_|idx_mesh_networks_admin_|idx_extension_origins_admin_|idx_audit_logs_admin_)'")"
@@ -408,6 +425,8 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000019_dashboard_recent_sessions_index.up.sql >/dev/null
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000020_admin_list_pagination.up.sql >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000021_central_transport_certification.up.sql >/dev/null
 
 # The device-based certificate key permits equal hostnames on distinct
 # registered installations without merging either device.
@@ -458,5 +477,8 @@ schema_dashboard_sessions_index="$(podman exec "${container}" psql -U midori -d 
 schema_admin_list_indexes="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
   "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname ~ '^(idx_users_admin_|idx_vpn_servers_admin_|idx_peers_admin_|idx_mesh_networks_admin_|idx_extension_origins_admin_|idx_audit_logs_admin_)'")"
 [ "${schema_admin_list_indexes}" = "21" ] || { printf 'error: consolidated schema created %s of 21 administrative list indexes\n' "${schema_admin_list_indexes}" >&2; exit 1; }
+schema_placement_authority="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
+  "SELECT position('transport.metadata' in definition) > 0 AND position('observation.transport_states' in definition) = 0 FROM (SELECT pg_get_functiondef('vpn_server_placement_eligible(uuid,text,interval,boolean)'::regprocedure) AS definition) inspected")"
+[ "${schema_placement_authority}" = "t" ] || { printf 'error: consolidated schema did not preserve central transport certification authority\n' >&2; exit 1; }
 
-printf 'Migration chain 1-20, migrations 9-20 rollback, and consolidated schema verified on PostgreSQL 18.\n'
+printf 'Migration chain 1-21, migrations 9-21 rollback, and consolidated schema verified on PostgreSQL 18.\n'

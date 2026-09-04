@@ -67,7 +67,9 @@ func TestTransportCredentialsBindPersistentDeviceServerAndCluster(t *testing.T) 
 		INSERT INTO desired_revisions (
 			node_id, revision, schema_version, minimum_core_version, payload,
 			payload_sha256, signature, signing_key_id, issued_at, expires_at
-		) VALUES ($1, 1, 1, '2.0.0', '{}'::jsonb, $2, $3, 'control', NOW(), NOW() + INTERVAL '15 minutes')`,
+		) VALUES ($1, 1, 1, '2.0.0',
+			'{"transports":[{"enabled":true,"protocol":"proxy"},{"enabled":true,"protocol":"wireguard"},{"enabled":true,"protocol":"wss"}]}'::jsonb,
+			$2, $3, 'control', NOW(), NOW() + INTERVAL '15 minutes')`,
 		node.ID, make([]byte, 32), make([]byte, 64)); err != nil {
 		t.Fatal(err)
 	}
@@ -75,9 +77,9 @@ func TestTransportCredentialsBindPersistentDeviceServerAndCluster(t *testing.T) 
 		NodeID: node.ID, AppliedRevision: int64Pointer(1), CoreVersion: "2.0.0", HealthStatus: "healthy",
 		VersionCompatible: true, MaxPeers: 10,
 		TransportStates: map[string]models.NodeTransportState{
-			"wireguard": {Status: "healthy", Certified: true},
-			"wss":       {Status: "healthy", Certified: true},
-			"proxy":     {Status: "healthy", Certified: true},
+			"wireguard": {Status: "healthy", Certified: false},
+			"wss":       {Status: "healthy", Certified: false},
+			"proxy":     {Status: "healthy", Certified: false},
 		},
 		ReportedAt: now,
 	}); err != nil {

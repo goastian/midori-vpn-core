@@ -1,5 +1,5 @@
 -- Midori VPN v2.0.0 Canonical Consolidated PostgreSQL Schema
--- Generated from migrations 000001 - 000020
+-- Generated from migrations 000001 - 000021
 
 BEGIN;
 
@@ -275,9 +275,15 @@ AS $$
                           AND transport.enabled = TRUE
                           AND transport.health_status = 'healthy'
                           AND transport.last_checked_at >= CURRENT_TIMESTAMP - freshness
-                          AND observation.transport_states @> jsonb_build_object(
-                              transport.protocol,
-                              jsonb_build_object('status', 'healthy', 'certified', TRUE)
+                          AND desired.payload @> jsonb_build_object(
+                              'transports', jsonb_build_array(jsonb_build_object(
+                                  'protocol', transport.protocol,
+                                  'enabled', TRUE
+                              ))
+                          )
+                          AND (
+                              transport.protocol NOT IN ('openvpn', 'ikev2')
+                              OR transport.metadata @> '{"certified": true}'::JSONB
                           )
                     )
                 )
@@ -286,7 +292,7 @@ AS $$
         LEFT JOIN core_nodes node ON node.id = server.node_id
         LEFT JOIN clusters cluster ON cluster.id = node.cluster_id
         LEFT JOIN LATERAL (
-            SELECT revision, expires_at
+            SELECT revision, expires_at, payload
             FROM desired_revisions
             WHERE node_id = node.id
             ORDER BY revision DESC
@@ -307,7 +313,7 @@ AS $$
 $$;
 
 COMMENT ON FUNCTION vpn_server_placement_eligible(UUID, TEXT, INTERVAL, BOOLEAN) IS
-    'Fail-closed placement gate for modeled nodes; legacy_node_unbound is a temporary rollout exception';
+    'Fail-closed placement using signed node health and centrally certified transport state; legacy_node_unbound is a temporary rollout exception';
 
 -- ============================================================
 -- Table: devices

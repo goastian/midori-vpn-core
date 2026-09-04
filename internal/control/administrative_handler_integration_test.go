@@ -82,11 +82,13 @@ func TestDeleteServerStartsDrainingAndReturnsStableConflict(t *testing.T) {
 	admin := &models.User{ID: uuid.New(), Groups: []string{"midorivpn-admins"}}
 	listRecorder := httptest.NewRecorder()
 	handler.AdminListServers(listRecorder, withUser(httptest.NewRequest(http.MethodGet, "/api/v1/admin/servers", nil), admin))
-	servers := decodeResponseData[[]models.VPNServer](t, listRecorder)
-	if len(servers) != 1 {
-		t.Fatalf("server fixture count = %d", len(servers))
+	servers := decodeResponseData[struct {
+		Items []models.VPNServer `json:"items"`
+	}](t, listRecorder)
+	if len(servers.Items) != 1 {
+		t.Fatalf("server fixture count = %d", len(servers.Items))
 	}
-	serverID := servers[0].ID
+	serverID := servers.Items[0].ID
 	request := withUser(
 		withChiParam(httptest.NewRequest(http.MethodDelete, "/api/v1/admin/servers/"+serverID.String(), nil), "id", serverID.String()),
 		admin,

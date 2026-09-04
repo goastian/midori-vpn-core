@@ -205,7 +205,7 @@ func (r *MulticlusterRepo) ListAdminNodes(ctx context.Context, clusterID uuid.UU
 		FROM core_nodes node
 		JOIN clusters cluster ON cluster.id = node.cluster_id
 		LEFT JOIN LATERAL (
-			SELECT revision, expires_at, minimum_core_version
+			SELECT revision, expires_at, minimum_core_version, payload
 			FROM desired_revisions
 			WHERE node_id = node.id
 			ORDER BY revision DESC LIMIT 1
@@ -240,8 +240,14 @@ func (r *MulticlusterRepo) ListAdminNodes(ctx context.Context, clusterID uuid.UU
 					  AND transport.enabled = TRUE
 					  AND transport.health_status = 'healthy'
 					  AND transport.last_checked_at >= CURRENT_TIMESTAMP - INTERVAL '90 seconds'
-					  AND observation.transport_states @> jsonb_build_object(
-						transport.protocol, jsonb_build_object('status', 'healthy', 'certified', TRUE)
+					  AND desired.payload @> jsonb_build_object(
+						'transports', jsonb_build_array(jsonb_build_object(
+							'protocol', transport.protocol, 'enabled', TRUE
+						))
+					  )
+					  AND (
+						transport.protocol NOT IN ('openvpn', 'ikev2')
+						OR transport.metadata @> '{"certified": true}'::jsonb
 					  )
 				) THEN 'transport_unavailable'
 				ELSE 'ready'
