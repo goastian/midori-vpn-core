@@ -36,7 +36,30 @@ public TLS entry point.
 
 Set `DEPLOYMENT_PROFILE=principal`, choose a unique lowercase
 `CORE_NODE_NAME`, and run `scripts/deploy-pod.sh` as the dedicated unprivileged
-service account. Build the pinned pooler image first with:
+service account. The pod infra process uses the official Kubernetes pause
+3.10.1 image at the exact linux/amd64 digest recorded in `.env.example`; this
+avoids relying on Podman's host-binary scratch infra path and keeps SELinux
+separation enabled. Build the pinned pooler image first with:
+
+```ini
+[Pod]
+PodmanArgs=--infra-image=registry.k8s.io/pause@sha256:e5b941ef8f71de54dc3a13398226c269ba217d06650a21bd3afcf9d890cf1f41 --infra-command=/pause
+```
+
+Use the same arguments in Quadlet-managed installations; do not replace them
+with `label=disable` or relabel a system binary.
+
+On SELinux hosts, keep arbitrary Nginx egress disabled and grant only the
+reverse-proxy path to the loopback ports:
+
+```text
+semanage port -a -t http_port_t -p tcp 8085
+semanage port -a -t http_port_t -p tcp 5173
+setsebool -P httpd_can_network_relay on
+```
+
+If either port is already assigned, verify that it is `http_port_t` instead of
+blindly adding a duplicate. `httpd_can_network_connect` remains off.
 
 ```text
 podman build -f deploy/pgbouncer/Containerfile \

@@ -77,7 +77,9 @@ The first Grafana start can spend several minutes applying its embedded SQLite
 migrations on a busy host. SQLite WAL is enabled and the deployment health gate
 allows fifteen minutes by default only for that initialization; it remains
 configurable through `GRAFANA_STARTUP_ATTEMPTS` and still rolls back if the API
-never becomes ready.
+never becomes ready. The read-only container also disables automatic updates of
+bundled plugins; plugin versions come exclusively from the digest-pinned image,
+so startup never tries to mutate `/usr/share/grafana`.
 
 Example local access from an administrator workstation:
 

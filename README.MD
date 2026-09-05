@@ -148,7 +148,11 @@ builds inside a rootless Podman RPM builder.
 
 ## Deployment
 
-`scripts/deploy-pod.sh` consumes a complete environment and creates a rootless Podman pod. The staging installation uses systemd Quadlets so database, Redis, API and web services are independently supervised.
+`scripts/deploy-pod.sh` consumes a complete environment and creates a rootless
+Podman pod. Its infra process is a digest-pinned Kubernetes pause image, so the
+runtime never needs to disable SELinux separation when Podman's scratch infra
+path is unavailable. The staging installation uses systemd Quadlets so
+database, Redis, API and web services are independently supervised.
 
 Principal and regional profiles, their privilege boundaries and their
 acceptance gate are described in `deploy/DEPLOYMENT_PROFILES.md`.

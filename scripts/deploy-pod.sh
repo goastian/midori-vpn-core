@@ -12,6 +12,7 @@ POSTGRES_ROLE_SQL="${SCRIPT_DIR}/../deploy/postgres/configure-roles.sql"
 POSTGRES_POLICY_SQL="${SCRIPT_DIR}/../deploy/postgres/check-policy.sql"
 POSTGRES_BACKUP_SCRIPT="${SCRIPT_DIR}/backup-postgres.sh"
 POSTGRES_RESTORE_SCRIPT="${SCRIPT_DIR}/restore-postgres-backup.sh"
+readonly VERIFIED_POD_INFRA_IMAGE='registry.k8s.io/pause@sha256:e5b941ef8f71de54dc3a13398226c269ba217d06650a21bd3afcf9d890cf1f41'
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -116,7 +117,7 @@ require_value CORE_NODE_NAME
 [[ "${CORE_NODE_NAME}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || die "CORE_NODE_NAME must be a lowercase DNS label"
 
 for required_var in \
-  CORE_IMAGE CONTROL_IMAGE POSTGRES_IMAGE PGBOUNCER_IMAGE REDIS_IMAGE \
+  CORE_IMAGE CONTROL_IMAGE POD_INFRA_IMAGE POSTGRES_IMAGE PGBOUNCER_IMAGE REDIS_IMAGE \
   VPN_CORE_PORT VPN_CORE_HOST_PORT CONTROL_CONTAINER_PORT CONTROL_HOST_PORT \
   WG_PORT WG_INTERFACE WG_SUBNET WG_CONFIG_DIR WG_ENDPOINT VPN_DNS \
   POSTGRES_ADMIN_USER POSTGRES_ADMIN_PASSWORD POSTGRES_OWNER_ROLE \
@@ -144,6 +145,9 @@ for required_var in \
   WS_MAX_GLOBAL WS_MAX_FREE WS_MAX_BASIC WS_MAX_MEDIUM WS_MAX_PRO WS_MAX_ADMIN; do
   require_value "${required_var}"
 done
+
+[[ "${POD_INFRA_IMAGE}" == "${VERIFIED_POD_INFRA_IMAGE}" ]] || \
+  die "POD_INFRA_IMAGE must use the verified Kubernetes pause 3.10.1 linux/amd64 digest"
 
 for postgres_identifier in POSTGRES_ADMIN_USER POSTGRES_OWNER_ROLE POSTGRES_MIGRATOR_USER POSTGRES_RUNTIME_USER POSTGRES_BACKUP_USER POSTGRES_DB PGBOUNCER_ADMIN_USER; do
   require_identifier "${postgres_identifier}"
@@ -267,6 +271,8 @@ echo "📦 Creando Podman Pod '${POD_NAME}'..."
 pod_args=(
   pod create
   --name "${POD_NAME}"
+  --infra-image "${POD_INFRA_IMAGE}"
+  --infra-command /pause
   --network "${OBSERVABILITY_NETWORK}"
   -p "${WG_PORT}:${WG_PORT}/udp"
   -p "127.0.0.1:${VPN_CORE_HOST_PORT}:${VPN_CORE_PORT}/tcp"
