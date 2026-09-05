@@ -161,3 +161,14 @@ whole `.env`. Deployment remains blocked until image signatures, SBOM,
 provenance, Nginx validation, database backup/restore gate and this healthcheck
 all pass. External publication and production rollout require separate explicit
 authorization.
+
+The exact Actions contract is versioned in
+`deploy/ci/environment-map.json`. Non-secret dotenv entries arrive through the
+`MIDORIVPN_DEPLOY_VALUES` Environment variable; sensitive entries arrive only
+through the `MIDORIVPN_DEPLOY_SECRETS` Environment secret. The validator rejects
+wrongly classified, duplicated or unknown keys, and the verified workflow
+injects `CORE_IMAGE` and `CONTROL_IMAGE` by digest itself. SSH private key,
+pinned known-hosts material and the read-only GHCR token are separate protected
+secrets. The remote orchestrator performs a database backup plus isolated
+restore gate when PostgreSQL already exists and never restores live data
+automatically.

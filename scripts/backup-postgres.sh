@@ -32,14 +32,17 @@ final_file="${BACKUP_DIR}/midorivpn-${timestamp}.dump"
 manifest_file="${final_file}.sha256"
 [[ ! -e "$final_file" && ! -e "$manifest_file" ]] || die "backup output already exists"
 temporary_file="$(mktemp "${BACKUP_DIR}/.midorivpn-${timestamp}.XXXXXX.dump")"
+password_file="$(mktemp "${BACKUP_DIR}/.midorivpn-pgpass.XXXXXX")"
+printf 'PGPASSWORD=%s\n' "$POSTGRES_BACKUP_PASSWORD" >"$password_file"
+chmod 0600 "$password_file"
 
 cleanup() {
-  rm -f -- "$temporary_file"
+  rm -f -- "$temporary_file" "$password_file"
 }
 trap cleanup EXIT INT TERM
 
 podman exec \
-  -e PGPASSWORD="$POSTGRES_BACKUP_PASSWORD" \
+  --env-file "$password_file" \
   "$POSTGRES_CONTAINER" pg_dump \
     --username "$POSTGRES_BACKUP_USER" --dbname "$POSTGRES_DB" \
     --format custom --compress=6 --no-owner --no-privileges \
@@ -55,6 +58,7 @@ mv -- "$temporary_file" "$final_file"
   sha256sum "$(basename -- "$final_file")" >"$(basename -- "$manifest_file")"
 )
 chmod 0600 "$final_file" "$manifest_file"
+rm -f -- "$password_file"
 
 printf 'PostgreSQL backup created: %s\n' "$final_file"
 printf 'Checksum manifest created: %s\n' "$manifest_file"

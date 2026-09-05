@@ -8,9 +8,10 @@ source "${SCRIPT_DIR}/lib/common.sh"
 env_file=""
 mode="check"
 backup_root="/var/lib/midorivpn-deploy/firewall-backups"
+backup_record=""
 
 usage() {
-  printf 'usage: %s --env-file PATH [--check|--apply] [--backup-root PATH]\n' "$0"
+  printf 'usage: %s --env-file PATH [--check|--apply] [--backup-root PATH] [--backup-record FILE]\n' "$0"
 }
 
 while (($#)); do
@@ -19,6 +20,7 @@ while (($#)); do
     --check) mode=check; shift ;;
     --apply) mode=apply; shift ;;
     --backup-root) backup_root="${2:-}"; shift 2 ;;
+    --backup-record) backup_record="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; host_die "unknown argument: $1" ;;
   esac
@@ -88,6 +90,12 @@ fi
 
 install -d -m 0700 -- "${backup_root}"
 backup_dir="$(mktemp -d "${backup_root}/$(host_timestamp).XXXXXX")"
+if [[ -n "${backup_record}" ]]; then
+  [[ "${backup_record}" == /* ]] || host_die "--backup-record must be absolute"
+  install -d -m 0700 -- "$(dirname -- "${backup_record}")"
+  printf '%s\n' "${backup_dir}" > "${backup_record}"
+  chmod 0600 "${backup_record}"
+fi
 firewall-cmd --permanent --zone="${zone}" --list-all > "${backup_dir}/zone-before.txt"
 chmod 0600 "${backup_dir}/zone-before.txt"
 {
@@ -136,6 +144,11 @@ for forward_port in "${forward_ports[@]}"; do
   fi
 done
 firewall-cmd --reload
+: > "${backup_dir}/added-rules.tsv"
+chmod 0600 "${backup_dir}/added-rules.tsv"
+for item in "${added_services[@]}"; do printf 'service\t%s\n' "${item}" >> "${backup_dir}/added-rules.tsv"; done
+for item in "${added_ports[@]}"; do printf 'port\t%s\n' "${item}" >> "${backup_dir}/added-rules.tsv"; done
+for item in "${added_forwards[@]}"; do printf 'forward\t%s\n' "${item}" >> "${backup_dir}/added-rules.tsv"; done
 trap - ERR
 host_info "firewalld ingress applied in zone ${zone}; no database or administrative port was exposed"
 host_info "firewalld pre-change snapshot: ${backup_dir}"

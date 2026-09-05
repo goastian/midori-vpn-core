@@ -10,9 +10,10 @@ env_file=""
 values_file=""
 allowlist_file="${SCRIPT_DIR}/managed-env-keys.txt"
 backup_dir=""
+backup_record=""
 
 usage() {
-  printf 'usage: %s --env-file PATH --values-file PATH [--allowlist PATH] [--backup-dir PATH]\n' "$0"
+  printf 'usage: %s --env-file PATH --values-file PATH [--allowlist PATH] [--backup-dir PATH] [--backup-record FILE]\n' "$0"
 }
 
 while (($#)); do
@@ -21,6 +22,7 @@ while (($#)); do
     --values-file) values_file="${2:-}"; shift 2 ;;
     --allowlist) allowlist_file="${2:-}"; shift 2 ;;
     --backup-dir) backup_dir="${2:-}"; shift 2 ;;
+    --backup-record) backup_record="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; host_die "unknown argument: $1" ;;
   esac
@@ -80,6 +82,13 @@ if [[ -e "${env_file}" ]]; then
   done < "${env_file}"
 else
   backup_file=""
+fi
+
+if [[ -n "${backup_record}" ]]; then
+  [[ "${backup_record}" == /* ]] || host_die "--backup-record must be absolute"
+  install -d -m 0700 -- "$(dirname -- "${backup_record}")"
+  printf '%s\n' "${backup_file:-ABSENT}" > "${backup_record}"
+  chmod 0600 "${backup_record}"
 fi
 
 for key in "${replacement_order[@]}"; do

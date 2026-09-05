@@ -39,8 +39,11 @@ actual_hash="${actual_hash%% *}"
 [[ "$actual_hash" == "$expected_hash" ]] || die "backup checksum validation failed"
 podman exec -i "$POSTGRES_CONTAINER" pg_restore --list \
   <"$BACKUP_FILE" >/dev/null || die "PostgreSQL custom-format validation failed"
+password_file="$(mktemp "${TMPDIR:-/tmp}/midorivpn-restore-password.XXXXXX")"
+printf 'PGPASSWORD=%s\n' "$POSTGRES_ADMIN_PASSWORD" >"$password_file"
+chmod 0600 "$password_file"
 
-if podman exec -e PGPASSWORD="$POSTGRES_ADMIN_PASSWORD" "$POSTGRES_CONTAINER" \
+if podman exec --env-file "$password_file" "$POSTGRES_CONTAINER" \
   psql -U "$POSTGRES_ADMIN_USER" -d postgres -Atc \
     "SELECT 1 FROM pg_database WHERE datname = '$RESTORE_DATABASE'" | grep -qx 1; then
   die "restore database already exists"
@@ -49,17 +52,18 @@ fi
 restore_created=false
 cleanup() {
   if [[ "$restore_created" == true ]]; then
-    podman exec -e PGPASSWORD="$POSTGRES_ADMIN_PASSWORD" "$POSTGRES_CONTAINER" \
+    podman exec --env-file "$password_file" "$POSTGRES_CONTAINER" \
       dropdb --if-exists --force -U "$POSTGRES_ADMIN_USER" "$RESTORE_DATABASE" >/dev/null 2>&1 || true
   fi
+  rm -f -- "$password_file"
 }
 trap cleanup EXIT
 
-podman exec -e PGPASSWORD="$POSTGRES_ADMIN_PASSWORD" "$POSTGRES_CONTAINER" \
+podman exec --env-file "$password_file" "$POSTGRES_CONTAINER" \
   createdb -U "$POSTGRES_ADMIN_USER" --owner "$POSTGRES_OWNER_ROLE" "$RESTORE_DATABASE"
 restore_created=true
 
-podman exec -i -e PGPASSWORD="$POSTGRES_ADMIN_PASSWORD" "$POSTGRES_CONTAINER" \
+podman exec -i --env-file "$password_file" "$POSTGRES_CONTAINER" \
   pg_restore -U "$POSTGRES_ADMIN_USER" -d "$RESTORE_DATABASE" \
     --exit-on-error --no-owner --no-privileges <"$BACKUP_FILE"
 

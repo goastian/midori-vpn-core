@@ -107,10 +107,12 @@ the permanent-install gate.
 
 ## Implementation status and remaining operator inputs
 
-The source-side SIG-01 gaps are closed. Core and Control separate read-only
-build evidence from protected publication, pin workflow dependencies, produce
-SBOM/provenance and verify GitHub attestations plus keyless Cosign signatures by
-digest. Desktop uses a pinned RPM builder, the established OpenPGP identity, an
+Core and Control separate read-only build evidence from protected tagged
+publication, pin workflow dependencies, produce SBOM/provenance and verify
+GitHub attestations plus keyless Cosign signatures by digest. Core also verifies
+the four annotated tag commits and the signed private Control digest before
+producing a secret-free deployment bundle. Desktop uses a pinned RPM builder,
+the established OpenPGP identity, an
 isolated verification database, SPDX, provenance and checksums. The extension
 produces separate deterministic browser packages, AMO reviewer source,
 store metadata, SPDX, provenance and checksums, and validates Firefox with the
@@ -145,11 +147,12 @@ attestation and keyless OCI signing remain a separate approval-gated stage.
 
 ## Approval-gated signing stage
 
-Core and Control provide a separate manual `publish.yml` bound to the annotated
-`v2.0.0` tag and the protected `release-production` environment. Each refuses
-to replace an existing version tag, pushes one immutable digest, creates GitHub
-SLSA and SPDX attestations, signs with the short-lived workflow OIDC identity
-through Cosign 3.1.2, and verifies all three records immediately. Desktop uses
+Core and Control provide tag-driven `publish.yml` workflows bound to an
+annotated semantic tag and the protected `release-production` environment.
+Each refuses to replace an existing version, proves three matching builds,
+keeps its GHCR package private, creates GitHub SLSA and SPDX attestations, signs
+with the short-lived workflow OIDC identity through Cosign 3.1.3, and verifies
+all three records immediately. Desktop uses
 the protected `release-signing` environment and rejects any OpenPGP identity
 other than the established primary and signing-subkey fingerprints.
 

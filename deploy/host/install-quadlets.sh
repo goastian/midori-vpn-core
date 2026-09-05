@@ -11,9 +11,10 @@ scope="rootless"
 target_dir=""
 backup_root=""
 start_units=true
+backup_record=""
 
 usage() {
-  printf 'usage: %s --bundle PATH [--scope rootless|rootful] [--target-dir PATH] [--backup-root PATH] [--no-start]\n' "$0"
+  printf 'usage: %s --bundle PATH [--scope rootless|rootful] [--target-dir PATH] [--backup-root PATH] [--backup-record FILE] [--no-start]\n' "$0"
 }
 
 while (($#)); do
@@ -22,6 +23,7 @@ while (($#)); do
     --scope) scope="${2:-}"; shift 2 ;;
     --target-dir) target_dir="${2:-}"; shift 2 ;;
     --backup-root) backup_root="${2:-}"; shift 2 ;;
+    --backup-record) backup_record="${2:-}"; shift 2 ;;
     --no-start) start_units=false; shift ;;
     -h|--help) usage; exit 0 ;;
     *) usage >&2; host_die "unknown argument: $1" ;;
@@ -81,6 +83,12 @@ if [[ -e "${target_dir}" ]]; then
 else
   : > "${backup_dir}/PREVIOUSLY_ABSENT"
   chmod 0600 "${backup_dir}/PREVIOUSLY_ABSENT"
+fi
+if [[ -n "${backup_record}" ]]; then
+  [[ "${backup_record}" == /* ]] || host_die "--backup-record must be absolute"
+  install -d -m 0700 -- "$(dirname -- "${backup_record}")"
+  printf '%s\n' "${backup_dir}" > "${backup_record}"
+  chmod 0600 "${backup_record}"
 fi
 
 parent_dir="$(dirname -- "${target_dir}")"

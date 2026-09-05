@@ -1,49 +1,74 @@
-name: Publish - approved Core OCI release
+name: Publish and deploy - coordinated private release
 
 on:
-  workflow_dispatch:
-    inputs:
-      confirm_publish:
-        description: Type publish-v2.0.0 to enter the protected release gate
-        required: true
-        type: string
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
 
 permissions:
   contents: read
 
 concurrency:
-  group: midorivpn-core-v2.0.0-publication
+  group: midorivpn-${{ github.ref_name }}-coordinated-release
   cancel-in-progress: false
 
 env:
-  IMAGE_NAME: ghcr.io/goastian/midori-vpn-core
-  RELEASE_TAG: v2.0.0
-  RELEASE_VERSION: 2.0.0
+  CORE_IMAGE: ghcr.io/goastian/midori-vpn-core
+  CONTROL_IMAGE: ghcr.io/goastian/midori-vpn-control
 
 jobs:
-  validate-release-ref:
-    name: Validate the immutable release ref
+  validate-release-set:
+    name: Validate all four annotated tags and commits
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout the selected ref
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Checkout Core tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Require the approved tag and explicit confirmation
-        env:
-          CONFIRM_PUBLISH: ${{ inputs.confirm_publish }}
-        run: |
-          set -Eeuo pipefail
-          test "$GITHUB_REF" = "refs/tags/${RELEASE_TAG}"
-          test "$CONFIRM_PUBLISH" = "publish-${RELEASE_VERSION}"
-          test "$(cat VERSION)" = "$RELEASE_VERSION"
-          git tag --points-at HEAD | grep -Fx "$RELEASE_TAG"
-          test "$(git cat-file -t "refs/tags/${RELEASE_TAG}")" = "tag"
+      - name: Checkout Control tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: goastian/midori-vpn-control
+          ref: ${{ github.ref_name }}
+          path: midori-vpn-control
+          fetch-depth: 0
+          persist-credentials: false
 
-  publish-signed-image:
-    name: Publish, attest and sign Core by digest
-    needs: validate-release-ref
+      - name: Checkout Desktop tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: goastian/midori-vpn-desktop
+          ref: ${{ github.ref_name }}
+          path: midori-vpn-desktop
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout Extension tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: goastian/midorivpn-extension
+          ref: ${{ github.ref_name }}
+          path: midorivpn-extension
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Create the authoritative coordinated manifest
+        run: bash scripts/release/verify-coordinated-tags.sh "$GITHUB_REF_NAME" dist-release/workspace-manifest.json
+
+      - name: Retain the validated source manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: midorivpn-${{ github.ref_name }}-source-manifest
+          path: dist-release/workspace-manifest.json
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Coordinate Control, publish private Core and build bundle
+    needs: validate-release-set
     runs-on: ubuntu-24.04
     environment:
       name: release-production
@@ -53,113 +78,359 @@ jobs:
       contents: read
       id-token: write
       packages: write
+    outputs:
+      core_digest: ${{ steps.push.outputs.digest }}
+      control_digest: ${{ steps.control.outputs.digest }}
     steps:
-      - name: Checkout the approved tag
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Checkout the approved Core tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Require the environment release switch
+      - name: Download the coordinated source manifest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: midorivpn-${{ github.ref_name }}-source-manifest
+          path: dist-release
+
+      - name: Define and revalidate immutable release inputs
         env:
           RELEASE_SIGNING_ENABLED: ${{ vars.RELEASE_SIGNING_ENABLED }}
-        run: test "$RELEASE_SIGNING_ENABLED" = "true"
+        run: |
+          set -Eeuo pipefail
+          test "$RELEASE_SIGNING_ENABLED" = true
+          version="${GITHUB_REF_NAME#v}"
+          test "$(cat VERSION)" = "$version"
+          test "$(jq -r .tag dist-release/workspace-manifest.json)" = "$GITHUB_REF_NAME"
+          test "$(jq -r '.repositories[] | select(.component == "core") | .commit' dist-release/workspace-manifest.json)" = "$GITHUB_SHA"
+          printf 'RELEASE_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+          printf 'SOURCE_DATE_EPOCH=%s\n' "$(jq -r .source_date_epoch dist-release/workspace-manifest.json)" >> "$GITHUB_ENV"
 
-      - name: Define the reproducible build epoch
-        run: echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Set up current pinned Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
-      - name: Refuse to replace an existing release tag
+      - name: Install current pinned Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+
+      - name: Wait for and verify the matching private Control release
+        id: control
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if docker buildx imagetools inspect "${IMAGE_NAME}:${RELEASE_VERSION}" >/dev/null 2>&1; then
-            echo "error: ${IMAGE_NAME}:${RELEASE_VERSION} already exists and will not be overwritten" >&2
+          set -Eeuo pipefail
+          control_ref="${CONTROL_IMAGE}:${RELEASE_VERSION}"
+          digest=""
+          for attempt in $(seq 1 40); do
+            digest="$(docker buildx imagetools inspect "$control_ref" 2>/dev/null | awk '$1 == "Digest:" {print $2; exit}')"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] && break
+            sleep 30
+          done
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo 'error: matching Control release did not become available' >&2; exit 1; }
+          test "$(gh api /orgs/goastian/packages/container/midori-vpn-control --jq .visibility)" = private
+          docker pull "${CONTROL_IMAGE}@${digest}" >/dev/null
+          expected_commit="$(jq -r '.repositories[] | select(.component == "control") | .commit' dist-release/workspace-manifest.json)"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${CONTROL_IMAGE}@${digest}")" = "$expected_commit"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "${CONTROL_IMAGE}@${digest}")" = "$RELEASE_VERSION"
+          identity="https://github.com/goastian/midori-vpn-control/.github/workflows/publish.yml@refs/tags/${GITHUB_REF_NAME}"
+          cosign verify --certificate-identity "$identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com "${CONTROL_IMAGE}@${digest}"
+          gh attestation verify "oci://${CONTROL_IMAGE}@${digest}" --repo goastian/midori-vpn-control \
+            --predicate-type https://slsa.dev/provenance/v1
+          gh attestation verify "oci://${CONTROL_IMAGE}@${digest}" --repo goastian/midori-vpn-control \
+            --predicate-type https://spdx.dev/Document/v2.3
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Refuse to replace an existing Core version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          error_file="$(mktemp)"
+          if existing_tags="$(gh api --paginate '/orgs/goastian/packages/container/midori-vpn-core/versions?per_page=100' --jq '.[].metadata.container.tags[]?' 2>"$error_file")"; then
+            :
+          elif grep -Fq 'HTTP 404' "$error_file"; then
+            existing_tags=""
+          else
+            echo 'error: unable to establish whether the Core version already exists' >&2
+            exit 1
+          fi
+          if grep -Fxq "$RELEASE_VERSION" <<< "$existing_tags"; then
+            echo "error: immutable Core version already exists" >&2
             exit 1
           fi
 
-      - name: Build and push the immutable image
+      - name: First clean Core OCI build
+        id: first
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: false
+          no-cache: true
+          tags: ${{ env.CORE_IMAGE }}:${{ env.RELEASE_VERSION }}
+          labels: |
+            org.opencontainers.image.version=${{ env.RELEASE_VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/goastian/midori-vpn-core
+          build-args: SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
+          outputs: type=oci,dest=${{ runner.temp }}/core-first.oci.tar,rewrite-timestamp=true
+          provenance: mode=max
+          sbom: true
+
+      - name: Second clean Core OCI build
+        id: second
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: false
+          no-cache: true
+          tags: ${{ env.CORE_IMAGE }}:${{ env.RELEASE_VERSION }}
+          labels: |
+            org.opencontainers.image.version=${{ env.RELEASE_VERSION }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/goastian/midori-vpn-core
+          build-args: SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
+          outputs: type=oci,dest=${{ runner.temp }}/core-second.oci.tar,rewrite-timestamp=true
+          provenance: mode=max
+          sbom: true
+
+      - name: Require reproducible Core image digests
+        env:
+          FIRST_DIGEST: ${{ steps.first.outputs.digest }}
+          SECOND_DIGEST: ${{ steps.second.outputs.digest }}
+        run: test -n "$FIRST_DIGEST" && test "$FIRST_DIGEST" = "$SECOND_DIGEST"
+
+      - name: Push the rebuilt immutable Core image
         id: push
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
         with:
           context: .
           file: Dockerfile
           platforms: linux/amd64
           push: true
-          tags: ${{ env.IMAGE_NAME }}:${{ env.RELEASE_VERSION }}
+          no-cache: true
+          tags: ${{ env.CORE_IMAGE }}:${{ env.RELEASE_VERSION }}
           labels: |
             org.opencontainers.image.version=${{ env.RELEASE_VERSION }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/goastian/midori-vpn-core
-          build-args: |
-            SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
+          build-args: SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
+          outputs: type=registry
           provenance: mode=max
           sbom: true
 
-      - name: Scan the pushed digest and generate its independent SPDX SBOM
+      - name: Require the pushed digest to match both clean builds
+        env:
+          FIRST_DIGEST: ${{ steps.first.outputs.digest }}
+          PUSHED_DIGEST: ${{ steps.push.outputs.digest }}
+        run: test -n "$PUSHED_DIGEST" && test "$FIRST_DIGEST" = "$PUSHED_DIGEST"
+
+      - name: Force and verify private Core package visibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          gh api --method PATCH /orgs/goastian/packages/container/midori-vpn-core -f visibility=private >/dev/null
+          test "$(gh api /orgs/goastian/packages/container/midori-vpn-core --jq .visibility)" = private
+
+      - name: Scan the exact Core digest and generate independent SPDX
         env:
           IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           set -Eeuo pipefail
-          mkdir -p dist-release
           CONTAINER_ENGINE=docker bash scripts/scan-oci.sh image \
-            "${IMAGE_NAME}@${IMAGE_DIGEST}" \
-            dist-release/midorivpn-core-2.0.0.trivy.json
-          docker run --rm \
-            -e SYFT_CACHE_DIR=/tmp/syft-cache \
+            "${CORE_IMAGE}@${IMAGE_DIGEST}" "dist-release/core-${RELEASE_VERSION}.trivy.json"
+          docker run --rm -e SYFT_CACHE_DIR=/tmp/syft-cache \
             -v "${HOME}/.docker/config.json:/root/.docker/config.json:ro" \
             -v "${PWD}/dist-release:/artifacts" \
             ghcr.io/anchore/syft@sha256:41f8289664101d6ebab30a97ac8df6b6f86b92d8343285ca90f428e2bc353106 \
-            scan "registry:${IMAGE_NAME}@${IMAGE_DIGEST}" \
-            -o spdx-json=/artifacts/midorivpn-core-2.0.0.spdx.json
+            scan "registry:${CORE_IMAGE}@${IMAGE_DIGEST}" \
+            -o "spdx-json=/artifacts/core-${RELEASE_VERSION}.spdx.json"
 
-      - name: Attest build provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+      - name: Attest Core provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-name: ${{ env.IMAGE_NAME }}
+          subject-name: ${{ env.CORE_IMAGE }}
           subject-digest: ${{ steps.push.outputs.digest }}
+          subject-version: ${{ env.RELEASE_VERSION }}
           push-to-registry: true
 
-      - name: Attest the SPDX SBOM
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+      - name: Attest Core SPDX SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-name: ${{ env.IMAGE_NAME }}
+          subject-name: ${{ env.CORE_IMAGE }}
           subject-digest: ${{ steps.push.outputs.digest }}
-          sbom-path: dist-release/midorivpn-core-2.0.0.spdx.json
+          subject-version: ${{ env.RELEASE_VERSION }}
+          sbom-path: dist-release/core-${{ env.RELEASE_VERSION }}.spdx.json
           push-to-registry: true
 
-      - name: Install the pinned Cosign release
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        with:
-          cosign-release: v3.1.2
-
-      - name: Sign the image digest with the workflow OIDC identity
-        env:
-          IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
-        run: cosign sign --yes "${IMAGE_NAME}@${IMAGE_DIGEST}"
-
-      - name: Verify signature and GitHub attestations
+      - name: Sign and verify Core by digest
         env:
           GH_TOKEN: ${{ github.token }}
           IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           set -Eeuo pipefail
-          image_ref="${IMAGE_NAME}@${IMAGE_DIGEST}"
-          identity="https://github.com/goastian/midori-vpn-core/.github/workflows/publish.yml@refs/tags/v2.0.0"
-          cosign verify \
-            --certificate-identity "$identity" \
-            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            "$image_ref"
-          gh attestation verify "oci://${image_ref}" \
-            --repo goastian/midori-vpn-core \
+          image_ref="${CORE_IMAGE}@${IMAGE_DIGEST}"
+          identity="https://github.com/goastian/midori-vpn-core/.github/workflows/publish.yml@refs/tags/${GITHUB_REF_NAME}"
+          cosign sign --yes "$image_ref"
+          cosign verify --certificate-identity "$identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com "$image_ref"
+          gh attestation verify "oci://${image_ref}" --repo goastian/midori-vpn-core \
             --predicate-type https://slsa.dev/provenance/v1
-          gh attestation verify "oci://${image_ref}" \
-            --repo goastian/midori-vpn-core \
+          gh attestation verify "oci://${image_ref}" --repo goastian/midori-vpn-core \
             --predicate-type https://spdx.dev/Document/v2.3
-          printf 'Published Core digest: %s\n' "$image_ref" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create the secret-free deployment bundle
+        env:
+          CORE_DIGEST: ${{ steps.push.outputs.digest }}
+          CONTROL_DIGEST: ${{ steps.control.outputs.digest }}
+        run: |
+          bash scripts/release/create-deployment-bundle.sh \
+            --manifest dist-release/workspace-manifest.json \
+            --core-digest "$CORE_DIGEST" --control-digest "$CONTROL_DIGEST" \
+            --output-dir "dist-release/midorivpn-${RELEASE_VERSION}"
+
+      - name: Retain private supply-chain evidence and deployment bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: midorivpn-${{ github.ref_name }}-deployment-bundle
+          path: |
+            dist-release/midorivpn-${{ env.RELEASE_VERSION }}.tar.gz
+            dist-release/midorivpn-${{ env.RELEASE_VERSION }}.tar.gz.sha256
+            dist-release/workspace-manifest.json
+            dist-release/core-${{ env.RELEASE_VERSION }}.spdx.json
+            dist-release/core-${{ env.RELEASE_VERSION }}.trivy.json
+          if-no-files-found: error
+          retention-days: 30
+
+  deploy:
+    name: Deploy only after protected environment approval
+    needs: publish
+    runs-on: ubuntu-24.04
+    environment:
+      name: deploy-production
+    permissions:
+      contents: read
+    steps:
+      - name: Download the verified deployment bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: midorivpn-${{ github.ref_name }}-deployment-bundle
+          path: release-artifact
+
+      - name: Validate protected deployment inputs
+        env:
+          DEPLOY_ENABLED: ${{ vars.MIDORIVPN_DEPLOY_ENABLED }}
+          DEPLOY_HOST: ${{ vars.MIDORIVPN_DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.MIDORIVPN_DEPLOY_PORT }}
+          DEPLOY_USER: ${{ vars.MIDORIVPN_DEPLOY_USER }}
+          DEPLOY_VALUES: ${{ vars.MIDORIVPN_DEPLOY_VALUES }}
+          DEPLOY_SECRETS: ${{ secrets.MIDORIVPN_DEPLOY_SECRETS }}
+          SSH_PRIVATE_KEY: ${{ secrets.MIDORIVPN_DEPLOY_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.MIDORIVPN_DEPLOY_SSH_KNOWN_HOSTS }}
+          GHCR_PULL_USER: ${{ vars.MIDORIVPN_GHCR_PULL_USER }}
+          GHCR_PULL_TOKEN: ${{ secrets.MIDORIVPN_GHCR_PULL_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          test "$DEPLOY_ENABLED" = true
+          [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$ ]]
+          [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]] && ((DEPLOY_PORT >= 1 && DEPLOY_PORT <= 65535))
+          [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]
+          [[ "$GHCR_PULL_USER" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,78}$ ]]
+          test -n "$DEPLOY_VALUES" && test -n "$DEPLOY_SECRETS"
+          test -n "$SSH_PRIVATE_KEY" && test -n "$SSH_KNOWN_HOSTS"
+          test -n "$GHCR_PULL_USER" && test -n "$GHCR_PULL_TOKEN"
+
+      - name: Verify bundle and compose only allowlisted environment patches
+        env:
+          DEPLOY_VALUES: ${{ vars.MIDORIVPN_DEPLOY_VALUES }}
+          DEPLOY_SECRETS: ${{ secrets.MIDORIVPN_DEPLOY_SECRETS }}
+          CORE_DIGEST: ${{ needs.publish.outputs.core_digest }}
+          CONTROL_DIGEST: ${{ needs.publish.outputs.control_digest }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          version="${GITHUB_REF_NAME#v}"
+          (cd release-artifact && sha256sum --check "midorivpn-${version}.tar.gz.sha256")
+          mkdir -m 700 release-expanded
+          tar -xzf "release-artifact/midorivpn-${version}.tar.gz" -C release-expanded
+          printf '%s\n' "$DEPLOY_VALUES" > "$RUNNER_TEMP/deploy-values.env"
+          printf '%s\n' "$DEPLOY_SECRETS" > "$RUNNER_TEMP/deploy-secrets.env"
+          bash "release-expanded/midorivpn-${version}/scripts/release/compose-deployment-values.sh" \
+            --variables-file "$RUNNER_TEMP/deploy-values.env" \
+            --secrets-file "$RUNNER_TEMP/deploy-secrets.env" \
+            --core-image "${CORE_IMAGE}@${CORE_DIGEST}" \
+            --control-image "${CONTROL_IMAGE}@${CONTROL_DIGEST}" \
+            --output "$RUNNER_TEMP/deployment.env"
+
+      - name: Install strict SSH trust material
+        env:
+          DEPLOY_HOST: ${{ vars.MIDORIVPN_DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.MIDORIVPN_DEPLOY_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.MIDORIVPN_DEPLOY_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.MIDORIVPN_DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$RUNNER_TEMP/deploy-key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$RUNNER_TEMP/known_hosts"
+          chmod 600 "$RUNNER_TEMP/deploy-key" "$RUNNER_TEMP/known_hosts"
+          lookup="$DEPLOY_HOST"
+          [[ "$DEPLOY_PORT" == 22 ]] || lookup="[$DEPLOY_HOST]:$DEPLOY_PORT"
+          ssh-keygen -F "$lookup" -f "$RUNNER_TEMP/known_hosts" >/dev/null
+
+      - name: Transfer, authenticate by stdin and deploy
+        env:
+          DEPLOY_HOST: ${{ vars.MIDORIVPN_DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.MIDORIVPN_DEPLOY_PORT }}
+          DEPLOY_USER: ${{ vars.MIDORIVPN_DEPLOY_USER }}
+          GHCR_PULL_USER: ${{ vars.MIDORIVPN_GHCR_PULL_USER }}
+          GHCR_PULL_TOKEN: ${{ secrets.MIDORIVPN_GHCR_PULL_TOKEN }}
+        run: |
+          set -Eeuo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          remote_dir="/tmp/midorivpn-deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          ssh_opts=(-i "$RUNNER_TEMP/deploy-key" -p "$DEPLOY_PORT" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$RUNNER_TEMP/known_hosts")
+          ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "install -d -m 700 '$remote_dir'"
+          scp -i "$RUNNER_TEMP/deploy-key" -P "$DEPLOY_PORT" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$RUNNER_TEMP/known_hosts" \
+            "release-artifact/midorivpn-${version}.tar.gz" "release-artifact/midorivpn-${version}.tar.gz.sha256" "$RUNNER_TEMP/deployment.env" \
+            "$DEPLOY_USER@$DEPLOY_HOST:$remote_dir/"
+          ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "chmod 600 '$remote_dir/deployment.env'"
+          ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd '$remote_dir' && sha256sum --check 'midorivpn-${version}.tar.gz.sha256' && tar -xzf 'midorivpn-${version}.tar.gz' && sudo bash 'midorivpn-${version}/deploy/host/prepare-opensuse.sh' --apply --service-user midorivpn"
+          printf '%s' "$GHCR_PULL_TOKEN" | ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "service_home=\$(getent passwd midorivpn | cut -d: -f6); sudo -u midorivpn env HOME=\"\$service_home\" podman login --username '$GHCR_PULL_USER' --password-stdin ghcr.io"
+          ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "sudo bash '$remote_dir/midorivpn-${version}/scripts/release/apply-deployment.sh' --bundle-dir '$remote_dir/midorivpn-${version}' --values-file '$remote_dir/deployment.env' --service-user midorivpn --deployment-id '${version}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}'"
+          ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "rm -rf -- '$remote_dir'"
+
+      - name: Remove remote staging after success or failure
+        if: always()
+        env:
+          DEPLOY_HOST: ${{ vars.MIDORIVPN_DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ vars.MIDORIVPN_DEPLOY_PORT }}
+          DEPLOY_USER: ${{ vars.MIDORIVPN_DEPLOY_USER }}
+        run: |
+          set +e
+          if [[ -f "$RUNNER_TEMP/deploy-key" && "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ && "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+            remote_dir="/tmp/midorivpn-deploy-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            ssh -i "$RUNNER_TEMP/deploy-key" -p "$DEPLOY_PORT" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$RUNNER_TEMP/known_hosts" \
+              "$DEPLOY_USER@$DEPLOY_HOST" "rm -rf -- '$remote_dir'"
+          fi
+
+      - name: Remove runner secrets
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/deploy-key" "$RUNNER_TEMP/known_hosts" "$RUNNER_TEMP/deploy-values.env" "$RUNNER_TEMP/deploy-secrets.env" "$RUNNER_TEMP/deployment.env"

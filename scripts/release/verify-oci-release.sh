@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 component="${1:-}"
 digest="${2:-}"
+tag="${3:-v2.0.0}"
 
 case "${component}" in
   core)
@@ -14,7 +15,7 @@ case "${component}" in
     repository="goastian/midori-vpn-control"
     ;;
   *)
-    echo "usage: $0 {core|control} sha256:<64 lowercase hexadecimal characters>" >&2
+    echo "usage: $0 {core|control} sha256:<64 lowercase hexadecimal characters> [vSEMVER]" >&2
     exit 2
     ;;
 esac
@@ -23,13 +24,17 @@ esac
   echo "error: an immutable sha256 digest is required" >&2
   exit 2
 }
+[[ "${tag}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]] || {
+  echo "error: an annotated semantic release tag is required" >&2
+  exit 2
+}
 
 for command_name in cosign gh; do
   command -v "${command_name}" >/dev/null || { echo "error: ${command_name} is required" >&2; exit 1; }
 done
 
 image_ref="${image_name}@${digest}"
-identity="https://github.com/${repository}/.github/workflows/publish.yml@refs/tags/v2.0.0"
+identity="https://github.com/${repository}/.github/workflows/publish.yml@refs/tags/${tag}"
 
 cosign verify \
   --certificate-identity "${identity}" \

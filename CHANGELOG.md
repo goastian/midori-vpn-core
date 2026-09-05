@@ -52,6 +52,11 @@
 
 ### Operations
 
+- Replaced manual per-repository OCI publication with coordinated annotated-tag
+  CI/CD. Control and Core now prove reproducible builds, remain private in GHCR,
+  are scanned/attested/signed by digest, and feed a checksum-closed secret-free
+  host bundle into a separately approved deployment gate that patches only
+  classified `.env` keys and performs backup/isolated-restore plus rollback.
 - Added the canonical openSUSE deployment toolkit: allowlisted atomic `.env`
   updates, immutable digest-only principal/regional Quadlets, isolated service
   credentials, rootless MASQUE port translation, exact firewalld/Nginx ingress,
@@ -98,9 +103,9 @@
   failure isolation, observability, rollout/rollback and the regional
   production acceptance gate. The document distinguishes deployed behavior
   from cluster lifecycle, heartbeat and fleet-revocation work that remains.
-- Added approval-gated OCI publication workflows that require the annotated
-  2.0.0 tag, protected environments and explicit confirmation, then create and
-  verify GitHub attestations and a keyless Cosign signature by digest.
+- Added approval-gated OCI publication workflows that require coordinated
+  annotated semantic tags and protected environments, then create and verify
+  GitHub attestations and a keyless Cosign signature by digest.
 - Added a non-publishing release evidence gate with immutable GitHub Actions,
   a four-repository commit manifest, reproducible OCI inputs, SPDX output and
   checksums. Registry upload and signing remain a separately approved stage.

@@ -35,7 +35,7 @@ DOMAIN=new.example.test
 CORE_IMAGE=registry.example.test/midori/core@${digest_b}
 EOF
 chmod 0600 "${target_env}" "${values_env}"
-bash "${HOST_DIR}/patch-env.sh" --env-file "${target_env}" --values-file "${values_env}" --backup-dir "${test_root}/backups" >/dev/null
+bash "${HOST_DIR}/patch-env.sh" --env-file "${target_env}" --values-file "${values_env}" --backup-dir "${test_root}/backups" --backup-record "${test_root}/env-backup-record" >/dev/null
 assert_contains "${target_env}" '# keep this operator comment'
 assert_contains "${target_env}" 'UNMANAGED_LOCAL=value that stays'
 assert_contains "${target_env}" 'DOMAIN=new.example.test'
@@ -43,6 +43,7 @@ assert_contains "${target_env}" "CORE_IMAGE=registry.example.test/midori/core@${
 [[ "$(stat -c '%a' "${target_env}")" == 600 ]] || fail "patched environment is not mode 0600"
 [[ "$(find "${test_root}/backups" -type f | wc -l)" == 1 ]] || fail "patch did not create exactly one backup"
 env_backup="$(find "${test_root}/backups" -type f -print -quit)"
+[[ "$(<"${test_root}/env-backup-record")" == "${env_backup}" ]] || fail "patcher did not record the exact rollback file"
 
 cat > "${test_root}/unknown.env" <<'EOF'
 UNMANAGED_LOCAL=must-not-change
@@ -357,9 +358,10 @@ backup_root="${test_root}/install-backups"
 install -d -m 0700 "${target}"
 printf 'old\n' > "${target}/old.container"
 chmod 0600 "${target}/old.container"
-PATH="${fake_bin}:${PATH}" bash "${HOST_DIR}/install-quadlets.sh" --bundle "${rendered}" --target-dir "${target}" --backup-root "${backup_root}" --no-start >/dev/null
+PATH="${fake_bin}:${PATH}" bash "${HOST_DIR}/install-quadlets.sh" --bundle "${rendered}" --target-dir "${target}" --backup-root "${backup_root}" --backup-record "${test_root}/unit-backup-record" --no-start >/dev/null
 [[ -f "${target}/midorivpn-core.container" ]] || fail "installer did not place rendered units"
 backup_dir="$(find "${backup_root}" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+[[ "$(<"${test_root}/unit-backup-record")" == "${backup_dir}" ]] || fail "installer did not record the exact rollback snapshot"
 [[ -f "${backup_dir}/previous/old.container" ]] || fail "installer did not retain the previous unit tree"
 PATH="${fake_bin}:${PATH}" bash "${HOST_DIR}/rollback.sh" --backup-dir "${backup_dir}" --target-dir "${target}" >/dev/null
 [[ -f "${target}/old.container" ]] || fail "rollback did not restore the prior unit tree"
