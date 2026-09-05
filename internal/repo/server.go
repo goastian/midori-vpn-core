@@ -30,7 +30,7 @@ type ServerRepo struct {
 	cacheTTL     time.Duration
 }
 
-const serverColumns = `id, node_id, legacy_node_unbound, name, host, endpoint, port, wg_port, public_key, location, country_code,
+const serverColumns = `id, node_id, legacy_node_unbound, name, host, probe_url, endpoint, port, wg_port, public_key, location, country_code,
 	max_peers, current_peers, is_active, draining_at, created_at, updated_at`
 
 type rowScanner interface {
@@ -54,12 +54,12 @@ func (r *ServerRepo) InvalidateCache() {
 func (r *ServerRepo) Create(ctx context.Context, s *models.VPNServer) error {
 	defer r.InvalidateCache()
 	query := `
-		INSERT INTO vpn_servers (node_id, legacy_node_unbound, name, host, endpoint, port, wg_port, public_key, location, country_code, max_peers)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO vpn_servers (node_id, legacy_node_unbound, name, host, probe_url, endpoint, port, wg_port, public_key, location, country_code, max_peers)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING id, created_at, updated_at
 	`
 	return r.pool.QueryRow(ctx, query,
-		s.NodeID, s.LegacyNodeUnbound, s.Name, s.Host, s.Endpoint, s.Port,
+		s.NodeID, s.LegacyNodeUnbound, s.Name, s.Host, s.ProbeURL, s.Endpoint, s.Port,
 		s.WGPort, s.PublicKey, s.Location, s.CountryCode, s.MaxPeers,
 	).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt)
 }
@@ -77,10 +77,10 @@ func (r *ServerRepo) CreateWithTransports(ctx context.Context, s *models.VPNServ
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if err := tx.QueryRow(ctx, `
-		INSERT INTO vpn_servers (node_id, legacy_node_unbound, name, host, endpoint, port, wg_port, public_key, location, country_code, max_peers, is_active, draining_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		INSERT INTO vpn_servers (node_id, legacy_node_unbound, name, host, probe_url, endpoint, port, wg_port, public_key, location, country_code, max_peers, is_active, draining_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 		RETURNING id, created_at, updated_at`,
-		s.NodeID, s.LegacyNodeUnbound, s.Name, s.Host, s.Endpoint, s.Port,
+		s.NodeID, s.LegacyNodeUnbound, s.Name, s.Host, s.ProbeURL, s.Endpoint, s.Port,
 		s.WGPort, s.PublicKey, s.Location, s.CountryCode, s.MaxPeers,
 		s.IsActive, s.DrainingAt,
 	).Scan(&s.ID, &s.CreatedAt, &s.UpdatedAt); err != nil {
@@ -177,6 +177,53 @@ func (r *ServerRepo) ListAll(ctx context.Context) ([]models.VPNServer, error) {
 		return nil, err
 	}
 	return servers, nil
+}
+
+// ListCandidates returns only modeled, capacity-eligible placements for the
+// requested transport. Legacy rollout exceptions and servers without an
+// explicit public probe endpoint never enter the client failover contract.
+func (r *ServerRepo) ListCandidates(ctx context.Context, protocol string, freshness time.Duration) ([]models.ServerCandidate, error) {
+	if strings.TrimSpace(protocol) == "" || freshness <= 0 {
+		return nil, errors.New("protocol and positive freshness are required")
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT server.id, server.name, server.location, server.country_code,
+		       transport.protocol, server.probe_url, transport.endpoint,
+		       transport.port, transport.priority
+		FROM vpn_servers server
+		JOIN vpn_server_transports transport
+		  ON transport.server_id = server.id AND transport.protocol = $1
+		WHERE server.legacy_node_unbound = FALSE
+		  AND server.is_active = TRUE
+		  AND server.draining_at IS NULL
+		  AND server.probe_url <> ''
+		  AND transport.enabled = TRUE
+		  AND transport.health_status = 'healthy'
+		  AND vpn_server_placement_eligible(server.id, $1, $2::interval, TRUE)
+		ORDER BY transport.priority DESC,
+		         (server.current_peers::float / GREATEST(server.max_peers, 1)) ASC,
+		         lower(server.name), server.id`, protocol, freshness.String())
+	if err != nil {
+		return nil, fmt.Errorf("list server candidates: %w", err)
+	}
+	defer rows.Close()
+
+	candidates := make([]models.ServerCandidate, 0)
+	for rows.Next() {
+		var candidate models.ServerCandidate
+		if err := rows.Scan(
+			&candidate.ID, &candidate.Name, &candidate.Location, &candidate.CountryCode,
+			&candidate.Protocol, &candidate.ProbeURL, &candidate.Endpoint,
+			&candidate.Port, &candidate.Priority,
+		); err != nil {
+			return nil, fmt.Errorf("scan server candidate: %w", err)
+		}
+		candidates = append(candidates, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list server candidate rows: %w", err)
+	}
+	return candidates, nil
 }
 
 func (r *ServerRepo) ListAdminPage(ctx context.Context, options ListOptions) ([]models.VPNServer, int, error) {
@@ -297,13 +344,13 @@ func (r *ServerRepo) Update(ctx context.Context, s *models.VPNServer) error {
 	defer r.InvalidateCache()
 	query := `
 		UPDATE vpn_servers
-		SET name = $1, host = $2, endpoint = $3, port = $4, wg_port = $5, public_key = $6,
-		    location = $7, country_code = $8, max_peers = $9, is_active = $10,
-		    draining_at = $11, updated_at = NOW()
-		WHERE id = $12
+		SET name = $1, host = $2, probe_url = $3, endpoint = $4, port = $5, wg_port = $6, public_key = $7,
+		    location = $8, country_code = $9, max_peers = $10, is_active = $11,
+		    draining_at = $12, updated_at = NOW()
+		WHERE id = $13
 	`
 	_, err := r.pool.Exec(ctx, query,
-		s.Name, s.Host, s.Endpoint, s.Port, s.WGPort, s.PublicKey, s.Location,
+		s.Name, s.Host, s.ProbeURL, s.Endpoint, s.Port, s.WGPort, s.PublicKey, s.Location,
 		s.CountryCode, s.MaxPeers, s.IsActive, s.DrainingAt, s.ID,
 	)
 	return err
@@ -322,11 +369,11 @@ func (r *ServerRepo) UpdateWithTransports(ctx context.Context, s *models.VPNServ
 	defer func() { _ = tx.Rollback(ctx) }()
 	tag, err := tx.Exec(ctx, `
 		UPDATE vpn_servers
-		SET name = $1, host = $2, endpoint = $3, port = $4, wg_port = $5, public_key = $6,
-		    location = $7, country_code = $8, max_peers = $9, is_active = $10,
-		    draining_at = $11, updated_at = NOW()
-		WHERE id = $12`,
-		s.Name, s.Host, s.Endpoint, s.Port, s.WGPort, s.PublicKey, s.Location,
+		SET name = $1, host = $2, probe_url = $3, endpoint = $4, port = $5, wg_port = $6, public_key = $7,
+		    location = $8, country_code = $9, max_peers = $10, is_active = $11,
+		    draining_at = $12, updated_at = NOW()
+		WHERE id = $13`,
+		s.Name, s.Host, s.ProbeURL, s.Endpoint, s.Port, s.WGPort, s.PublicKey, s.Location,
 		s.CountryCode, s.MaxPeers, s.IsActive, s.DrainingAt, s.ID)
 	if err != nil {
 		return fmt.Errorf("update server: %w", err)
@@ -608,7 +655,7 @@ func normalizeStoredTransportHost(host string, port int) string {
 func scanServer(row rowScanner) (*models.VPNServer, error) {
 	var s models.VPNServer
 	if err := row.Scan(
-		&s.ID, &s.NodeID, &s.LegacyNodeUnbound, &s.Name, &s.Host, &s.Endpoint, &s.Port, &s.WGPort, &s.PublicKey,
+		&s.ID, &s.NodeID, &s.LegacyNodeUnbound, &s.Name, &s.Host, &s.ProbeURL, &s.Endpoint, &s.Port, &s.WGPort, &s.PublicKey,
 		&s.Location, &s.CountryCode, &s.MaxPeers, &s.CurrentPeers, &s.IsActive,
 		&s.DrainingAt, &s.CreatedAt, &s.UpdatedAt,
 	); err != nil {

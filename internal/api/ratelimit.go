@@ -187,3 +187,22 @@ func RateLimitMiddleware(cfg *config.Config) func(http.Handler) http.Handler {
 		})
 	}
 }
+
+// EdgeHealthRateLimitMiddleware always protects the unauthenticated client
+// probe, even in profiles where the general API limiter is disabled.
+func EdgeHealthRateLimitMiddleware(trustedProxies string) func(http.Handler) http.Handler {
+	limiter := newIPLimiter(5, 10)
+	trustedNets := clientip.ParseTrustedProxies(trustedProxies)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ip := clientip.RealIP(r, trustedNets)
+			if !limiter.getLimiter(ip).Allow() {
+				w.Header().Set("Cache-Control", "no-store")
+				w.Header().Set("Retry-After", "1")
+				respond.JsonError(w, "rate limit exceeded", http.StatusTooManyRequests)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}

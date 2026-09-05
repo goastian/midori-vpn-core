@@ -25,11 +25,12 @@ import (
 // ═══════════════════════════════════════════════════════════════════════════
 
 type ConnectRequest struct {
-	ServerID       string         `json:"server_id"`
-	PublicKey      string         `json:"public_key"`
-	DeviceName     string         `json:"device_name"`
-	Device         *DeviceRequest `json:"device,omitempty"`
-	PQKEMPublicKey string         `json:"pq_kem_public_key,omitempty"`
+	ServerID         string                  `json:"server_id"`
+	PublicKey        string                  `json:"public_key"`
+	DeviceName       string                  `json:"device_name"`
+	Device           *DeviceRequest          `json:"device,omitempty"`
+	ConnectionReason models.ConnectionReason `json:"connection_reason,omitempty"`
+	PQKEMPublicKey   string                  `json:"pq_kem_public_key,omitempty"`
 }
 
 func (h *Handler) respondWithExistingConnection(w http.ResponseWriter, r *http.Request, peer *models.Peer, pqCiphertext string, status int) {
@@ -95,6 +96,13 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	}
 	if !isValidWGKey(req.PublicKey) {
 		respond.JsonError(w, "public_key must be a valid 32-byte base64-encoded WireGuard key", http.StatusBadRequest)
+		return
+	}
+	if req.ConnectionReason == "" {
+		req.ConnectionReason = models.ConnectionReasonUser
+	}
+	if !req.ConnectionReason.Valid() {
+		respond.JsonError(w, "connection_reason must be user or automatic_failover", http.StatusBadRequest)
 		return
 	}
 	deviceRequest, err := normalizeDeviceRequest(req.Device, req.DeviceName)
@@ -230,6 +238,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		LegacyDeviceName: deviceRequest.reportedName,
 		ServerID:         server.ID,
 		PublicKey:        req.PublicKey,
+		ConnectionReason: req.ConnectionReason,
 		PresharedKey:     psk,
 		PQKEMCiphertext:  pqCiphertext,
 		MaxDevices:       userQuota.MaxDevices,

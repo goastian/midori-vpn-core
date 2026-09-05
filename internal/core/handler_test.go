@@ -204,6 +204,23 @@ func TestRemovePeerRequiresAndForwardsExpectedOperation(t *testing.T) {
 	}
 }
 
+func TestEdgeHealthDisclosesNoRuntimeData(t *testing.T) {
+	handler := newHandler(&config.Config{}, &fakePeerManager{})
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		recorder := httptest.NewRecorder()
+		handler.EdgeHealth(recorder, httptest.NewRequest(method, "/.well-known/midorivpn/edge-health", nil))
+		if recorder.Code != http.StatusNoContent {
+			t.Fatalf("%s status = %d, want 204", method, recorder.Code)
+		}
+		if recorder.Body.Len() != 0 {
+			t.Fatalf("%s returned a response body", method)
+		}
+		if recorder.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("%s cache-control = %q", method, recorder.Header().Get("Cache-Control"))
+		}
+	}
+}
+
 func testCoreKey(fill byte) string {
 	raw := make([]byte, 32)
 	for index := range raw {

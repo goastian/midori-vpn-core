@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -54,6 +55,32 @@ func validateServerEndpoint(endpoint string) error {
 		return errors.New("endpoint host contains invalid characters")
 	}
 	return nil
+}
+
+const edgeHealthPath = "/.well-known/midorivpn/edge-health"
+
+// normalizeProbeURL validates the public endpoint clients may measure before
+// selecting a Core. It is intentionally HTTPS-only and carries no credentials,
+// query, fragment, or arbitrary path.
+func normalizeProbeURL(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", errors.New("probe_url is required")
+	}
+	parsed, err := url.ParseRequestURI(trimmed)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.Opaque != "" {
+		return "", errors.New("probe_url must be an absolute HTTPS URL")
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", errors.New("probe_url must not contain credentials, query, or fragment")
+	}
+	if parsed.Path != edgeHealthPath || parsed.RawPath != "" {
+		return "", fmt.Errorf("probe_url path must be %s", edgeHealthPath)
+	}
+	if parsed.Hostname() == "" {
+		return "", errors.New("probe_url must contain a hostname")
+	}
+	return parsed.String(), nil
 }
 
 // sanitizeDeviceName strips unsafe characters, truncates to 64 chars, and

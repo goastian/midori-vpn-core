@@ -1,5 +1,5 @@
 -- Midori VPN v2.0.0 Canonical Consolidated PostgreSQL Schema
--- Generated from migrations 000001 - 000022
+-- Generated from migrations 000001 - 000023
 
 BEGIN;
 
@@ -179,6 +179,7 @@ CREATE TABLE IF NOT EXISTS vpn_servers (
     legacy_node_unbound BOOLEAN NOT NULL DEFAULT FALSE,
     name           TEXT        NOT NULL,
     host           TEXT        NOT NULL,
+    probe_url      TEXT        NOT NULL DEFAULT '',
     endpoint       TEXT        NOT NULL DEFAULT '',
     port           INTEGER     NOT NULL DEFAULT 443,
     wg_port        INTEGER     NOT NULL DEFAULT 51820,
@@ -191,7 +192,14 @@ CREATE TABLE IF NOT EXISTS vpn_servers (
     draining_at    TIMESTAMPTZ,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT chk_vpn_servers_node_binding CHECK (NOT (node_id IS NOT NULL AND legacy_node_unbound = TRUE))
+    CONSTRAINT chk_vpn_servers_node_binding CHECK (NOT (node_id IS NOT NULL AND legacy_node_unbound = TRUE)),
+    CONSTRAINT chk_vpn_servers_probe_url CHECK (
+        probe_url = ''
+        OR (
+            position('@' IN probe_url) = 0
+            AND probe_url ~ '^https://[^/?#[:space:]]+(/\.well-known/midorivpn/edge-health)$'
+        )
+    )
 );
 
 CREATE INDEX IF NOT EXISTS idx_vpn_servers_active ON vpn_servers (is_active) WHERE is_active = TRUE;
@@ -410,6 +418,8 @@ CREATE TABLE IF NOT EXISTS peer_operations (
     device_id           UUID        NOT NULL,
     server_id           UUID        NOT NULL REFERENCES vpn_servers(id) ON DELETE CASCADE,
     public_key          TEXT        NOT NULL CHECK (public_key ~ '^[A-Za-z0-9+/]{43}=$'),
+    connection_reason   TEXT        NOT NULL DEFAULT 'user'
+                                CHECK (connection_reason IN ('user', 'automatic_failover')),
     preshared_key       TEXT        NOT NULL DEFAULT '',
     preshared_key_ciphertext BYTEA,
     preshared_key_version SMALLINT,

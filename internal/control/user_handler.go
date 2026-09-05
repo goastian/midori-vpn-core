@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/goastian/midori-vpn-core/internal/auth"
 	"github.com/goastian/midori-vpn-core/internal/models"
+	"github.com/goastian/midori-vpn-core/internal/repo"
 	"github.com/goastian/midori-vpn-core/internal/respond"
 )
 
@@ -126,50 +128,61 @@ func (h *Handler) ListServers(w http.ResponseWriter, r *http.Request) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Server latency ping
+// Fail-closed server candidates and administrative Core reachability
 // ═══════════════════════════════════════════════════════════════════════════
 
-type ServerPingResult struct {
-	ServerID    uuid.UUID `json:"server_id"`
-	Name        string    `json:"name"`
-	Host        string    `json:"host"`
-	Location    string    `json:"location"`
-	CountryCode string    `json:"country_code"`
-	LatencyMs   int64     `json:"latency_ms"`
-	Available   bool      `json:"available"`
-}
-
-func (h *Handler) PingServers(w http.ResponseWriter, r *http.Request) {
-	servers, err := h.serverRepo.ListActive(r.Context())
-	if err != nil {
-		slog.Error("ping servers list error", "error", err)
-		respond.JsonError(w, "failed to list servers", http.StatusInternalServerError)
+func (h *Handler) ListServerCandidates(w http.ResponseWriter, r *http.Request) {
+	values, present := r.URL.Query()["protocol"]
+	if !present || len(values) != 1 {
+		respond.JsonError(w, "protocol is required exactly once", http.StatusBadRequest)
 		return
 	}
-
-	respond.JsonOK(w, buildServerPingResults(servers), http.StatusOK)
+	protocol := strings.ToLower(strings.TrimSpace(values[0]))
+	if _, supported := supportedTransportProtocols[protocol]; !supported {
+		respond.JsonError(w, "unsupported transport protocol", http.StatusBadRequest)
+		return
+	}
+	candidates, err := h.serverRepo.ListCandidates(r.Context(), protocol, repo.DefaultNodeFreshness)
+	if err != nil {
+		slog.Error("list server candidates error", "protocol", protocol, "error", err)
+		respond.JsonError(w, "failed to list server candidates", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	respond.JsonOK(w, candidates, http.StatusOK)
 }
 
-func (h *Handler) AdminPingServers(w http.ResponseWriter, r *http.Request) {
+type ServerReachabilityResult struct {
+	ServerID         uuid.UUID `json:"server_id"`
+	Name             string    `json:"name"`
+	Host             string    `json:"host"`
+	Location         string    `json:"location"`
+	CountryCode      string    `json:"country_code"`
+	ControlLatencyMS int64     `json:"control_latency_ms"`
+	Available        bool      `json:"available"`
+}
+
+func (h *Handler) AdminServerReachability(w http.ResponseWriter, r *http.Request) {
 	servers, err := h.serverRepo.ListAll(r.Context())
 	if err != nil {
-		slog.Error("admin ping servers list error", "error", err)
+		slog.Error("admin server reachability list error", "error", err)
 		respond.JsonError(w, "failed to list servers", http.StatusInternalServerError)
 		return
 	}
 
-	respond.JsonOK(w, buildServerPingResults(servers), http.StatusOK)
+	w.Header().Set("Cache-Control", "no-store")
+	respond.JsonOK(w, buildServerReachabilityResults(r.Context(), servers), http.StatusOK)
 }
 
-func buildServerPingResults(servers []models.VPNServer) []ServerPingResult {
-	results := make([]ServerPingResult, len(servers))
+func buildServerReachabilityResults(parent context.Context, servers []models.VPNServer) []ServerReachabilityResult {
+	results := make([]ServerReachabilityResult, len(servers))
 	var wg sync.WaitGroup
 
 	for i, s := range servers {
 		wg.Add(1)
 		go func(idx int, server models.VPNServer) {
 			defer wg.Done()
-			result := ServerPingResult{
+			result := ServerReachabilityResult{
 				ServerID:    server.ID,
 				Name:        server.Name,
 				Host:        server.Host,
@@ -184,7 +197,7 @@ func buildServerPingResults(servers []models.VPNServer) []ServerPingResult {
 			}
 			start := time.Now()
 
-			ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+			ctx, cancel := context.WithTimeout(parent, 1500*time.Millisecond)
 			defer cancel()
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
 			if err != nil {
@@ -198,7 +211,7 @@ func buildServerPingResults(servers []models.VPNServer) []ServerPingResult {
 			if err == nil {
 				resp.Body.Close()
 				if resp.StatusCode == http.StatusOK {
-					result.LatencyMs = elapsed
+					result.ControlLatencyMS = elapsed
 					result.Available = true
 				}
 			}

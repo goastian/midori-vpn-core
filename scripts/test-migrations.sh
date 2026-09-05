@@ -79,6 +79,20 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000021_central_transport_certification.up.sql >/dev/null
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000022_foreign_key_indexes.up.sql >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000023_failover_contract.up.sql >/dev/null
+
+failover_columns="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND ((table_name = 'vpn_servers' AND column_name = 'probe_url') OR (table_name = 'peer_operations' AND column_name = 'connection_reason'))")"
+[ "${failover_columns}" = "2" ] || { printf 'error: migration 23 created %s of 2 failover columns\n' "${failover_columns}" >&2; exit 1; }
+historical_probe_url="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT probe_url FROM vpn_servers WHERE id = '20000000-0000-4000-8000-000000000001'")"
+[ -z "${historical_probe_url}" ] || { printf 'error: migration 23 made a historical server eligible without an explicit probe URL\n' >&2; exit 1; }
+if podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c \
+  "UPDATE vpn_servers SET probe_url = 'http://unsafe.test/.well-known/midorivpn/edge-health' WHERE id = '20000000-0000-4000-8000-000000000001'" >/dev/null 2>&1; then
+  printf 'error: migration 23 accepted an insecure probe URL\n' >&2
+  exit 1
+fi
 
 foreign_key_indexes="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT COUNT(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname ~ '^idx_.*_fk$'")"
@@ -203,6 +217,14 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c "
     '20000000-0000-4000-8000-000000000013', repeat('A', 43) || '=', TRUE, 1
   );
 " >/dev/null
+operation_reason="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT connection_reason FROM peer_operations WHERE id = '70000000-0000-4000-8000-000000000013'")"
+[ "${operation_reason}" = "user" ] || { printf 'error: migration 23 did not default historical connection reason\n' >&2; exit 1; }
+if podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c \
+  "UPDATE peer_operations SET connection_reason = 'retry' WHERE id = '70000000-0000-4000-8000-000000000013'" >/dev/null 2>&1; then
+  printf 'error: migration 23 accepted an invalid connection reason\n' >&2
+  exit 1
+fi
 for parent_delete in \
   "DELETE FROM users WHERE id = '10000000-0000-4000-8000-000000000013'" \
   "DELETE FROM devices WHERE id = '50000000-0000-4000-8000-000000000013'" \
@@ -278,6 +300,12 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn -c "
 cascade_rows="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
   "SELECT (SELECT COUNT(*) FROM devices WHERE user_id = '10000000-0000-4000-8000-000000000002') + (SELECT COUNT(*) FROM peers WHERE user_id = '10000000-0000-4000-8000-000000000002') + (SELECT COUNT(*) FROM device_certificates WHERE user_id = '10000000-0000-4000-8000-000000000002')")"
 [ "${cascade_rows}" = "0" ] || { printf 'error: user cascade left %s device-related rows\n' "${cascade_rows}" >&2; exit 1; }
+
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000023_failover_contract.down.sql >/dev/null
+failover_columns="$(podman exec "${container}" psql -U midori -d midori_vpn -Atc \
+  "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND column_name IN ('probe_url','connection_reason')")"
+[ "${failover_columns}" = "0" ] || { printf 'error: migration 23 rollback left %s failover columns\n' "${failover_columns}" >&2; exit 1; }
 
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000022_foreign_key_indexes.down.sql >/dev/null
@@ -441,6 +469,8 @@ podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000021_central_transport_certification.up.sql >/dev/null
 podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
   -f /migrations/000022_foreign_key_indexes.up.sql >/dev/null
+podman exec "${container}" psql -v ON_ERROR_STOP=1 -U midori -d midori_vpn \
+  -f /migrations/000023_failover_contract.up.sql >/dev/null
 
 # The device-based certificate key permits equal hostnames on distinct
 # registered installations without merging either device.
@@ -467,6 +497,9 @@ schema_devices="$(podman exec "${container}" psql -U midori -d midori_schema_tes
 schema_operations="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
   "SELECT to_regclass('public.peer_operations') IS NOT NULL")"
 [ "${schema_operations}" = "t" ] || { printf 'error: consolidated schema did not create peer_operations\n' >&2; exit 1; }
+schema_failover_columns="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
+  "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND ((table_name = 'vpn_servers' AND column_name = 'probe_url') OR (table_name = 'peer_operations' AND column_name = 'connection_reason'))")"
+[ "${schema_failover_columns}" = "2" ] || { printf 'error: consolidated schema created %s of 2 failover columns\n' "${schema_failover_columns}" >&2; exit 1; }
 schema_draining="$(podman exec "${container}" psql -U midori -d midori_schema_test -Atc \
   "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'vpn_servers' AND column_name = 'draining_at'")"
 [ "${schema_draining}" = "1" ] || { printf 'error: consolidated schema did not create draining_at\n' >&2; exit 1; }
@@ -501,4 +534,4 @@ schema_mesh_columns="$(podman exec "${container}" psql -U midori -d midori_schem
   "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'mesh_members' AND column_name IN ('peer_id','mesh_ip','joined_at','is_exit_node','proxy_port','proxy_scheme','supports_tcp','supports_udp')")"
 [ "${schema_mesh_columns}" = "8" ] || { printf 'error: consolidated schema created %s of 8 final mesh-member columns\n' "${schema_mesh_columns}" >&2; exit 1; }
 
-printf 'Migration chain 1-22, migrations 9-22 rollback, and consolidated schema verified on PostgreSQL 18.\n'
+printf 'Migration chain 1-23, migrations 9-23 rollback, and consolidated schema verified on PostgreSQL 18.\n'

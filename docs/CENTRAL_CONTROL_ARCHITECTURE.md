@@ -85,6 +85,35 @@ only. Environment files, images, logs, support bundles and metrics must never
 contain Control database credentials, Authentik secrets, the private client CA
 or the Control private key.
 
+## Client placement and failover contract
+
+Clients discover a protocol-specific placement through
+`GET /api/v1/control/servers/candidates?protocol=...`. The response is
+fail-closed: it excludes legacy-unbound and draining servers, exhausted
+capacity, stale desired/observed state, and transports that are not healthy and
+centrally certified. A server without an explicitly configured HTTPS
+`probe_url` is also excluded; migration does not guess a public address for
+historical rows.
+
+Every candidate points to the fixed public path
+`/.well-known/midorivpn/edge-health`. Core serves `GET` and `HEAD` with `204`,
+`Cache-Control: no-store`, no response body or operational metadata, and a
+per-source rate limit that remains active even when the general development
+limiter is disabled. Clients measure this endpoint themselves. The former user
+ping was removed because it measured Control-to-Core reachability and could not
+represent client latency.
+
+Administrators retain the distinct
+`GET /api/v1/admin/servers/reachability` diagnostic. Its value is named
+`control_latency_ms` to make the measurement origin explicit. Connection
+operations persist `connection_reason=user|automatic_failover`; this audit
+attribute never changes or replaces the persistent device identity.
+
+The candidate contract only governs new placement and reconnection. An
+established tunnel remains local to its current Core, and loss of the principal
+prevents new candidate discovery without terminating already established data
+plane traffic.
+
 ## Planes and request flow
 
 ### User and administration plane

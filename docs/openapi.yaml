@@ -53,6 +53,23 @@ paths:
       responses:
         '200': {$ref: '#/components/responses/ReadinessOK'}
         '503': {$ref: '#/components/responses/ReadinessDegraded'}
+  /.well-known/midorivpn/edge-health:
+    get:
+      operationId: probeEdgeHealth
+      tags: [Health]
+      security: []
+      description: Minimal public client reachability probe. It returns no node, user, capacity, or version data.
+      responses:
+        '204': {$ref: '#/components/responses/EdgeHealth'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
+    head:
+      operationId: probeEdgeHealthHeaders
+      tags: [Health]
+      security: []
+      description: Header-only form of the minimal public client reachability probe.
+      responses:
+        '204': {$ref: '#/components/responses/EdgeHealth'}
+        '429': {$ref: '#/components/responses/TooManyRequests'}
   /api/v1/tunnel/ws:
     get:
       operationId: openTunnelWebSocket
@@ -345,12 +362,19 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
-  /api/v1/control/servers/ping:
+  /api/v1/control/servers/candidates:
     get:
-      operationId: pingAvailableServers
+      operationId: listServerCandidates
       tags: [Servers]
+      description: Returns only capacity-eligible modeled placements with a current centrally certified transport.
+      parameters:
+        - name: protocol
+          in: query
+          required: true
+          schema: {type: string, enum: [wireguard, wss, masque, openvpn, ikev2, proxy]}
       responses:
-        '200': {$ref: '#/components/responses/OK'}
+        '200': {$ref: '#/components/responses/ServerCandidateList'}
+        '400': {$ref: '#/components/responses/BadRequest'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '500': {$ref: '#/components/responses/InternalError'}
@@ -826,14 +850,16 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
         '500': {$ref: '#/components/responses/InternalError'}
-  /api/v1/admin/servers/ping:
+  /api/v1/admin/servers/reachability:
     get:
-      operationId: pingAdminServers
+      operationId: inspectAdminServerReachability
       tags: [Administration, Servers]
+      description: Measures Control-to-Core management reachability; this is not client latency.
       responses:
-        '200': {$ref: '#/components/responses/OK'}
+        '200': {$ref: '#/components/responses/ServerReachabilityList'}
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {$ref: '#/components/responses/InternalError'}
   /api/v1/admin/servers/{id}:
     parameters:
       - {$ref: '#/components/parameters/ID'}
@@ -1374,6 +1400,11 @@ components:
           deprecated: true
           description: Transitional identity for clients without a persistent installation UUID.
         device: {$ref: '#/components/schemas/DeviceRegistration'}
+        connection_reason:
+          type: string
+          enum: [user, automatic_failover]
+          default: user
+          description: Records whether the client initiated a normal connection or an automatic failover without changing device identity.
         pq_kem_public_key: {type: string, writeOnly: true}
     DeviceRegistration:
       type: object
@@ -1468,14 +1499,59 @@ components:
         health_status: {type: string, enum: [unknown, healthy, degraded, disabled]}
         last_checked_at: {type: [string, 'null'], format: date-time}
         metadata: {type: object, additionalProperties: true}
+    ServerCandidate:
+      type: object
+      additionalProperties: false
+      required: [id, name, location, country_code, protocol, probe_url, endpoint, port, priority]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string, minLength: 1}
+        location: {type: string}
+        country_code: {type: string}
+        protocol: {type: string, enum: [wireguard, wss, masque, openvpn, ikev2, proxy]}
+        probe_url: {$ref: '#/components/schemas/EdgeProbeURL'}
+        endpoint: {type: string, minLength: 1}
+        port: {type: integer, minimum: 1, maximum: 65535}
+        priority: {type: integer, minimum: 0, maximum: 1000}
+    ServerCandidateListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [ok, data]
+      properties:
+        ok: {const: true}
+        data: {type: array, items: {$ref: '#/components/schemas/ServerCandidate'}}
+    ServerReachability:
+      type: object
+      additionalProperties: false
+      required: [server_id, name, host, location, country_code, control_latency_ms, available]
+      properties:
+        server_id: {type: string, format: uuid}
+        name: {type: string}
+        host: {type: string}
+        location: {type: string}
+        country_code: {type: string}
+        control_latency_ms: {type: integer, format: int64, minimum: 0}
+        available: {type: boolean}
+    ServerReachabilityListEnvelope:
+      type: object
+      additionalProperties: false
+      required: [ok, data]
+      properties:
+        ok: {const: true}
+        data: {type: array, items: {$ref: '#/components/schemas/ServerReachability'}}
     AdminServer:
       type: object
-      required: [id, name, host, endpoint, port, wg_port, public_key, location, country_code, max_peers, current_peers, is_active, supports_wireguard, supports_proxy, supports_mesh_exit, transports, created_at, updated_at]
+      required: [id, name, host, probe_url, endpoint, port, wg_port, public_key, location, country_code, max_peers, current_peers, is_active, supports_wireguard, supports_proxy, supports_mesh_exit, transports, created_at, updated_at]
       properties:
         id: {type: string, format: uuid}
         node_id: {type: string, format: uuid}
         name: {type: string}
         host: {type: string}
+        probe_url:
+          description: Empty only for historical servers awaiting explicit probe configuration.
+          oneOf:
+            - {type: string, const: ''}
+            - {$ref: '#/components/schemas/EdgeProbeURL'}
         endpoint: {type: string}
         port: {type: integer, minimum: 1, maximum: 65535}
         wg_port: {type: integer, minimum: 1, maximum: 65535}
@@ -1995,12 +2071,17 @@ components:
         enabled: {type: boolean}
         priority: {type: integer}
         metadata: {type: object, additionalProperties: true}
+    EdgeProbeURL:
+      type: string
+      format: uri
+      pattern: '^https://[^/?#\s]+/\.well-known/midorivpn/edge-health$'
     ServerCreateRequest:
       type: object
-      required: [name, host, public_key, transports]
+      required: [name, host, probe_url, public_key, transports]
       properties:
         name: {type: string}
         host: {type: string}
+        probe_url: {$ref: '#/components/schemas/EdgeProbeURL'}
         endpoint: {type: string}
         port: {type: integer}
         wg_port: {type: integer}
@@ -2014,6 +2095,7 @@ components:
       properties:
         name: {type: string}
         host: {type: string}
+        probe_url: {$ref: '#/components/schemas/EdgeProbeURL'}
         endpoint: {type: string}
         port: {type: integer}
         wg_port: {type: integer}
@@ -2268,6 +2350,17 @@ components:
     HealthOK:
       description: Core process health.
       content: {application/json: {schema: {$ref: '#/components/schemas/SuccessEnvelope'}}}
+    EdgeHealth:
+      description: Edge is reachable. The response has no body.
+      headers:
+        Cache-Control: {schema: {type: string, const: no-store}}
+        Pragma: {schema: {type: string, const: no-cache}}
+    ServerCandidateList:
+      description: Fail-closed client placement candidates for one requested protocol.
+      content: {application/json: {schema: {$ref: '#/components/schemas/ServerCandidateListEnvelope'}}}
+    ServerReachabilityList:
+      description: Control-to-Core management reachability measurements.
+      content: {application/json: {schema: {$ref: '#/components/schemas/ServerReachabilityListEnvelope'}}}
     LivenessOK:
       description: Process liveness and uptime.
       content: {application/json: {schema: {$ref: '#/components/schemas/SuccessEnvelope'}}}

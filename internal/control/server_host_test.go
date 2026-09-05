@@ -77,6 +77,37 @@ func TestDefaultAdminServerPort(t *testing.T) {
 	}
 }
 
+func TestNormalizeProbeURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    string
+		wantErr bool
+	}{
+		{name: "canonical", value: "https://edge.example.org/.well-known/midorivpn/edge-health", want: "https://edge.example.org/.well-known/midorivpn/edge-health"},
+		{name: "custom port", value: "https://edge.example.org:8443/.well-known/midorivpn/edge-health", want: "https://edge.example.org:8443/.well-known/midorivpn/edge-health"},
+		{name: "http", value: "http://edge.example.org/.well-known/midorivpn/edge-health", wantErr: true},
+		{name: "credentials", value: "https://user@edge.example.org/.well-known/midorivpn/edge-health", wantErr: true},
+		{name: "query", value: "https://edge.example.org/.well-known/midorivpn/edge-health?node=1", wantErr: true},
+		{name: "wrong path", value: "https://edge.example.org/health", wantErr: true},
+		{name: "relative", value: "/.well-known/midorivpn/edge-health", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := normalizeProbeURL(test.value)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("normalizeProbeURL(%q) succeeded", test.value)
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("normalizeProbeURL(%q) = %q, %v; want %q", test.value, got, err, test.want)
+			}
+		})
+	}
+}
+
 func TestWireGuardEndpointForServerHost(t *testing.T) {
 	tests := []struct {
 		name string

@@ -52,6 +52,7 @@ func TestMulticlusterPlacementRequiresCurrentHealthyObservedState(t *testing.T) 
 	server := &models.VPNServer{
 		Name:        "Modeled " + uuid.NewString(),
 		Host:        "modeled.test.invalid",
+		ProbeURL:    "https://modeled.test.invalid/.well-known/midorivpn/edge-health",
 		Endpoint:    "modeled.test.invalid",
 		Port:        8443,
 		WGPort:      51820,
@@ -86,6 +87,7 @@ func TestMulticlusterPlacementRequiresCurrentHealthyObservedState(t *testing.T) 
 	legacyServer := &models.VPNServer{
 		Name:              "Legacy " + uuid.NewString(),
 		Host:              "legacy.test.invalid",
+		ProbeURL:          "https://legacy.test.invalid/.well-known/midorivpn/edge-health",
 		Endpoint:          "legacy.test.invalid",
 		Port:              8443,
 		WGPort:            51820,
@@ -170,6 +172,13 @@ func TestMulticlusterPlacementRequiresCurrentHealthyObservedState(t *testing.T) 
 		t.Fatalf("RecordObservation: %v", err)
 	}
 	assertEligibility(true, "matching healthy observation")
+	candidates, err := serverRepo.ListCandidates(ctx, "wireguard", repo.DefaultNodeFreshness)
+	if err != nil {
+		t.Fatalf("ListCandidates: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].ID != server.ID || candidates[0].Protocol != "wireguard" || candidates[0].ProbeURL != server.ProbeURL {
+		t.Fatalf("fail-closed candidates = %#v, want only modeled server", candidates)
+	}
 	openVPNEligible, err := multiclusterRepo.ServerPlacementEligible(ctx, server.ID, "openvpn", repo.DefaultNodeFreshness)
 	if err != nil || openVPNEligible {
 		t.Fatalf("uncertified central OpenVPN state must be ineligible: eligible=%v err=%v", openVPNEligible, err)
@@ -183,6 +192,10 @@ func TestMulticlusterPlacementRequiresCurrentHealthyObservedState(t *testing.T) 
 	openVPNEligible, err = multiclusterRepo.ServerPlacementEligible(ctx, server.ID, "openvpn", repo.DefaultNodeFreshness)
 	if err != nil || !openVPNEligible {
 		t.Fatalf("centrally certified OpenVPN state must be eligible: eligible=%v err=%v", openVPNEligible, err)
+	}
+	openVPNCandidates, err := serverRepo.ListCandidates(ctx, "openvpn", repo.DefaultNodeFreshness)
+	if err != nil || len(openVPNCandidates) != 1 || openVPNCandidates[0].ID != server.ID {
+		t.Fatalf("centrally certified OpenVPN candidate missing: candidates=%#v err=%v", openVPNCandidates, err)
 	}
 	credentialClusterID, err := multiclusterRepo.TransportCredentialCluster(ctx, server.ID, "wireguard", repo.DefaultNodeFreshness)
 	if err != nil || credentialClusterID != cluster.ID {
@@ -248,6 +261,10 @@ func TestMulticlusterPlacementRequiresCurrentHealthyObservedState(t *testing.T) 
 		t.Fatalf("fill server capacity: %v", err)
 	}
 	assertEligibility(false, "full server")
+	candidates, err = serverRepo.ListCandidates(ctx, "wireguard", repo.DefaultNodeFreshness)
+	if err != nil || len(candidates) != 0 {
+		t.Fatalf("full server remained a candidate: candidates=%#v err=%v", candidates, err)
+	}
 	var replacementEligible bool
 	if err := pool.QueryRow(ctx, `
 		SELECT vpn_server_placement_eligible($1, 'wireguard', INTERVAL '90 seconds', FALSE)`,

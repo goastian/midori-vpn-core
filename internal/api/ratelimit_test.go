@@ -139,3 +139,28 @@ func TestIPLimiterCleansStaleEntriesWithoutBackgroundWorker(t *testing.T) {
 		t.Fatal("stale IP limiter was not removed")
 	}
 }
+
+func TestEdgeHealthRateLimiterIsAlwaysActive(t *testing.T) {
+	var calls int
+	handler := EdgeHealthRateLimitMiddleware("")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	for attempt := 0; attempt < 11; attempt++ {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/.well-known/midorivpn/edge-health", nil)
+		request.RemoteAddr = "192.0.2.25:43100"
+		handler.ServeHTTP(recorder, request)
+		if attempt < 10 && recorder.Code != http.StatusNoContent {
+			t.Fatalf("attempt %d status = %d, want 204", attempt+1, recorder.Code)
+		}
+		if attempt == 10 {
+			if recorder.Code != http.StatusTooManyRequests || recorder.Header().Get("Cache-Control") != "no-store" {
+				t.Fatalf("limited response = %d, cache-control %q", recorder.Code, recorder.Header().Get("Cache-Control"))
+			}
+		}
+	}
+	if calls != 10 {
+		t.Fatalf("handler calls = %d, want 10", calls)
+	}
+}

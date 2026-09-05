@@ -73,6 +73,9 @@ func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *au
 	r.Get("/health", h.Health)
 	r.Get("/livez", healthChecker.Livez)
 	r.Get("/readyz", healthChecker.Readyz)
+	edgeHealthRateLimit := EdgeHealthRateLimitMiddleware(cfg.TrustedProxies)
+	r.With(edgeHealthRateLimit).Get("/.well-known/midorivpn/edge-health", h.EdgeHealth)
+	r.With(edgeHealthRateLimit).Head("/.well-known/midorivpn/edge-health", h.EdgeHealth)
 	if cfg.WSSTunnelEnabled {
 		serverID, _ := uuid.Parse(cfg.WSSTunnelServerID)
 		clusterID, _ := uuid.Parse(cfg.TransportClusterID)
@@ -138,7 +141,7 @@ func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *au
 			r.Post("/proxy-credentials", ch.ProxyCredentials)
 			r.Post("/tunnel-credentials", ch.TunnelCredentials)
 			r.Get("/servers", ch.ListServers)
-			r.Get("/servers/ping", ch.PingServers)
+			r.Get("/servers/candidates", ch.ListServerCandidates)
 			r.Post("/certificates", ch.EnrollDeviceCertificate)
 			r.Get("/certificates", ch.ListDeviceCertificates)
 			r.Delete("/certificates/{id}", ch.RevokeDeviceCertificate)
@@ -200,7 +203,7 @@ func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *au
 
 			// Servers
 			r.Get("/servers", ch.AdminListServers)
-			r.Get("/servers/ping", ch.AdminPingServers)
+			r.Get("/servers/reachability", ch.AdminServerReachability)
 			r.Post("/servers", ch.AdminCreateServer)
 			r.Put("/servers/{id}", ch.AdminUpdateServer)
 			r.Delete("/servers/{id}", ch.AdminDeleteServer)

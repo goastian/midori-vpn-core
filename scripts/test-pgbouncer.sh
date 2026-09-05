@@ -283,7 +283,7 @@ query_result="$(podman run --rm --network "$network" \
   -e PGPASSWORD="$runtime_password" "$POSTGRES_IMAGE" \
   psql -h "$pooler_ip" -p 6432 -U "$runtime_user" -d "$database_name" \
   -v ON_ERROR_STOP=1 -Atc "SELECT current_database(), current_user, current_setting('statement_timeout'), current_setting('lock_timeout'), current_setting('idle_in_transaction_session_timeout'), current_setting('search_path'), (SELECT count(*) FROM pgbouncer_probe), (SELECT version FROM schema_migrations)")"
-[[ "$query_result" == "${database_name}|${runtime_user}|5s|2s|30s|pg_catalog, public|1|22" ]] || die "runtime query, schema version or hardening settings did not traverse PgBouncer"
+[[ "$query_result" == "${database_name}|${runtime_user}|5s|2s|30s|pg_catalog, public|1|23" ]] || die "runtime query, schema version or hardening settings did not traverse PgBouncer"
 
 if podman run --rm --network "$network" \
   -e PGPASSWORD="$runtime_password" "$POSTGRES_IMAGE" \

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -298,6 +299,7 @@ func (h *Handler) AdminUnbanUser(w http.ResponseWriter, r *http.Request) {
 type CreateServerRequest struct {
 	Name        string             `json:"name"`
 	Host        string             `json:"host"`
+	ProbeURL    string             `json:"probe_url"`
 	Endpoint    string             `json:"endpoint"`
 	Port        int                `json:"port"`
 	WGPort      int                `json:"wg_port"`
@@ -415,10 +417,16 @@ func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	if req.Name == "" || req.Host == "" || req.PublicKey == "" {
-		respond.JsonError(w, "name, host and public_key are required", http.StatusBadRequest)
+	if req.Name == "" || req.Host == "" || req.PublicKey == "" || req.ProbeURL == "" {
+		respond.JsonError(w, "name, host, probe_url and public_key are required", http.StatusBadRequest)
 		return
 	}
+	probeURL, err := normalizeProbeURL(req.ProbeURL)
+	if err != nil {
+		respond.JsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.ProbeURL = probeURL
 	if req.Port == 0 {
 		req.Port = defaultAdminServerPort(h.coreAllowLoopback)
 	}
@@ -448,10 +456,18 @@ func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, "loopback hosts (localhost/127.0.0.1/::1) are not allowed in production — set CORE_ALLOW_INSECURE_HTTP=true to override", http.StatusBadRequest)
 		return
 	}
+	if h.appEnv == "production" && !h.coreAllowLoopback {
+		parsedProbe, _ := url.Parse(req.ProbeURL)
+		if isLoopbackServerHost(parsedProbe.Hostname()) {
+			respond.JsonError(w, "loopback probe URLs are not allowed in production", http.StatusBadRequest)
+			return
+		}
+	}
 
 	server := &models.VPNServer{
 		Name:        req.Name,
 		Host:        req.Host,
+		ProbeURL:    req.ProbeURL,
 		Endpoint:    req.Endpoint,
 		Port:        req.Port,
 		WGPort:      req.WGPort,
@@ -493,6 +509,7 @@ func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 type UpdateServerRequest struct {
 	Name        string              `json:"name"`
 	Host        string              `json:"host"`
+	ProbeURL    *string             `json:"probe_url"`
 	Endpoint    string              `json:"endpoint"`
 	Port        int                 `json:"port"`
 	WGPort      int                 `json:"wg_port"`
@@ -525,6 +542,21 @@ func (h *Handler) AdminUpdateServer(w http.ResponseWriter, r *http.Request) {
 
 	if req.Name != "" {
 		server.Name = req.Name
+	}
+	if req.ProbeURL != nil {
+		probeURL, err := normalizeProbeURL(*req.ProbeURL)
+		if err != nil {
+			respond.JsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if h.appEnv == "production" && !h.coreAllowLoopback {
+			parsedProbe, _ := url.Parse(probeURL)
+			if isLoopbackServerHost(parsedProbe.Hostname()) {
+				respond.JsonError(w, "loopback probe URLs are not allowed in production", http.StatusBadRequest)
+				return
+			}
+		}
+		server.ProbeURL = probeURL
 	}
 	// Endpoint may be cleared (set to "") intentionally, so always update it.
 	// Validate if non-empty.

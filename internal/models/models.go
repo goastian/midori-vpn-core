@@ -25,6 +25,7 @@ type VPNServer struct {
 	LegacyNodeUnbound bool                  `json:"-"`
 	Name              string                `json:"name"`
 	Host              string                `json:"host"`
+	ProbeURL          string                `json:"probe_url"`
 	Endpoint          string                `json:"endpoint"`
 	Port              int                   `json:"port"`
 	WGPort            int                   `json:"wg_port"`
@@ -41,6 +42,20 @@ type VPNServer struct {
 	Transports        []TransportCapability `json:"transports,omitempty"`
 	CreatedAt         time.Time             `json:"created_at"`
 	UpdatedAt         time.Time             `json:"updated_at"`
+}
+
+// ServerCandidate is the fail-closed placement contract consumed by clients.
+// It intentionally omits the private Core management host.
+type ServerCandidate struct {
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	Location    string    `json:"location"`
+	CountryCode string    `json:"country_code"`
+	Protocol    string    `json:"protocol"`
+	ProbeURL    string    `json:"probe_url"`
+	Endpoint    string    `json:"endpoint"`
+	Port        int       `json:"port"`
+	Priority    int       `json:"priority"`
 }
 
 type DeviceType string
@@ -175,6 +190,17 @@ const (
 	PeerOperationFailed         PeerOperationState = "failed"
 )
 
+type ConnectionReason string
+
+const (
+	ConnectionReasonUser              ConnectionReason = "user"
+	ConnectionReasonAutomaticFailover ConnectionReason = "automatic_failover"
+)
+
+func (reason ConnectionReason) Valid() bool {
+	return reason == ConnectionReasonUser || reason == ConnectionReasonAutomaticFailover
+}
+
 type PeerOperation struct {
 	ID                  uuid.UUID           `json:"id"`
 	Action              PeerOperationAction `json:"action"`
@@ -183,6 +209,7 @@ type PeerOperation struct {
 	DeviceID            uuid.UUID           `json:"device_id"`
 	ServerID            uuid.UUID           `json:"server_id"`
 	PublicKey           string              `json:"public_key"`
+	ConnectionReason    ConnectionReason    `json:"connection_reason"`
 	PresharedKey        string              `json:"-"`
 	PQKEMCiphertext     string              `json:"-"`
 	PreviousPeerID      *uuid.UUID          `json:"previous_peer_id,omitempty"`

@@ -33,6 +33,7 @@ type BeginConnectParams struct {
 	LegacyDeviceName string
 	ServerID         uuid.UUID
 	PublicKey        string
+	ConnectionReason models.ConnectionReason
 	PresharedKey     string
 	PQKEMCiphertext  string
 	MaxDevices       int
@@ -71,7 +72,7 @@ func NewPeerOperationRepo(pool *pgxpool.Pool, cipher ...*dataencryption.Cipher) 
 }
 
 const operationColumns = `id, action, state, user_id, device_id, server_id,
-	public_key, preshared_key, preshared_key_ciphertext, COALESCE(preshared_key_version, 0),
+	public_key, connection_reason, preshared_key, preshared_key_ciphertext, COALESCE(preshared_key_version, 0),
 	pq_kem_ciphertext, previous_peer_id,
 	previous_operation_id, COALESCE(assigned_ip, ''), capacity_reserved, attempts, last_error,
 	core_applied_at, completed_at, created_at, updated_at`
@@ -84,7 +85,7 @@ func (r *PeerOperationRepo) scanPeerOperation(row interface{ Scan(...interface{}
 	if err := row.Scan(
 		&operation.ID, &operation.Action, &operation.State, &operation.UserID,
 		&operation.DeviceID, &operation.ServerID, &operation.PublicKey,
-		&legacyPresharedKey, &ciphertext, &version, &operation.PQKEMCiphertext,
+		&operation.ConnectionReason, &legacyPresharedKey, &ciphertext, &version, &operation.PQKEMCiphertext,
 		&operation.PreviousPeerID, &operation.PreviousOperationID, &operation.AssignedIP,
 		&operation.CapacityReserved, &operation.Attempts,
 		&operation.LastError, &operation.CoreAppliedAt, &operation.CompletedAt,
@@ -159,6 +160,12 @@ func (r *PeerOperationRepo) FindCurrentByKey(ctx context.Context, userID uuid.UU
 func (r *PeerOperationRepo) BeginConnect(ctx context.Context, params BeginConnectParams) (*BeginConnectResult, error) {
 	if params.OperationID == uuid.Nil {
 		return nil, errors.New("connection operation ID is required")
+	}
+	if params.ConnectionReason == "" {
+		params.ConnectionReason = models.ConnectionReasonUser
+	}
+	if !params.ConnectionReason.Valid() {
+		return nil, errors.New("valid connection reason is required")
 	}
 	ciphertext, version, err := sealStoredPresharedKey(r.cipher, dataencryption.PeerOperationPresharedKey, params.OperationID, params.PresharedKey)
 	if err != nil {
@@ -314,13 +321,14 @@ func (r *PeerOperationRepo) BeginConnect(ctx context.Context, params BeginConnec
 	operation, err := r.scanPeerOperation(tx.QueryRow(ctx, `
 		INSERT INTO peer_operations (
 			id, action, state, user_id, device_id, server_id, public_key,
+			connection_reason,
 			preshared_key, preshared_key_ciphertext, preshared_key_version,
 			pq_kem_ciphertext, previous_peer_id,
 			previous_operation_id, capacity_reserved, attempts
-		) VALUES ($1, $2, 'pending', $3, $4, $5, $6, '', $7, $8, $9, $10, $11, $12, 1)
+		) VALUES ($1, $2, 'pending', $3, $4, $5, $6, $7, '', $8, $9, $10, $11, $12, $13, 1)
 		RETURNING `+operationColumns,
 		params.OperationID, action, params.UserID, device.ID, params.ServerID,
-		params.PublicKey, ciphertext, nullableEncryptionVersion(version), params.PQKEMCiphertext,
+		params.PublicKey, params.ConnectionReason, ciphertext, nullableEncryptionVersion(version), params.PQKEMCiphertext,
 		previousPeerID, previousOperationID, capacityReserved))
 	if err != nil {
 		var pgError *pgconn.PgError

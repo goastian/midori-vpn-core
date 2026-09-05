@@ -192,6 +192,49 @@ func TestPeerOperationConnectPersistsAndRetriesExactly(t *testing.T) {
 	}
 }
 
+func TestPeerOperationPersistsAutomaticFailoverReason(t *testing.T) {
+	fixture := newPeerOperationFixture(t, 1)
+	operationRepo := fixture.operationRepo()
+	result, err := operationRepo.BeginConnect(context.Background(), repo.BeginConnectParams{
+		OperationID:      uuid.New(),
+		UserID:           fixture.userID,
+		Device:           fixture.device,
+		ServerID:         fixture.serverID,
+		PublicKey:        operationKey(19),
+		ConnectionReason: models.ConnectionReasonAutomaticFailover,
+		PresharedKey:     operationKey(200),
+		MaxDevices:       1,
+	})
+	if err != nil {
+		t.Fatalf("BeginConnect automatic failover: %v", err)
+	}
+	if result.Operation.ConnectionReason != models.ConnectionReasonAutomaticFailover {
+		t.Fatalf("operation reason = %q", result.Operation.ConnectionReason)
+	}
+	var storedReason models.ConnectionReason
+	if err := fixture.pool.QueryRow(context.Background(), `
+		SELECT connection_reason FROM peer_operations WHERE id = $1`, result.Operation.ID).Scan(&storedReason); err != nil {
+		t.Fatalf("load connection reason: %v", err)
+	}
+	if storedReason != models.ConnectionReasonAutomaticFailover {
+		t.Fatalf("stored reason = %q", storedReason)
+	}
+
+	_, err = operationRepo.BeginConnect(context.Background(), repo.BeginConnectParams{
+		OperationID:      uuid.New(),
+		UserID:           fixture.userID,
+		Device:           fixture.device,
+		ServerID:         fixture.serverID,
+		PublicKey:        operationKey(20),
+		ConnectionReason: models.ConnectionReason("retry"),
+		PresharedKey:     operationKey(200),
+		MaxDevices:       1,
+	})
+	if err == nil {
+		t.Fatal("BeginConnect accepted an invalid connection reason")
+	}
+}
+
 func TestPeerOperationRejectsServerWithoutNodeOrLegacyException(t *testing.T) {
 	fixture := newPeerOperationFixture(t, 1)
 	if _, err := fixture.pool.Exec(context.Background(), `

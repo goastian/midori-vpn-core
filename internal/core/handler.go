@@ -44,6 +44,14 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	respond.JsonOK(w, map[string]string{"status": "ok"}, http.StatusOK)
 }
 
+// EdgeHealth is the minimal public target clients measure before selecting a
+// Core. It deliberately discloses no node, user, capacity, or version data.
+func (h *Handler) EdgeHealth(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- Peers ---
 
 type AddPeerRequest struct {
