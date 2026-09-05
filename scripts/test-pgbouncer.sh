@@ -7,7 +7,6 @@ die() {
 }
 
 command -v podman >/dev/null 2>&1 || die "podman is required"
-command -v gpg >/dev/null 2>&1 || die "gpg is required"
 : "${PGBOUNCER_IMAGE:?PGBOUNCER_IMAGE is required}"
 : "${POSTGRES_IMAGE:?POSTGRES_IMAGE is required}"
 : "${CORE_IMAGE:?CORE_IMAGE is required}"
@@ -152,13 +151,8 @@ podman run --rm --network "$network" \
   psql -h "$postgres_ip" -U "$migrator_user" -d "$database_name" \
   -v ON_ERROR_STOP=1 -c 'CREATE TABLE pgbouncer_probe (id bigint PRIMARY KEY); INSERT INTO pgbouncer_probe VALUES (1)' >/dev/null
 
-export GNUPGHOME="$work_dir/gnupg"
 backup_dir="$work_dir/backups"
-install -d -m 0700 "$GNUPGHOME" "$backup_dir"
-backup_identity="MidoriVPN DB-02 ephemeral ${suffix}"
-gpg --batch --quiet --passphrase '' --quick-generate-key "$backup_identity" future-default default 1d
-backup_fingerprint="$(gpg --batch --with-colons --fingerprint "$backup_identity" | awk -F: '$1 == "fpr" {print $10; exit}')"
-[[ "$backup_fingerprint" =~ ^[A-F0-9]{40}$ ]] || die "ephemeral backup key fingerprint is invalid"
+install -d -m 0700 "$backup_dir"
 
 env \
   POSTGRES_CONTAINER="$postgres_container" \
@@ -166,10 +160,30 @@ env \
   POSTGRES_BACKUP_USER="$backup_user" \
   POSTGRES_BACKUP_PASSWORD="$backup_password" \
   BACKUP_DIR="$backup_dir" \
-  BACKUP_GPG_RECIPIENT="$backup_fingerprint" \
   bash "$script_dir/backup-postgres.sh" >/dev/null
-backup_file="$(find "$backup_dir" -maxdepth 1 -type f -name '*.dump.gpg' -print -quit)"
-[[ -n "$backup_file" ]] || die "encrypted backup artifact was not created"
+backup_file="$(find "$backup_dir" -maxdepth 1 -type f -name '*.dump' -print -quit)"
+[[ -n "$backup_file" ]] || die "backup artifact was not created"
+[[ "$(stat -c '%a' "$backup_file")" == 600 ]] || die "backup artifact is not private"
+[[ "$(stat -c '%a' "${backup_file}.sha256")" == 600 ]] || die "backup manifest is not private"
+tampered_backup="$backup_dir/tampered.dump"
+cp -- "$backup_file" "$tampered_backup"
+printf 'tampered' >>"$tampered_backup"
+chmod 0600 "$tampered_backup"
+original_hash="$(sha256sum "$backup_file")"
+original_hash="${original_hash%% *}"
+printf '%s  %s\n' "$original_hash" "$(basename -- "$tampered_backup")" >"${tampered_backup}.sha256"
+chmod 0600 "${tampered_backup}.sha256"
+if env \
+  POSTGRES_CONTAINER="$postgres_container" \
+  POSTGRES_ADMIN_USER="$admin_user" \
+  POSTGRES_ADMIN_PASSWORD="$admin_password" \
+  POSTGRES_OWNER_ROLE="$owner_role" \
+  RESTORE_DATABASE="midorivpn_restore_tampered_${suffix}" \
+  BACKUP_FILE="$tampered_backup" \
+  bash "$script_dir/restore-postgres-backup.sh" >/dev/null 2>&1; then
+  die "restore accepted a backup whose SHA-256 did not match"
+fi
+rm -f -- "$tampered_backup" "${tampered_backup}.sha256"
 restore_database="midorivpn_restore_${suffix}"
 env \
   POSTGRES_CONTAINER="$postgres_container" \
@@ -181,7 +195,7 @@ env \
   bash "$script_dir/restore-postgres-backup.sh" >/dev/null
 restored_probe="$(podman exec -e PGPASSWORD="$admin_password" "$postgres_container" \
   psql -U "$admin_user" -d "$restore_database" -Atc 'SELECT count(*) FROM pgbouncer_probe')"
-[[ "$restored_probe" == 1 ]] || die "encrypted backup restore did not preserve probe data"
+[[ "$restored_probe" == 1 ]] || die "backup restore did not preserve probe data"
 
 podman run --rm --network "$network" \
   -e PGPASSWORD="$migrator_password" "$POSTGRES_IMAGE" \
@@ -364,4 +378,4 @@ wait_for_command "$pooler_container" sh -ceu \
   'PGPASSWORD="$1" psql -h 127.0.0.1 -p 6432 -U "$2" -d "$3" -v ON_ERROR_STOP=1 -c "SELECT 1" >/dev/null' \
   sh "$runtime_password" "$runtime_user" "$database_name"
 
-printf 'PostgreSQL migration, encrypted restore, bounded-pool, timeout, restart and PgBouncer validation passed.\n'
+printf 'PostgreSQL migration, private restore, bounded-pool, timeout, restart and PgBouncer validation passed.\n'

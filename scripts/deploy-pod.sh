@@ -123,8 +123,7 @@ for required_var in \
   POSTGRES_ADMIN_USER POSTGRES_ADMIN_PASSWORD POSTGRES_OWNER_ROLE \
   POSTGRES_MIGRATOR_USER POSTGRES_MIGRATOR_PASSWORD \
   POSTGRES_RUNTIME_USER POSTGRES_RUNTIME_PASSWORD POSTGRES_DB \
-  POSTGRES_BACKUP_USER POSTGRES_BACKUP_PASSWORD \
-  POSTGRES_DATA_AT_REST_ENCRYPTED POSTGRES_BACKUP_DIR BACKUP_GPG_RECIPIENT \
+  POSTGRES_BACKUP_USER POSTGRES_BACKUP_PASSWORD POSTGRES_BACKUP_DIR \
   PGBOUNCER_ADMIN_USER PGBOUNCER_ADMIN_PASSWORD \
   PGBOUNCER_MAX_CLIENT_CONN PGBOUNCER_DEFAULT_POOL_SIZE PGBOUNCER_MIN_POOL_SIZE \
   PGBOUNCER_RESERVE_POOL_SIZE PGBOUNCER_MAX_DB_CONNECTIONS \
@@ -157,11 +156,8 @@ done
 [[ "${POSTGRES_MIGRATOR_USER}" != "${POSTGRES_RUNTIME_USER}" ]] || die "POSTGRES_MIGRATOR_USER and POSTGRES_RUNTIME_USER must differ"
 [[ "${POSTGRES_BACKUP_USER}" != "${POSTGRES_RUNTIME_USER}" && "${POSTGRES_BACKUP_USER}" != "${POSTGRES_MIGRATOR_USER}" ]] || die "POSTGRES_BACKUP_USER must differ from runtime and migrator roles"
 [[ "${PGBOUNCER_ADMIN_USER}" != "${POSTGRES_RUNTIME_USER}" ]] || die "PGBOUNCER_ADMIN_USER and POSTGRES_RUNTIME_USER must differ"
-require_bool POSTGRES_DATA_AT_REST_ENCRYPTED
-[[ "${POSTGRES_DATA_AT_REST_ENCRYPTED}" == true ]] || die "PostgreSQL data volume must be verified as encrypted at rest before deployment"
 [[ "${POSTGRES_BACKUP_DIR}" == /* && -d "${POSTGRES_BACKUP_DIR}" && ! -L "${POSTGRES_BACKUP_DIR}" ]] || die "POSTGRES_BACKUP_DIR must be an absolute real directory"
 [[ "$(stat -c '%a' "${POSTGRES_BACKUP_DIR}")" == 700 ]] || die "POSTGRES_BACKUP_DIR must have mode 0700"
-[[ "${BACKUP_GPG_RECIPIENT}" =~ ^[A-Fa-f0-9]{40}$ ]] || die "BACKUP_GPG_RECIPIENT must be an exact 40-hex fingerprint"
 if [[ ! "${DATABASE_POOL_MAX_CONNS}" =~ ^[1-9][0-9]*$ ]] || (( DATABASE_POOL_MAX_CONNS > 256 )); then
   die "DATABASE_POOL_MAX_CONNS must be between 1 and 256"
 fi
@@ -248,17 +244,16 @@ echo "🚀 Iniciando despliegue de Midori VPN Pod (${POD_NAME})..."
 predeploy_backup_file=""
 if podman container exists midori-postgres 2>/dev/null && \
   [[ "$(podman inspect --format '{{.State.Running}}' midori-postgres)" == true ]]; then
-  echo "🔒 Creando backup cifrado previo al reinicio..."
+  echo "🔒 Creando backup privado previo al reinicio..."
   backup_output="$(env \
     POSTGRES_CONTAINER=midori-postgres \
     POSTGRES_DB="${POSTGRES_DB}" \
     POSTGRES_BACKUP_USER="${POSTGRES_ADMIN_USER}" \
     POSTGRES_BACKUP_PASSWORD="${POSTGRES_ADMIN_PASSWORD}" \
     BACKUP_DIR="${POSTGRES_BACKUP_DIR}" \
-    BACKUP_GPG_RECIPIENT="${BACKUP_GPG_RECIPIENT}" \
     bash "${POSTGRES_BACKUP_SCRIPT}")"
   printf '%s\n' "${backup_output}"
-  predeploy_backup_file="$(awk -F': ' '$1 == "Encrypted PostgreSQL backup created" {print $2; exit}' <<<"${backup_output}")"
+  predeploy_backup_file="$(awk -F': ' '$1 == "PostgreSQL backup created" {print $2; exit}' <<<"${backup_output}")"
   [[ -n "${predeploy_backup_file}" && -f "${predeploy_backup_file}" ]] || die "pre-deployment backup path could not be verified"
 fi
 
@@ -487,6 +482,11 @@ podman run -d \
   "${CONTROL_IMAGE}"
 
 wait_healthy midori-vpn-control
+
+if [[ -n "${predeploy_backup_file}" ]]; then
+  rm -f -- "${predeploy_backup_file}" "${predeploy_backup_file}.sha256"
+  echo "🧹 Backup temporal eliminado después de completar todos los gates."
+fi
 
 echo "✅ ¡Despliegue del Podman Pod completado exitosamente!"
 podman pod ps --filter "name=${POD_NAME}"

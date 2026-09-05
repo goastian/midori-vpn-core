@@ -89,8 +89,8 @@ backends, four reserve backends and a 24-backend database ceiling. Treat those
 as measured deployment inputs, not universal PostgreSQL tuning constants;
 rerun the DB-02 pool and lock gates before increasing them.
 
-PostgreSQL operations, encrypted backup/restore and incident steps are in
-`deploy/POSTGRESQL.md`.
+PostgreSQL operations, private custom-format backup/restore and incident steps
+are in `deploy/POSTGRESQL.md`.
 
 For an existing Quadlet deployment, adapt
 `deploy/pgbouncer/control-pgbouncer.container.example` to the service account

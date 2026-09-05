@@ -7,9 +7,10 @@ the supported patch releases as of 2026-09-04.
 
 ## Security boundary
 
-- Place `midori-pgdata-v18` on a host filesystem encrypted at rest. Verify the
-  actual volume mount with `podman volume inspect` and the host block/filesystem
-  encryption before setting `POSTGRES_DATA_AT_REST_ENCRYPTED=true`.
+- Keep `midori-pgdata-v18` on a dedicated private host filesystem with the
+  ownership and SELinux labels required by the rootless PostgreSQL container.
+  Storage encryption remains a recommended host control, not a 2.0.0 startup
+  gate.
 - The standard same-pod loopback paths may use `sslmode=disable`; they do not
   cross a network boundary. Any separate network namespace or host must use
   PostgreSQL TLS with `sslmode=verify-full`, a trusted CA and a hostname that
@@ -60,10 +61,6 @@ below `max_connections` after reserving administrator and maintenance slots.
 
 ## Backup and isolated restore
 
-Use a dedicated offline OpenPGP recovery key; never reuse a package-signing or
-Control signing identity. Its public key is sufficient on the database host.
-Keep the private key offline except during a restore drill.
-
 With a running principal database, execute:
 
 ```text
@@ -72,13 +69,14 @@ POSTGRES_DB=<database> \
 POSTGRES_BACKUP_USER=<backup-role> \
 POSTGRES_BACKUP_PASSWORD=<secret> \
 BACKUP_DIR=<absolute-0700-directory> \
-BACKUP_GPG_RECIPIENT=<exact-40-hex-fingerprint> \
 bash scripts/backup-postgres.sh
 ```
 
-The custom-format dump streams directly into GPG; plaintext is never written
-to disk. Store the `.dump.gpg` file and its `.sha256` companion on separate,
-encrypted and access-controlled media.
+The script writes a PostgreSQL custom-format dump atomically, validates it with
+`pg_restore --list`, and creates a SHA-256 companion. The directory must be
+`0700`; the dump and manifest are `0600`. They are temporary deployment
+artifacts: delete both after every gate succeeds, or retain both without
+modification when a migration, deployment, or validation step fails.
 
 Restore only into a new isolated database first:
 
@@ -88,15 +86,15 @@ POSTGRES_ADMIN_USER=<bootstrap-admin> \
 POSTGRES_ADMIN_PASSWORD=<secret> \
 POSTGRES_OWNER_ROLE=<no-login-owner> \
 RESTORE_DATABASE=midorivpn_restore_<unique-suffix> \
-BACKUP_FILE=<absolute-dump.gpg-path> \
+BACKUP_FILE=<absolute-dump-path> \
 bash scripts/restore-postgres-backup.sh
 ```
 
 After restore, compare migration version, row counts for critical tables and
 application smoke results. Drop the isolated database only after evidence is
-recorded. Losing either the backup private key or
-`CONTROL_DATA_ENCRYPTION_KEY` makes recovery incomplete; back them up through
-independent channels.
+recorded. `CONTROL_DATA_ENCRYPTION_KEY` is not part of the dump procedure and
+must not be exported or copied for the drill; the existing authorized key is
+required to read encrypted PSK fields in a restored application environment.
 
 ## Observability and query plans
 
@@ -114,8 +112,8 @@ partial indexes.
 
 ## Rollback and incident handling
 
-- Before a schema or runtime change, produce a new encrypted backup and prove
-  its restore.
+- Before a schema or runtime change, produce a new private custom-format backup
+  and prove its restore.
 - A failed migration blocks Core startup. Do not force the migration table or
   mark a dirty version clean without inspecting the exact failed statement.
 - If the new Core cannot connect, validate runtime role settings through a
