@@ -289,7 +289,31 @@ OPENVPN_ENABLED=false
 IKEV2_ENABLED=false
 EOF
 chmod 0600 "${regional_env}"
-bash "${HOST_DIR}/render-quadlets.sh" --env-file "${regional_env}" --output-dir "${test_root}/regional-render" --runtime-dir "${runtime_dir}" >/dev/null
+regional_variables="${test_root}/regional-variables.env"
+regional_secrets="${test_root}/regional-secrets.env"
+: > "${regional_variables}"
+: > "${regional_secrets}"
+while IFS='=' read -r key value; do
+  if [[ "${key}" == CORE_IMAGE || "${key}" == CONTROL_IMAGE ]]; then
+    continue
+  fi
+  classification="$(jq -er --arg key "${key}" '.managed_env[$key]' "${ROOT}/deploy/ci/environment-map.json")"
+  if [[ "${classification}" == secret ]]; then
+    printf '%s=%s\n' "${key}" "${value}" >> "${regional_secrets}"
+  else
+    printf '%s=%s\n' "${key}" "${value}" >> "${regional_variables}"
+  fi
+done < "${regional_env}"
+chmod 0600 "${regional_variables}" "${regional_secrets}"
+bash "${ROOT}/scripts/release/compose-deployment-values.sh" \
+  --variables-file "${regional_variables}" --secrets-file "${regional_secrets}" \
+  --core-image "registry.example.test/midori/core@${digest_a}" \
+  --control-image "registry.example.test/midori/control@${digest_a}" \
+  --output "${test_root}/regional-composed.env" >/dev/null
+if grep -q '^CONTROL_IMAGE=' "${test_root}/regional-composed.env"; then
+  fail "regional Actions composition injected Control"
+fi
+bash "${HOST_DIR}/render-quadlets.sh" --env-file "${test_root}/regional-composed.env" --output-dir "${test_root}/regional-render" --runtime-dir "${runtime_dir}" >/dev/null
 [[ -f "${test_root}/regional-render/rootless/midorivpn-core.container" ]] || fail "regional render lacks Core"
 [[ ! -f "${test_root}/regional-render/rootless/midorivpn-postgres.container" ]] || fail "regional render contains PostgreSQL"
 [[ ! -f "${test_root}/regional-render/rootless/midorivpn-control.container" ]] || fail "regional render contains Control"

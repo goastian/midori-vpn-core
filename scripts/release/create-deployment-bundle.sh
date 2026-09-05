@@ -58,11 +58,22 @@ staging="$(mktemp -d "${parent}/.midorivpn-bundle.XXXXXX")"
 cleanup() { rm -rf -- "${staging}"; }
 trap cleanup EXIT
 payload="${staging}/midorivpn-${version}"
-install -d -m 0700 -- "${payload}/deploy" "${payload}/scripts/release"
+install -d -m 0700 -- "${payload}/deploy" "${payload}/docs" "${payload}/scripts/release"
 
 cp -a -- "${ROOT_DIR}/deploy/ci" "${ROOT_DIR}/deploy/host" "${ROOT_DIR}/deploy/nginx" \
   "${ROOT_DIR}/deploy/observability" "${ROOT_DIR}/deploy/postgres" \
   "${payload}/deploy/"
+install -m 0600 -- "${ROOT_DIR}/deploy/DEPLOYMENT_PROFILES.md" \
+  "${ROOT_DIR}/deploy/POSTGRESQL.md" "${ROOT_DIR}/deploy/OBSERVABILITY.md" \
+  "${ROOT_DIR}/deploy/OPENVPN.md" "${ROOT_DIR}/deploy/IKEV2.md" \
+  "${ROOT_DIR}/deploy/WSS_TUNNEL.md" "${ROOT_DIR}/deploy/MASQUE.md" \
+  "${payload}/deploy/"
+install -m 0600 -- "${ROOT_DIR}/docs/PRODUCTION_DEPLOYMENT.md" \
+  "${ROOT_DIR}/docs/RELEASE_OPERATIONS.md" \
+  "${ROOT_DIR}/docs/RELEASE_SUPPLY_CHAIN.md" \
+  "${ROOT_DIR}/docs/CENTRAL_CONTROL_ARCHITECTURE.md" \
+  "${ROOT_DIR}/docs/openapi.yaml" "${payload}/docs/"
+install -m 0600 -- "${ROOT_DIR}/.env.example" "${payload}/.env.example"
 install -d -m 0700 -- "${payload}/deploy/grafana"
 install -m 0600 -- "${ROOT_DIR}/deploy/grafana/midori-vpn-dashboard.json" "${payload}/deploy/grafana/"
 install -m 0600 -- "${ROOT_DIR}/scripts/backup-postgres.sh" \

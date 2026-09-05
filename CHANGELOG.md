@@ -52,6 +52,14 @@
 
 ### Operations
 
+- Added a single production deployment runbook covering protected Actions
+  inputs, coordinated private publication, principal/regional installation,
+  the rootless/rootful boundary, partial environment updates, upgrades,
+  rollback, disaster recovery, credential rotation, private observability and
+  the explicit single-principal availability limit of 2.0.0.
+- Made protected deployment composition profile-aware so regional nodes never
+  receive `CONTROL_IMAGE`, required an explicit profile, and removed transient
+  secret-bearing patch/render copies after application or rollback.
 - Replaced manual per-repository OCI publication with coordinated annotated-tag
   CI/CD. Control and Core now prove reproducible builds, remain private in GHCR,
   are scanned/attested/signed by digest, and feed a checksum-closed secret-free

@@ -2,6 +2,8 @@
 
 This is the executable deployment baseline for the topology defined in
 [`docs/CENTRAL_CONTROL_ARCHITECTURE.md`](../docs/CENTRAL_CONTROL_ARCHITECTURE.md).
+The complete operator sequence is in
+[`docs/PRODUCTION_DEPLOYMENT.md`](../docs/PRODUCTION_DEPLOYMENT.md).
 The regional script does not by itself certify a node. Signed enrollment,
 heartbeat, desired-state polling, last-known-good activation, transport-token
 verification and private fleet observability are part of the current local
@@ -37,10 +39,13 @@ public TLS entry point.
 Set `DEPLOYMENT_PROFILE=principal`, choose a unique lowercase
 `CORE_NODE_NAME`, and follow [`host/README.md`](host/README.md) as the dedicated
 unprivileged service account. The canonical renderer and installer produce
-independently supervised Quadlets. The pod infra process uses the official Kubernetes pause
-3.10.1 image at the exact linux/amd64 digest recorded in `.env.example`; this
-avoids relying on Podman's host-binary scratch infra path and keeps SELinux
-separation enabled. Build the pinned pooler image first with:
+independently supervised Quadlets. The pod infra process uses the minimal pause
+3.10.1 OCI image hosted at `registry.k8s.io`, at the exact linux/amd64 digest
+recorded in `.env.example`; this is only the pod namespace process and does not
+install or operate Kubernetes. It avoids relying on Podman's host-binary
+scratch infra path and keeps SELinux separation enabled. CI publishes the
+pinned pooler image; a production host never builds it. The effective pod
+contract is:
 
 ```ini
 [Pod]

@@ -54,6 +54,8 @@ validate_class() {
 }
 validate_class variables variable
 validate_class secrets secret
+profile="${variables[DEPLOYMENT_PROFILE]:-}"
+[[ "${profile}" == principal || "${profile}" == core-node ]] || host_die "DEPLOYMENT_PROFILE must be supplied as an Actions variable"
 
 output_dir="$(dirname -- "${output_file}")"
 install -d -m 0700 -- "${output_dir}"
@@ -64,9 +66,15 @@ chmod 0600 "${temporary}"
 {
   for key in "${!variables[@]}"; do printf '%s=%s\n' "${key}" "${variables[${key}]}"; done
   for key in "${!secrets[@]}"; do printf '%s=%s\n' "${key}" "${secrets[${key}]}"; done
-  printf 'CORE_IMAGE=%s\nCONTROL_IMAGE=%s\n' "${core_image}" "${control_image}"
+  printf 'CORE_IMAGE=%s\n' "${core_image}"
+  if [[ "${profile}" == principal ]]; then
+    printf 'CONTROL_IMAGE=%s\n' "${control_image}"
+  fi
 } | sort > "${temporary}"
 mv -f -- "${temporary}" "${output_file}"
 trap - EXIT
 chmod 0600 "${output_file}"
-printf 'Composed %s allowlisted deployment values without replacing the target environment.\n' "$((${#variables[@]} + ${#secrets[@]} + 2))"
+image_count=1
+[[ "${profile}" != principal ]] || image_count=2
+printf 'Composed %s allowlisted %s deployment values without replacing the target environment.\n' \
+  "$((${#variables[@]} + ${#secrets[@]} + image_count))" "${profile}"

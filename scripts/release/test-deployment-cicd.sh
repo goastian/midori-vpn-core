@@ -27,8 +27,39 @@ bash "${ROOT_DIR}/scripts/release/compose-deployment-values.sh" \
   --control-image "ghcr.io/goastian/midori-vpn-control@${digest_b}" \
   --output "${tmp}/deployment.env" >/dev/null
 grep -Fqx "CORE_IMAGE=ghcr.io/goastian/midori-vpn-core@${digest_a}" "${tmp}/deployment.env" || fail "Core digest was not injected"
+grep -Fqx "CONTROL_IMAGE=ghcr.io/goastian/midori-vpn-control@${digest_b}" "${tmp}/deployment.env" || fail "Control digest was not injected for the principal"
 grep -Fqx 'POSTGRES_ADMIN_PASSWORD=a-secret-value' "${tmp}/deployment.env" || fail "secret fragment was not composed"
 [[ "$(stat -c '%a' "${tmp}/deployment.env")" == 600 ]] || fail "deployment values are not private"
+
+cat > "${tmp}/regional-variables.env" <<'EOF'
+DEPLOYMENT_PROFILE=core-node
+DOMAIN=regional.example.test
+EOF
+cat > "${tmp}/regional-secrets.env" <<'EOF'
+REDIS_PASSWORD=regional-secret-value
+EOF
+chmod 0600 "${tmp}/regional-variables.env" "${tmp}/regional-secrets.env"
+bash "${ROOT_DIR}/scripts/release/compose-deployment-values.sh" \
+  --variables-file "${tmp}/regional-variables.env" --secrets-file "${tmp}/regional-secrets.env" \
+  --core-image "ghcr.io/goastian/midori-vpn-core@${digest_a}" \
+  --control-image "ghcr.io/goastian/midori-vpn-control@${digest_b}" \
+  --output "${tmp}/regional-deployment.env" >/dev/null
+grep -Fqx "CORE_IMAGE=ghcr.io/goastian/midori-vpn-core@${digest_a}" "${tmp}/regional-deployment.env" || fail "regional Core digest was not injected"
+if grep -q '^CONTROL_IMAGE=' "${tmp}/regional-deployment.env"; then
+  fail "regional deployment received the principal-only Control image"
+fi
+
+cat > "${tmp}/missing-profile.env" <<'EOF'
+DOMAIN=vpn.example.test
+EOF
+chmod 0600 "${tmp}/missing-profile.env"
+if bash "${ROOT_DIR}/scripts/release/compose-deployment-values.sh" \
+  --variables-file "${tmp}/missing-profile.env" --secrets-file "${tmp}/secrets.env" \
+  --core-image "ghcr.io/goastian/midori-vpn-core@${digest_a}" \
+  --control-image "ghcr.io/goastian/midori-vpn-control@${digest_b}" \
+  --output "${tmp}/missing-profile-output.env" >/dev/null 2>&1; then
+  fail "deployment values without an explicit profile were accepted"
+fi
 
 printf 'POSTGRES_ADMIN_PASSWORD=wrong-channel\n' > "${tmp}/bad-variable.env"
 chmod 0600 "${tmp}/bad-variable.env"
@@ -112,6 +143,10 @@ if rg -n 'a-secret-value|another-secret-value|-----BEGIN (OPENSSH|PRIVATE) KEY--
 fi
 jq -e '.images.core | endswith("@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")' \
   "${tmp}/one/midorivpn-2.0.0/release.json" >/dev/null || fail "bundle release metadata lacks Core digest"
+[[ -f "${tmp}/one/midorivpn-2.0.0/docs/PRODUCTION_DEPLOYMENT.md" ]] || fail "bundle lacks the production runbook"
+[[ -f "${tmp}/one/midorivpn-2.0.0/deploy/DEPLOYMENT_PROFILES.md" ]] || fail "bundle lacks deployment profile documentation"
+[[ -f "${tmp}/one/midorivpn-2.0.0/.env.example" ]] || fail "bundle lacks the environment reference"
+[[ -f "${tmp}/one/midorivpn-2.0.0/docs/openapi.yaml" ]] || fail "bundle documentation links are incomplete"
 bash "${tmp}/one/midorivpn-2.0.0/scripts/release/compose-deployment-values.sh" \
   --variables-file "${tmp}/variables.env" --secrets-file "${tmp}/secrets.env" \
   --core-image "ghcr.io/goastian/midori-vpn-core@${digest_a}" \

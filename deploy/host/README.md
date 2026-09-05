@@ -12,6 +12,11 @@ pod/private network or explicit loopback bindings. WireGuard and MASQUE are the
 only public pod ports. OpenVPN and IKEv2 are optional rootful Quadlets because
 they require host networking and narrowly scoped network capabilities.
 
+Use [`docs/PRODUCTION_DEPLOYMENT.md`](../../docs/PRODUCTION_DEPLOYMENT.md) as the
+operator runbook for protected Actions configuration, release order, first
+installation, upgrades, recovery, rotation and the 2.0.0 availability boundary.
+This file documents the individual host tools.
+
 ## 1. Prepare openSUSE
 
 Inspect first, then apply through `sudo`:

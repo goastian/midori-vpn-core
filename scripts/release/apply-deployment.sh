@@ -58,8 +58,11 @@ env_file="${service_home}/.config/midorivpn/midorivpn.env"
 [[ ! -e "${release_root}" && ! -e "${record_root}" ]] || die "deployment id already exists"
 install -d -m 0700 -o "${service_uid}" -g "${service_gid}" "${release_root}" "${record_root}"
 cp -a -- "${bundle_dir}/." "${release_root}/"
-install -m 0600 -o "${service_uid}" -g "${service_gid}" -- "${values_file}" "${record_root}/values.env"
 chown -R "${service_uid}:${service_gid}" "${release_root}" "${record_root}"
+staged_values="${record_root}/.deployment-values.env"
+install -m 0600 -o "${service_uid}" -g "${service_gid}" -- "${values_file}" "${staged_values}"
+cleanup_staged_values() { rm -f -- "${staged_values}"; }
+trap cleanup_staged_values EXIT
 
 # A running principal is backed up and restored into an isolated database before
 # any configuration or unit is changed. A new empty host has no data to back up.
@@ -73,10 +76,13 @@ units_changed=false
 rootful_changed=false
 nginx_changed=false
 firewall_changed=false
+rendered=""
 rollback() {
   status=$?
   trap - ERR INT TERM
   set +e
+  rm -f -- "${staged_values}"
+  [[ -z "${rendered}" ]] || rm -rf -- "${rendered}"
   if [[ "${nginx_changed}" == true ]]; then
     nginx_backup="$(<"${record_root}/nginx-backup")"
     bash "${release_root}/deploy/host/rollback-nginx.sh" "${nginx_backup}"
@@ -107,8 +113,9 @@ rollback() {
 trap rollback ERR INT TERM
 
 run_service bash "${release_root}/deploy/host/patch-env.sh" --env-file "${env_file}" \
-  --values-file "${record_root}/values.env" --backup-record "${record_root}/env-backup"
+  --values-file "${staged_values}" --backup-record "${record_root}/env-backup"
 env_changed=true
+rm -f -- "${staged_values}"
 
 declare -A cfg=()
 # shellcheck source=deploy/host/lib/common.sh
@@ -131,6 +138,8 @@ if find "${rendered}/rootful" -maxdepth 1 -type f -name '*.container' -print -qu
     --backup-record "${record_root}/rootful-backup"
   rootful_changed=true
 fi
+rm -rf -- "${rendered}"
+rendered=""
 bash "${release_root}/deploy/host/configure-firewall.sh" --env-file "${env_file}" --apply \
   --backup-record "${record_root}/firewall-backup"
 firewall_changed=true

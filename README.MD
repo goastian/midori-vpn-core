@@ -151,7 +151,9 @@ builds inside a rootless Podman RPM builder.
 
 ## Deployment
 
-The canonical production path is [`deploy/host/README.md`](deploy/host/README.md):
+The operator entry point is
+[`docs/PRODUCTION_DEPLOYMENT.md`](docs/PRODUCTION_DEPLOYMENT.md). The canonical
+host implementation is [`deploy/host/README.md`](deploy/host/README.md):
 tag-driven CI publishes private digest-addressed images, then the host scripts
 patch only approved `.env` keys and render checksum-verified Quadlets. Core,
 Control, PostgreSQL, PgBouncer, Redis and observability run rootless; only

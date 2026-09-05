@@ -4,6 +4,10 @@ This runbook prepares the approved signing path. It does not authorize running
 the signing workflows, creating a tag, pushing an image or publishing a
 release. Local working branches must never be used as release refs.
 
+For host preparation, installation, upgrade, rollback, recovery, rotation,
+observability and the 2.0.0 availability boundary, continue with
+[`PRODUCTION_DEPLOYMENT.md`](PRODUCTION_DEPLOYMENT.md).
+
 ## Required protected environments
 
 Before any release attempt, repository administrators create these GitHub
@@ -66,9 +70,9 @@ and re-reads GHCR package visibility as `private`.
 Core waits up to twenty minutes for the same-version Control digest and verifies
 its private visibility, Control workflow certificate identity and both
 attestations before publishing Core. It then creates a deterministic bundle
-containing only host scripts/templates, four commits, two OCI digests, database
-schema compatibility and checksums. It contains no deployment values, pull
-token, SSH key or application secret.
+containing host scripts/templates, public operator documentation, four commits,
+two OCI digests, database schema compatibility and checksums. It contains no
+deployment values, pull token, SSH key or application secret.
 
 The workflow file, Actions and scanner are pinned to full commits or image
 digests. It has `packages`, `id-token`, `attestations` and artifact metadata
