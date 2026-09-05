@@ -27,7 +27,6 @@ func TestBackfillPresharedKeysEncryptsEveryLegacyStoreAndIsResumable(t *testing.
 	if err != nil {
 		t.Fatalf("pgxpool.New: %v", err)
 	}
-	defer pool.Close()
 
 	userID := uuid.New()
 	serverID := uuid.New()
@@ -61,6 +60,7 @@ func TestBackfillPresharedKeysEncryptsEveryLegacyStoreAndIsResumable(t *testing.
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM vpn_servers WHERE id = $1`, serverID)
+		pool.Close()
 	})
 
 	cipher, err := dataencryption.New([]byte("0123456789abcdef0123456789abcdef"))
