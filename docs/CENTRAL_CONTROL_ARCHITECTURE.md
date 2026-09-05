@@ -368,6 +368,17 @@ peer admission limit under the same local mutation lock. Invalid or stale
 revisions leave the last-known-good untouched, and an expired local copy may be
 restored after restart only to preserve established tunnels.
 
+Control treats desired-state validity as a renewable lease. On startup and
+every five minutes, the principal selects only the latest revision of each
+active or draining enrolled node when less than six hours remain. It verifies
+the stored canonical payload and its original signature before creating a new
+24-hour revision with the same intent, a fresh issue/expiry window and an exact
+previous-revision link. Creation uses the normal per-node transaction lock, so
+an administrator update racing the renewer wins or produces a harmless
+revision conflict. Expired leases are recoverable by the same verified path;
+rows are never extended or overwritten. An invalid stored signature remains
+closed and increments the renewal error metric.
+
 Heartbeats report the applied revision and compatibility decision. Transport
 certification is deliberately absent from desired intent and remains false in
 observed state until the independent regional E2E gate records it.
@@ -395,11 +406,12 @@ user IDs, peer keys, client IPs and destination addresses are prohibited.
 Control exposes aggregate reconciliation divergence, pending cleanup and live
 peer-operation gauges alongside provisioning failures. Fleet series cover last
 heartbeat, desired/observed revision convergence, version compatibility,
-desired-signature rejection, capacity and bounded authentication/replay failure
-reasons. Alerting covers all of those plus scrape availability and pending
-operations. Each node exposes local HTTP, WireGuard capacity and transport
-health. Grafana remains loopback-only and administrator access uses an SSH
-tunnel or an equivalent private channel.
+desired-signature rejection, lease expiry, automatic renewal outcomes,
+capacity and bounded authentication/replay failure reasons. Alerting covers all
+of those plus scrape availability and pending operations. Each node exposes
+local HTTP, WireGuard capacity and transport health. Grafana remains
+loopback-only and administrator access uses an SSH tunnel or an equivalent
+private channel.
 
 ## Failure behavior
 

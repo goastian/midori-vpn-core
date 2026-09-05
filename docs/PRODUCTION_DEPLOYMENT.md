@@ -324,6 +324,8 @@ principal while validating the regional profile.
 7. Confirm Core consumed and removed the plaintext token while retaining its
    mode-0600 node identity.
 8. Confirm signed heartbeat, desired/observed revision and compatible version.
+   The principal renewer must create and the node must observe a fresh lease
+   before placement is enabled; do not extend `expires_at` directly in SQL.
 9. Register the server and explicit transport inventory in Control.
 10. Test signed add, list and conditional remove of a real test peer.
 11. Confirm central Prometheus scrapes the regional and no metrics endpoint is
@@ -426,8 +428,12 @@ package public, substitute a tag or build on the host as a recovery shortcut.
 
 Core rejects an invalid, expired, wrongly targeted or rolled-back bundle and
 keeps its last-known-good revision. Investigate the bounded observed error,
-correct central intent and issue a new monotonic revision. Do not disable
-signature or replay checks.
+the `midori_vpn_desired_state_renewal_errors_total` counter and the latest
+lease-expiry timestamp. The principal normally renews a verified unchanged
+intent six hours before expiry and can recover an expired lease at startup. If
+renewal remains blocked, correct central intent and issue a new monotonic
+revision. Never edit historical validity in PostgreSQL or disable signature or
+replay checks.
 
 ### Failed certificate renewal
 
@@ -472,16 +478,18 @@ After each deployment, record without secrets:
 - database backup/restore gate result and migration version;
 - active unit state and restart counts;
 - local readiness and exact public 204 edge response;
-- desired/observed revision, heartbeat age and node compatibility;
+- desired/observed revision, lease expiry/renewal counters, heartbeat age and
+  node compatibility;
 - private Prometheus target state and relevant alert status;
 - enabled transport authentication, traffic and cleanup result; and
 - every rollback snapshot retained by the run.
 
 At minimum, investigate any alert for unavailable database/pool, stale
 heartbeat, desired/observed drift, incompatible Core version, desired-signature
-failure, capacity exhaustion, reconciliation divergence, cleanup backlog or
-pending peer operations. A failed Core observation must remain an error and
-must never be displayed as zero peers.
+failure, desired lease approaching one hour, renewal errors, capacity
+exhaustion, reconciliation divergence, cleanup backlog or pending peer
+operations. A failed Core observation must remain an error and must never be
+displayed as zero peers.
 
 ## Production acceptance checklist
 

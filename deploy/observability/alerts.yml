@@ -46,6 +46,15 @@ groups:
           summary: Regional Core rejected the desired-state signature
           description: Node {{ $labels.node }} reported a desired-state signature failure; placement must remain closed.
 
+      - alert: MidoriVPNDesiredStateLeaseExpiring
+        expr: midori_vpn_node_desired_expires_timestamp_seconds > 0 and midori_vpn_node_desired_expires_timestamp_seconds - time() < 3600
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Regional Core desired-state lease is expiring
+          description: Node {{ $labels.node }} has less than one hour of signed desired state remaining; automatic renewal is not converging.
+
       - alert: MidoriVPNNodeAuthenticationFailures
         expr: increase(midori_vpn_node_auth_failures_total{reason=~"invalid_signature|replay"}[5m]) > 0
         for: 1m

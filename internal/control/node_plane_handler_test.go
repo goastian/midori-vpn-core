@@ -144,6 +144,10 @@ func TestDesiredStateIssuanceAndNodeScopedFetch(t *testing.T) {
 		t.Fatalf("enroll fixture: %v", err)
 	}
 	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `
+			DELETE FROM audit_logs
+			WHERE action = 'system.core-node.desired-state.renew'
+			  AND metadata->>'node_id' = $1`, node.ID.String())
 		_, _ = pool.Exec(context.Background(), `DELETE FROM desired_revisions WHERE node_id = $1`, node.ID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM node_enrollment_tokens WHERE node_id = $1`, node.ID)
 		_, _ = pool.Exec(context.Background(), `DELETE FROM core_nodes WHERE id = $1`, node.ID)
@@ -157,6 +161,7 @@ func TestDesiredStateIssuanceAndNodeScopedFetch(t *testing.T) {
 	cfg := &config.Config{
 		AppEnv: "development", PublicBaseURL: "https://control.test",
 		ControlNodeID: keyID, ControlNodePrivateKey: base64.RawURLEncoding.EncodeToString(privateKey),
+		NodeAuthorizedKeys: keyID + "=" + base64.RawURLEncoding.EncodeToString(publicKey),
 	}
 	adminHandler := control.NewHandler(pool, cfg)
 	requestBody := map[string]any{
@@ -214,6 +219,45 @@ func TestDesiredStateIssuanceAndNodeScopedFetch(t *testing.T) {
 	}
 	if envelope.Data.Bundle.Revision != 1 || envelope.Data.Bundle.ClusterID != cluster.ID {
 		t.Fatalf("unexpected desired state: %#v", envelope.Data.Bundle)
+	}
+	if _, err := pool.Exec(context.Background(), `UPDATE clusters SET state = 'active' WHERE id = $1`, cluster.ID); err != nil {
+		t.Fatalf("activate desired-state renewal fixture: %v", err)
+	}
+	if _, err := pool.Exec(context.Background(), `UPDATE core_nodes SET state = 'active' WHERE id = $1`, node.ID); err != nil {
+		t.Fatalf("activate desired-state renewal node fixture: %v", err)
+	}
+	renewer, err := control.NewDesiredStateRenewer(pool, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := renewer.RunOnce(context.Background(), time.Now().UTC())
+	if report.Candidates != 1 || report.Renewed != 1 || report.Conflicts != 0 || report.Errors != 0 {
+		t.Fatalf("desired state renewal report = %#v", report)
+	}
+	latest, err := multicluster.LatestDesiredRevision(context.Background(), node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renewed, err := desiredstate.DecodeStored(latest.Payload, latest.PayloadSHA256, latest.Signature, latest.SigningKeyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifier.Verify(renewed, node.ID, "2.0.0", time.Now().UTC(), false); err != nil {
+		t.Fatalf("verify renewed desired state: %v", err)
+	}
+	if renewed.Bundle.Revision != 2 || renewed.Bundle.PreviousRevision == nil || *renewed.Bundle.PreviousRevision != 1 ||
+		!renewed.Bundle.ExpiresAt.After(time.Now().UTC().Add(23*time.Hour)) {
+		t.Fatalf("unexpected renewed desired state: %#v", renewed.Bundle)
+	}
+	var renewalAudits int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT COUNT(*) FROM audit_logs
+		WHERE action = 'system.core-node.desired-state.renew'
+		  AND metadata->>'node_id' = $1`, node.ID.String()).Scan(&renewalAudits); err != nil {
+		t.Fatal(err)
+	}
+	if renewalAudits != 1 {
+		t.Fatalf("renewal audit count = %d, want 1", renewalAudits)
 	}
 
 	replayRecorder := httptest.NewRecorder()

@@ -43,6 +43,8 @@ func TestMetricsExporterIncludesOperationalHistograms(t *testing.T) {
 		"midori_vpn_reconciliation_divergent_peers",
 		"midori_vpn_reconciliation_cleanup_pending",
 		"midori_vpn_peer_operations_pending",
+		"midori_vpn_desired_state_renewals_total",
+		"midori_vpn_desired_state_renewal_errors_total",
 		"midori_vpn_node_auth_failures_total",
 	} {
 		if !strings.Contains(response.Body.String(), expected) {
@@ -158,6 +160,7 @@ func TestRegionalDiscoveryAndFleetMetricsUseOperationalNodes(t *testing.T) {
 		"midori_vpn_node_revision_drift{" + labels + "} 1",
 		"midori_vpn_node_version_compatible{" + labels + "} 0",
 		"midori_vpn_node_health_status{" + labels + `,status="unknown"} 1`,
+		"midori_vpn_node_desired_expires_timestamp_seconds{" + labels + "} 0",
 	} {
 		if !strings.Contains(body, expected) {
 			t.Fatalf("fleet metrics missing %q", expected)

@@ -343,6 +343,18 @@ func TestMulticlusterPlacementRequiresCurrentHealthyObservedState(t *testing.T) 
 		t.Fatalf("expire desired revision: %v", err)
 	}
 	assertEligibility(false, "expired desired revision")
+	renewalCandidates, err := multiclusterRepo.ListDesiredRenewalCandidates(ctx, time.Now().UTC().Add(6*time.Hour), 10)
+	if err != nil || len(renewalCandidates) != 1 || renewalCandidates[0].ID != revision2.ID {
+		t.Fatalf("desired renewal candidates = %#v, %v; want latest revision", renewalCandidates, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE core_nodes SET state = 'inactive' WHERE id = $1`, node.ID); err != nil {
+		t.Fatalf("make renewal candidate inactive: %v", err)
+	}
+	renewalCandidates, err = multiclusterRepo.ListDesiredRenewalCandidates(ctx, time.Now().UTC().Add(6*time.Hour), 10)
+	if err != nil || len(renewalCandidates) != 0 {
+		t.Fatalf("inactive node remained a renewal candidate: %#v, %v", renewalCandidates, err)
+	}
+	_, _ = pool.Exec(ctx, `UPDATE core_nodes SET state = 'active' WHERE id = $1`, node.ID)
 	_, _ = pool.Exec(ctx, `UPDATE desired_revisions SET expires_at = NOW() + INTERVAL '10 minutes' WHERE id = $1`, revision2.ID)
 
 	if _, err := pool.Exec(ctx, `

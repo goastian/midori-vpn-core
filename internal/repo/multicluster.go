@@ -638,6 +638,55 @@ func (r *MulticlusterRepo) LatestDesiredRevision(ctx context.Context, nodeID uui
 	return &revision, nil
 }
 
+// ListDesiredRenewalCandidates returns only the latest desired revision for
+// operational nodes whose lease expires on or before the supplied deadline.
+// Historical revisions are immutable and are never considered for renewal.
+func (r *MulticlusterRepo) ListDesiredRenewalCandidates(ctx context.Context, deadline time.Time, limit int) ([]models.DesiredRevision, error) {
+	if limit < 1 || limit > 1024 {
+		return nil, errors.New("desired renewal candidate limit must be between 1 and 1024")
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT desired.id, desired.node_id, desired.revision, desired.previous_revision,
+		       desired.schema_version, desired.minimum_core_version, desired.payload,
+		       desired.payload_sha256, desired.signature, desired.signing_key_id,
+		       desired.issued_at, desired.expires_at, desired.created_at
+		FROM core_nodes node
+		JOIN clusters cluster ON cluster.id = node.cluster_id
+		JOIN LATERAL (
+			SELECT revision.* FROM desired_revisions revision
+			WHERE revision.node_id = node.id
+			ORDER BY revision.revision DESC LIMIT 1
+		) desired ON TRUE
+		WHERE cluster.state IN ('active', 'draining')
+		  AND node.state IN ('active', 'draining')
+		  AND octet_length(node.identity_public_key) = 32
+		  AND desired.expires_at <= $1
+		ORDER BY desired.expires_at, desired.node_id
+		LIMIT $2`, deadline.UTC(), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list desired renewal candidates: %w", err)
+	}
+	defer rows.Close()
+
+	revisions := make([]models.DesiredRevision, 0)
+	for rows.Next() {
+		var revision models.DesiredRevision
+		if err := rows.Scan(
+			&revision.ID, &revision.NodeID, &revision.Revision, &revision.PreviousRevision,
+			&revision.SchemaVersion, &revision.MinimumCoreVersion, &revision.Payload,
+			&revision.PayloadSHA256, &revision.Signature, &revision.SigningKeyID,
+			&revision.IssuedAt, &revision.ExpiresAt, &revision.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan desired renewal candidate: %w", err)
+		}
+		revisions = append(revisions, revision)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate desired renewal candidates: %w", err)
+	}
+	return revisions, nil
+}
+
 func equalOptionalRevision(left, right *int64) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil

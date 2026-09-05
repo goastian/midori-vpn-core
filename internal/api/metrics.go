@@ -148,6 +148,7 @@ type fleetNodeMetric struct {
 	currentPeers        int
 	maxPeers            int
 	desiredSignatureBad int
+	desiredExpiresUnix  int64
 }
 
 func (m *MetricsExporter) controlMetrics(parent context.Context) controlMetrics {
@@ -228,11 +229,12 @@ func (m *MetricsExporter) controlMetrics(parent context.Context) controlMetrics 
 		       COALESCE(observation.health_status, 'unknown'),
 		       COALESCE(observation.current_peers, 0),
 		       COALESCE(observation.max_peers, 0),
-		       CASE WHEN observation.last_error_code = 'desired_state_signature_invalid' THEN 1 ELSE 0 END
+		       CASE WHEN observation.last_error_code = 'desired_state_signature_invalid' THEN 1 ELSE 0 END,
+		       COALESCE(EXTRACT(EPOCH FROM desired.expires_at)::BIGINT, 0)
 		FROM core_nodes node
 		JOIN clusters cluster ON cluster.id = node.cluster_id
 		LEFT JOIN LATERAL (
-			SELECT revision FROM desired_revisions
+			SELECT revision, expires_at FROM desired_revisions
 			WHERE node_id = node.id ORDER BY revision DESC LIMIT 1
 		) desired ON TRUE
 		LEFT JOIN LATERAL (
@@ -255,7 +257,7 @@ func (m *MetricsExporter) controlMetrics(parent context.Context) controlMetrics 
 			&metric.cluster, &metric.node, &metric.lastSeenUnix,
 			&metric.revisionDrift, &metric.versionCompatible,
 			&metric.healthStatus, &metric.currentPeers, &metric.maxPeers,
-			&metric.desiredSignatureBad,
+			&metric.desiredSignatureBad, &metric.desiredExpiresUnix,
 		); err != nil {
 			result.databaseUp = 0
 			result.nodes = nil
@@ -305,6 +307,7 @@ func (m *MetricsExporter) Handler(w http.ResponseWriter, r *http.Request) {
 	control := m.controlMetrics(r.Context())
 	databasePool := m.databasePoolMetrics()
 	reconciliation := controlpkg.ReconciliationMetricsSnapshot()
+	desiredRenewals, desiredRenewalErrors := controlpkg.DesiredStateRenewalMetricsSnapshot()
 
 	var output strings.Builder
 	writeMetric(&output, "midori_vpn_active_peers", "Current number of active WireGuard peers.", "gauge", activePeers)
@@ -343,6 +346,8 @@ func (m *MetricsExporter) Handler(w http.ResponseWriter, r *http.Request) {
 	writeMetric(&output, "midori_vpn_reconciliation_cleanup_pending", "Peer cleanups pending after the latest reconciliation pass.", "gauge", reconciliation.CleanupPending)
 	writeMetric(&output, "midori_vpn_peer_operations_pending", "Durable peer operations that have not fully converged.", "gauge", reconciliation.PendingOperations)
 	writeMetric(&output, "midori_vpn_reconciliation_observation_errors", "Core or database observation errors in the latest reconciliation pass.", "gauge", reconciliation.ObservationErrors)
+	writeMetric(&output, "midori_vpn_desired_state_renewals_total", "Desired-state leases renewed by Control.", "counter", desiredRenewals)
+	writeMetric(&output, "midori_vpn_desired_state_renewal_errors_total", "Desired-state lease renewal failures.", "counter", desiredRenewalErrors)
 	authFailures := telemetry.NodeAuthFailures()
 	fmt.Fprintln(&output, "# HELP midori_vpn_node_auth_failures_total Rejected signed node requests by bounded failure class.")
 	fmt.Fprintln(&output, "# TYPE midori_vpn_node_auth_failures_total counter")
@@ -364,6 +369,7 @@ func (m *MetricsExporter) Handler(w http.ResponseWriter, r *http.Request) {
 	writeMetricHeader(&output, "midori_vpn_node_current_peers", "Current peers reported by an operational node.", "gauge")
 	writeMetricHeader(&output, "midori_vpn_node_max_peers", "Maximum peers reported by an operational node.", "gauge")
 	writeMetricHeader(&output, "midori_vpn_node_desired_signature_error", "Whether the node most recently rejected a desired-state signature.", "gauge")
+	writeMetricHeader(&output, "midori_vpn_node_desired_expires_timestamp_seconds", "Unix timestamp at which the latest desired-state lease expires.", "gauge")
 	for _, node := range control.nodes {
 		labels := fmt.Sprintf("cluster=\"%s\",node=\"%s\"", prometheusLabel(node.cluster), prometheusLabel(node.node))
 		fmt.Fprintf(&output, "midori_vpn_node_last_seen_timestamp_seconds{%s} %d\n", labels, node.lastSeenUnix)
@@ -373,6 +379,7 @@ func (m *MetricsExporter) Handler(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(&output, "midori_vpn_node_current_peers{%s} %d\n", labels, node.currentPeers)
 		fmt.Fprintf(&output, "midori_vpn_node_max_peers{%s} %d\n", labels, node.maxPeers)
 		fmt.Fprintf(&output, "midori_vpn_node_desired_signature_error{%s} %d\n", labels, node.desiredSignatureBad)
+		fmt.Fprintf(&output, "midori_vpn_node_desired_expires_timestamp_seconds{%s} %d\n", labels, node.desiredExpiresUnix)
 	}
 	for _, metric := range control.transports {
 		fmt.Fprintf(&output, "midori_vpn_transport_status{protocol=\"%s\",status=\"%s\"} %d\n", prometheusLabel(metric.protocol), prometheusLabel(metric.status), metric.count)

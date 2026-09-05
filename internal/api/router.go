@@ -249,6 +249,9 @@ func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *au
 			go control.StartTransportHealthSync(jobCtx, pool)
 			go control.StartPeerCleanup(jobCtx, pool)
 			go control.StartSessionMeshCleanup(jobCtx, pool)
+			if cfg.ControlNodeID != "" && cfg.ControlNodePrivateKey != "" {
+				go control.StartDesiredStateRenewal(jobCtx, pool, cfg)
+			}
 			SetJobCancel(jobCancel)
 		}
 	}
