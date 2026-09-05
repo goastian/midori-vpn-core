@@ -70,6 +70,7 @@ podman run -d --name "$postgres_container" --network "$network" \
   -e POSTGRES_DB="$database_name" \
   -e POSTGRES_INITDB_ARGS="--auth-host=scram-sha-256 --auth-local=scram-sha-256" \
   -e POSTGRES_HOST_AUTH_METHOD=scram-sha-256 \
+  -v "${script_dir}/../internal/db/migrations:/migrations:ro,Z" \
   "$POSTGRES_IMAGE" postgres \
     -c shared_preload_libraries=pg_stat_statements \
     -c password_encryption=scram-sha-256 >/dev/null
@@ -77,9 +78,22 @@ wait_for_command "$postgres_container" pg_isready -U "$admin_user" -d "$database
 postgres_ip="$(podman inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$postgres_container")"
 [[ "$postgres_ip" =~ ^[0-9a-fA-F:.]+$ ]] || die "PostgreSQL container has no private address"
 
+# Reproduce a real upgrade: versions 1-21 were created by the historical
+# bootstrap administrator before the dedicated owner/migrator roles existed.
+podman exec "$postgres_container" sh -ceu '
+  export PGPASSWORD="$POSTGRES_PASSWORD"
+  for migration_file in /migrations/*.up.sql; do
+    [ "$(basename "$migration_file")" = "000022_foreign_key_indexes.up.sql" ] && break
+    psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f "$migration_file" >/dev/null
+  done
+  psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c \
+    "CREATE TABLE schema_migrations (version bigint NOT NULL PRIMARY KEY, dirty boolean NOT NULL); INSERT INTO schema_migrations (version, dirty) VALUES (21, false)" >/dev/null
+'
+
 podman exec -i \
   -e PGPASSWORD="$admin_password" \
   -e POSTGRES_DB="$database_name" \
+  -e POSTGRES_ADMIN_USER="$admin_user" \
   -e POSTGRES_OWNER_ROLE="$owner_role" \
   -e POSTGRES_MIGRATOR_USER="$migrator_user" \
   -e POSTGRES_MIGRATOR_PASSWORD="$migrator_password" \
@@ -112,6 +126,7 @@ podman run --rm --network "$network" \
 podman exec -i \
   -e PGPASSWORD="$admin_password" \
   -e POSTGRES_DB="$database_name" \
+  -e POSTGRES_ADMIN_USER="$admin_user" \
   -e POSTGRES_OWNER_ROLE="$owner_role" \
   -e POSTGRES_MIGRATOR_USER="$migrator_user" \
   -e POSTGRES_MIGRATOR_PASSWORD="$migrator_password" \

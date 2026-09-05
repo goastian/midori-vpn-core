@@ -79,10 +79,12 @@ The principal uses four distinct database identities: a no-login owner, a
 one-shot migrator, a DML-only runtime role, and a PgBouncer console
 administrator. The PostgreSQL bootstrap administrator is reserved for the
 idempotent role policy and recovery. `scripts/deploy-pod.sh` applies
-`deploy/postgres/configure-roles.sql`, runs migrations directly on port 5432,
-then starts Core through transaction-pooled port 6432. Privileged database
-credentials are removed from the generated Core and Control environment files
-and those temporary files are mode 0600 and deleted on exit.
+`deploy/postgres/configure-roles.sql`, adopts existing non-extension objects
+from the historical bootstrap owner, runs migrations directly on port 5432,
+then starts Core through transaction-pooled port 6432. The policy deliberately
+does not use cluster-wide `REASSIGN OWNED`. Privileged database credentials are
+removed from the generated Core and Control environment files and those
+temporary files are mode 0600 and deleted on exit.
 
 The checked-in starting envelope is 16 Core connections, 16 normal PgBouncer
 backends, four reserve backends and a 24-backend database ceiling. Treat those

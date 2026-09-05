@@ -30,6 +30,9 @@ attributes. A separate PgBouncer identity alone can access its console.
 
 1. Start PostgreSQL with SCRAM and `pg_stat_statements` preloaded.
 2. Apply `deploy/postgres/configure-roles.sql` as the bootstrap administrator.
+   On an upgrade, it adopts only non-extension objects in `public` that still
+   belong to that administrator; it never uses the cluster-wide
+   `REASSIGN OWNED` command.
 3. Validate roles, ACLs, extension and `pg_hba.conf` with
    `deploy/postgres/check-policy.sql`.
 4. Run `/usr/local/bin/midorivpn-migrate` once, directly against port 5432.
@@ -38,6 +41,10 @@ attributes. A separate PgBouncer identity alone can access its console.
 
 Do not start a new Core build before its one-shot migrator has completed. Core
 intentionally no longer performs DDL during application startup.
+The policy gate also requires every non-extension relation and routine in the
+application schema to belong to the no-login owner. This makes an upgrade from
+the historical administrator-owned schema explicit and gives the migrator only
+the ownership membership needed for schema changes.
 
 ## Runtime limits and pooling
 

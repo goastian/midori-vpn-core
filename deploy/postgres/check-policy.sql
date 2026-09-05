@@ -41,6 +41,35 @@ SELECT (
     AND NOT has_database_privilege(:'runtime_role', :'database_name', 'TEMPORARY')
     AND has_schema_privilege(:'runtime_role', 'public', 'USAGE')
     AND NOT has_schema_privilege(:'runtime_role', 'public', 'CREATE')
+    AND NOT EXISTS (
+        SELECT 1
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relkind IN ('r', 'p', 'S', 'v', 'm', 'f')
+          AND c.relowner <> (SELECT oid FROM pg_roles WHERE rolname = :'owner_role')
+          AND NOT EXISTS (
+              SELECT 1
+              FROM pg_depend d
+              WHERE d.classid = 'pg_class'::regclass
+                AND d.objid = c.oid
+                AND d.deptype = 'e'
+          )
+    )
+    AND NOT EXISTS (
+        SELECT 1
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public'
+          AND p.proowner <> (SELECT oid FROM pg_roles WHERE rolname = :'owner_role')
+          AND NOT EXISTS (
+              SELECT 1
+              FROM pg_depend d
+              WHERE d.classid = 'pg_proc'::regclass
+                AND d.objid = p.oid
+                AND d.deptype = 'e'
+          )
+    )
     AND has_database_privilege(:'backup_role', :'database_name', 'CONNECT')
     AND NOT has_database_privilege(:'backup_role', :'database_name', 'TEMPORARY')
     AND NOT EXISTS (

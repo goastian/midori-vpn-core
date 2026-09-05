@@ -1,6 +1,7 @@
 \set ON_ERROR_STOP on
 
 \getenv database_name POSTGRES_DB
+\getenv admin_role POSTGRES_ADMIN_USER
 \getenv owner_role POSTGRES_OWNER_ROLE
 \getenv migrator_role POSTGRES_MIGRATOR_USER
 \getenv migrator_password POSTGRES_MIGRATOR_PASSWORD
@@ -51,6 +52,65 @@ SELECT format('ALTER SCHEMA public OWNER TO %I', :'owner_role') \gexec
 SELECT format('GRANT USAGE, CREATE ON SCHEMA public TO %I', :'migrator_role') \gexec
 SELECT format('GRANT USAGE ON SCHEMA public TO %I', :'runtime_role') \gexec
 SELECT format('GRANT USAGE ON SCHEMA public TO %I', :'backup_role') \gexec
+
+-- Existing installations created application objects with the bootstrap
+-- administrator before the dedicated owner/migrator split existed. Adopt only
+-- non-extension objects in the application schema; never REASSIGN OWNED, which
+-- would also change unrelated shared objects owned by the administrator.
+SELECT format(
+    'ALTER %s %I.%I OWNER TO %I',
+    CASE c.relkind
+        WHEN 'r' THEN 'TABLE'
+        WHEN 'p' THEN 'TABLE'
+        WHEN 'S' THEN 'SEQUENCE'
+        WHEN 'v' THEN 'VIEW'
+        WHEN 'm' THEN 'MATERIALIZED VIEW'
+        WHEN 'f' THEN 'FOREIGN TABLE'
+    END,
+    n.nspname,
+    c.relname,
+    :'owner_role'
+)
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public'
+  AND c.relkind IN ('r', 'p', 'S', 'v', 'm', 'f')
+  AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = :'admin_role')
+  AND NOT EXISTS (
+      SELECT 1
+      FROM pg_depend d
+      WHERE d.classid = 'pg_class'::regclass
+        AND d.objid = c.oid
+        AND d.deptype = 'e'
+  )
+ORDER BY c.relkind, c.relname
+\gexec
+
+SELECT format(
+    'ALTER %s %I.%I(%s) OWNER TO %I',
+    CASE p.prokind
+        WHEN 'p' THEN 'PROCEDURE'
+        WHEN 'a' THEN 'AGGREGATE'
+        ELSE 'FUNCTION'
+    END,
+    n.nspname,
+    p.proname,
+    pg_get_function_identity_arguments(p.oid),
+    :'owner_role'
+)
+FROM pg_proc p
+JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = 'public'
+  AND p.proowner = (SELECT oid FROM pg_roles WHERE rolname = :'admin_role')
+  AND NOT EXISTS (
+      SELECT 1
+      FROM pg_depend d
+      WHERE d.classid = 'pg_proc'::regclass
+        AND d.objid = p.oid
+        AND d.deptype = 'e'
+  )
+ORDER BY p.proname, pg_get_function_identity_arguments(p.oid)
+\gexec
 
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM PUBLIC;
