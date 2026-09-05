@@ -218,6 +218,7 @@ func (r *ServerRepo) ListCandidates(ctx context.Context, protocol string, freshn
 		); err != nil {
 			return nil, fmt.Errorf("scan server candidate: %w", err)
 		}
+		candidate.Endpoint = normalizeStoredTransportHost(candidate.Endpoint, candidate.Port)
 		candidates = append(candidates, candidate)
 	}
 	if err := rows.Err(); err != nil {

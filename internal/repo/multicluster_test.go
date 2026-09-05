@@ -171,12 +171,21 @@ func TestMulticlusterPlacementRequiresCurrentHealthyObservedState(t *testing.T) 
 	if err := multiclusterRepo.RecordObservation(ctx, observation); err != nil {
 		t.Fatalf("RecordObservation: %v", err)
 	}
+	// Migration 7 historically allowed a duplicated port in endpoint. The
+	// placement contract must expose a host so clients can join it exactly once.
+	if _, err := pool.Exec(ctx, `
+		UPDATE vpn_server_transports
+		SET endpoint = 'modeled.test.invalid:51820'
+		WHERE server_id = $1 AND protocol = 'wireguard'`, server.ID); err != nil {
+		t.Fatalf("seed historical transport endpoint: %v", err)
+	}
 	assertEligibility(true, "matching healthy observation")
 	candidates, err := serverRepo.ListCandidates(ctx, "wireguard", repo.DefaultNodeFreshness)
 	if err != nil {
 		t.Fatalf("ListCandidates: %v", err)
 	}
-	if len(candidates) != 1 || candidates[0].ID != server.ID || candidates[0].Protocol != "wireguard" || candidates[0].ProbeURL != server.ProbeURL {
+	if len(candidates) != 1 || candidates[0].ID != server.ID || candidates[0].Protocol != "wireguard" ||
+		candidates[0].ProbeURL != server.ProbeURL || candidates[0].Endpoint != "modeled.test.invalid" {
 		t.Fatalf("fail-closed candidates = %#v, want only modeled server", candidates)
 	}
 	openVPNEligible, err := multiclusterRepo.ServerPlacementEligible(ctx, server.ID, "openvpn", repo.DefaultNodeFreshness)
