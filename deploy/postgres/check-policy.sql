@@ -82,6 +82,9 @@ SELECT (
 
 \if :policy_ok
 \else
-  \echo 'PostgreSQL hardening policy validation failed' >&2
-  \quit 1
+  DO $$
+  BEGIN
+      RAISE EXCEPTION 'PostgreSQL hardening policy validation failed';
+  END
+  $$;
 \endif

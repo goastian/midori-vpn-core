@@ -44,7 +44,9 @@ intentionally no longer performs DDL during application startup.
 The policy gate also requires every non-extension relation and routine in the
 application schema to belong to the no-login owner. This makes an upgrade from
 the historical administrator-owned schema explicit and gives the migrator only
-the ownership membership needed for schema changes.
+the ownership membership needed for schema changes. A false policy condition
+raises a PostgreSQL exception under `ON_ERROR_STOP`; callers must treat the
+nonzero `psql` exit as a hard deployment failure.
 
 ## Runtime limits and pooling
 

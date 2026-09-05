@@ -112,6 +112,24 @@ podman exec -i \
   -e POSTGRES_BACKUP_USER="$backup_user" \
   "$postgres_container" psql -U "$admin_user" -d "$database_name" --no-psqlrc -v ON_ERROR_STOP=1 < "$policy_check"
 
+podman exec -e PGPASSWORD="$admin_password" "$postgres_container" \
+  psql -U "$admin_user" -d "$database_name" --no-psqlrc -v ON_ERROR_STOP=1 \
+  -c 'CREATE TABLE policy_wrong_owner_probe (id integer)' >/dev/null
+if podman exec -i \
+  -e PGPASSWORD="$admin_password" \
+  -e POSTGRES_DB="$database_name" \
+  -e POSTGRES_OWNER_ROLE="$owner_role" \
+  -e POSTGRES_MIGRATOR_USER="$migrator_user" \
+  -e POSTGRES_RUNTIME_USER="$runtime_user" \
+  -e POSTGRES_BACKUP_USER="$backup_user" \
+  "$postgres_container" psql -U "$admin_user" -d "$database_name" \
+    --no-psqlrc -v ON_ERROR_STOP=1 < "$policy_check" >/dev/null 2>&1; then
+  die "PostgreSQL policy check accepted an application table with the wrong owner"
+fi
+podman exec -e PGPASSWORD="$admin_password" "$postgres_container" \
+  psql -U "$admin_user" -d "$database_name" --no-psqlrc -v ON_ERROR_STOP=1 \
+  -c 'DROP TABLE policy_wrong_owner_probe' >/dev/null
+
 podman run --rm --network "$network" \
   --read-only --cap-drop=ALL --security-opt no-new-privileges \
   --entrypoint /usr/local/bin/midorivpn-migrate \
