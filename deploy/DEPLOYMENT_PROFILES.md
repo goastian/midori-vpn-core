@@ -35,8 +35,9 @@ exit node. Only loopback HTTP ports are published; host Nginx is the sole
 public TLS entry point.
 
 Set `DEPLOYMENT_PROFILE=principal`, choose a unique lowercase
-`CORE_NODE_NAME`, and run `scripts/deploy-pod.sh` as the dedicated unprivileged
-service account. The pod infra process uses the official Kubernetes pause
+`CORE_NODE_NAME`, and follow [`host/README.md`](host/README.md) as the dedicated
+unprivileged service account. The canonical renderer and installer produce
+independently supervised Quadlets. The pod infra process uses the official Kubernetes pause
 3.10.1 image at the exact linux/amd64 digest recorded in `.env.example`; this
 avoids relying on Podman's host-binary scratch infra path and keeps SELinux
 separation enabled. Build the pinned pooler image first with:
@@ -61,10 +62,8 @@ setsebool -P httpd_can_network_relay on
 If either port is already assigned, verify that it is `http_port_t` instead of
 blindly adding a duplicate. `httpd_can_network_connect` remains off.
 
-```text
-podman build -f deploy/pgbouncer/Containerfile \
-  -t localhost/midorivpn-pgbouncer:2.0.0 .
-```
+The PgBouncer image is built and scanned by tagged CI, stored in the private
+registry and deployed by digest. A production host never builds it locally.
 
 Validate the pooler against an isolated PostgreSQL instance before deployment:
 
@@ -94,11 +93,10 @@ rerun the DB-02 pool and lock gates before increasing them.
 PostgreSQL operations, private custom-format backup/restore and incident steps
 are in `deploy/POSTGRESQL.md`.
 
-For an existing Quadlet deployment, adapt
-`deploy/pgbouncer/control-pgbouncer.container.example` to the service account
-and install `deploy/pgbouncer/control-api.container.d/30-pgbouncer.conf.example`
-as a drop-in for Core. The dependency and `Notify=healthy` gate prevent Core
-from starting before the pooler passes its local probe.
+For an existing deployment, render the canonical bundle and install it through
+`host/install-quadlets.sh`; its snapshot and rollback replace manual adaptation
+of the historical examples. The dependency and `Notify=healthy` gate prevent
+Core from starting before the pooler passes its local probe.
 
 The principal has the cluster signing identity:
 
@@ -181,9 +179,10 @@ ALLOW_LEGACY_HMAC_TRANSPORT_TOKENS=false
 NODE_EXTERNAL_TRANSPORTS=
 ```
 
-Set `DEPLOYMENT_PROFILE=core-node`, choose a unique `CORE_NODE_NAME`, and run
-`scripts/VPN/deploy-core-node.sh` as the dedicated unprivileged service
-account. Configure `NODE_CONTROL_URL`, `CORE_NODE_ID`,
+Set `DEPLOYMENT_PROFILE=core-node`, choose a unique `CORE_NODE_NAME`, and follow
+[`host/README.md`](host/README.md) as the dedicated unprivileged service
+account. `scripts/VPN/deploy-core-node.sh` remains only an imperative
+staging/diagnostic compatibility path. Configure `NODE_CONTROL_URL`, `CORE_NODE_ID`,
 `CORE_NODE_STATE_DIR`, `CORE_NODE_ENROLLMENT_TOKEN_FILE` and
 `CORE_NODE_MAX_PEERS` together. `NODE_SECRET_FINGERPRINTS` is optional and uses
 comma-separated `name=64-lowercase-hex` references; it never contains the

@@ -10,6 +10,7 @@ ligado al peer activo y al UUID del servidor.
 ```dotenv
 MASQUE_ENABLED=true
 MASQUE_PORT=443
+MASQUE_HOST_PORT=8443
 MASQUE_TLS_CERT=/etc/letsencrypt/live/vpn.example.org/fullchain.pem
 MASQUE_TLS_KEY=/etc/letsencrypt/live/vpn.example.org/privkey.pem
 MASQUE_URI_TEMPLATE=https://vpn.example.org/masque{?target_host,target_port}

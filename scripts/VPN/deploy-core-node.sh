@@ -181,10 +181,12 @@ if [[ "${WSS_TUNNEL_ENABLED}" == "true" ]]; then
   require_value WSS_TUNNEL_SERVER_ID
 fi
 if [[ "${MASQUE_ENABLED}" == "true" ]]; then
-  for name in MASQUE_PORT MASQUE_TLS_CERT MASQUE_TLS_KEY MASQUE_URI_TEMPLATE MASQUE_SERVER_ID MASQUE_MAX_CLIENTS; do
+  for name in MASQUE_PORT MASQUE_HOST_PORT MASQUE_TLS_CERT MASQUE_TLS_KEY MASQUE_URI_TEMPLATE MASQUE_SERVER_ID MASQUE_MAX_CLIENTS; do
     require_value "${name}"
   done
   require_port MASQUE_PORT
+  require_port MASQUE_HOST_PORT
+  (( MASQUE_HOST_PORT >= 1024 )) || die "MASQUE_HOST_PORT must be unprivileged for rootless Podman"
 fi
 
 pod_name="midori-${CORE_NODE_NAME}"
@@ -205,7 +207,7 @@ if [[ "${PROXY_ENABLED}" == "true" ]]; then
   pod_args+=(--publish "127.0.0.1:${PROXY_HOST_PORT}:${PROXY_PORT}/tcp")
 fi
 if [[ "${MASQUE_ENABLED}" == "true" ]]; then
-  pod_args+=(--publish "${MASQUE_PORT}:${MASQUE_PORT}/udp")
+  pod_args+=(--publish "${MASQUE_HOST_PORT}:${MASQUE_PORT}/udp")
 fi
 podman "${pod_args[@]}"
 

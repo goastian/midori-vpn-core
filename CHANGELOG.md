@@ -52,6 +52,11 @@
 
 ### Operations
 
+- Added the canonical openSUSE deployment toolkit: allowlisted atomic `.env`
+  updates, immutable digest-only principal/regional Quadlets, isolated service
+  credentials, rootless MASQUE port translation, exact firewalld/Nginx ingress,
+  checksum-closed installation, strict public edge probes and configuration
+  rollback without automatic database restoration.
 - Added a per-user Dashboard summary endpoint backed by stable device identity,
   preserved historical traffic and a bounded recent-session query. Optional
   global infrastructure totals are returned only to administrators, and the

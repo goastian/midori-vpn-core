@@ -140,6 +140,9 @@ bash scripts/pod.sh debt
 
 # Runner path/layout contract without starting containers
 bash scripts/test-pod-runner.sh
+
+# Partial env patch, principal/regional Quadlets, immutable images and rollback
+bash scripts/test-host-deploy.sh
 ```
 
 Each frontend repository documents its own check command and also runs
@@ -148,11 +151,16 @@ builds inside a rootless Podman RPM builder.
 
 ## Deployment
 
-`scripts/deploy-pod.sh` consumes a complete environment and creates a rootless
-Podman pod. Its infra process is a digest-pinned Kubernetes pause image, so the
-runtime never needs to disable SELinux separation when Podman's scratch infra
-path is unavailable. The staging installation uses systemd Quadlets so
-database, Redis, API and web services are independently supervised.
+The canonical production path is [`deploy/host/README.md`](deploy/host/README.md):
+tag-driven CI publishes private digest-addressed images, then the host scripts
+patch only approved `.env` keys and render checksum-verified Quadlets. Core,
+Control, PostgreSQL, PgBouncer, Redis and observability run rootless; only
+kernel gateways use narrowly privileged rootful units. No production host
+builds images, follows `latest`, or enables registry auto-update.
+
+`scripts/deploy-pod.sh` remains an imperative staging/diagnostic compatibility
+path. It must use the same immutable images and split rootless MASQUE host port;
+it is not the production release entry point.
 
 Principal and regional profiles, their privilege boundaries and their
 acceptance gate are described in `deploy/DEPLOYMENT_PROFILES.md`.
@@ -172,7 +180,9 @@ Operational helpers:
 ```bash
 scripts/configure-quadlet-masque.sh  # backup, configure and restart with rollback
 scripts/upgrade-quadlet-redis.sh     # SAVE, volume export and Redis major upgrade
-scripts/setup-core-host.sh           # validate/install host Nginx and Certbot inputs
+deploy/host/configure-nginx.sh       # atomic host Nginx and optional Certbot
+deploy/host/configure-firewall.sh    # exact declared public ingress only
+deploy/host/install-quadlets.sh      # verified install and configuration rollback
 scripts/render-observability.sh      # render private Prometheus/Grafana Quadlets
 scripts/check-observability.sh       # validate rules, dashboard and private binds
 ```

@@ -32,6 +32,12 @@ require_bool() {
   esac
 }
 
+require_port() {
+  local name="$1" value="${!1:-}"
+  [[ "${value}" =~ ^[0-9]+$ ]] || die "${name} must be an integer port"
+  ((value >= 1 && value <= 65535)) || die "${name} must be between 1 and 65535"
+}
+
 require_identifier() {
   local name="$1"
   [[ "${!name:-}" =~ ^[A-Za-z_][A-Za-z0-9_]{0,62}$ ]] || die "${name} must be a simple PostgreSQL identifier"
@@ -221,9 +227,11 @@ if [ "${WSS_TUNNEL_ENABLED}" = "true" ]; then
 fi
 
 if [ "${MASQUE_ENABLED}" = "true" ]; then
-  for masque_var in MASQUE_TLS_CERT MASQUE_TLS_KEY MASQUE_URI_TEMPLATE MASQUE_SERVER_ID; do
+  for masque_var in MASQUE_HOST_PORT MASQUE_TLS_CERT MASQUE_TLS_KEY MASQUE_URI_TEMPLATE MASQUE_SERVER_ID; do
     require_value "${masque_var}"
   done
+  require_port MASQUE_HOST_PORT
+  ((MASQUE_HOST_PORT >= 1024)) || die "MASQUE_HOST_PORT must be unprivileged for rootless Podman"
 fi
 
 if [ "${PROXY_ENABLED}" = "true" ]; then
@@ -277,7 +285,7 @@ if [ "${PROXY_ENABLED}" = "true" ]; then
   pod_args+=(-p "127.0.0.1:${PROXY_HOST_PORT}:${PROXY_PORT}/tcp")
 fi
 if [ "${MASQUE_ENABLED}" = "true" ]; then
-  pod_args+=(-p "${MASQUE_PORT}:${MASQUE_PORT}/udp")
+  pod_args+=(-p "${MASQUE_HOST_PORT}:${MASQUE_PORT}/udp")
 fi
 podman "${pod_args[@]}"
 
