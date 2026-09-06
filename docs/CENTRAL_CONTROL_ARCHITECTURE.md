@@ -165,7 +165,14 @@ including for adopted legacy peers. `peers.provision_operation_id` preserves
 the operation that owns each completed session. A pending retry returns
 `409 connection_in_progress` with `Retry-After`; a completed retry returns the
 same session and sensitive configuration rather than allocating again. Control
-reconciles immediately at startup and every 60 seconds. Operations become
+applies the rate limit only to genuinely new provisioning. Once Core has
+accepted a peer, the `core_applied` and completion writes use a separate
+strictly bounded context so an HTTP disconnect cannot abandon the durable
+transition. Desktop retries an ambiguous transport/5xx result and
+`connection_in_progress` with the same WireGuard public key; definitive 4xx
+responses remain terminal. Thus a lost response is resolved through the same
+operation/session instead of allocating another peer. Control reconciles
+immediately at startup and every 60 seconds. Operations become
 eligible for recovery after two minutes, while fresh operations remain
 protected from an older Core snapshot.
 

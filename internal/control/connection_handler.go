@@ -1,11 +1,13 @@
 package control
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -31,6 +33,15 @@ type ConnectRequest struct {
 	Device           *DeviceRequest          `json:"device,omitempty"`
 	ConnectionReason models.ConnectionReason `json:"connection_reason,omitempty"`
 	PQKEMPublicKey   string                  `json:"pq_kem_public_key,omitempty"`
+}
+
+const postCoreCompletionTimeout = 20 * time.Second
+
+// postCoreCompletionContext preserves only request values after Core has
+// accepted the peer. At that point an HTTP disconnect is an ambiguous result,
+// not authorization to abandon the durable PostgreSQL transition.
+func postCoreCompletionContext(requestContext context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(requestContext), postCoreCompletionTimeout)
 }
 
 func (h *Handler) respondWithExistingConnection(w http.ResponseWriter, r *http.Request, peer *models.Peer, pqCiphertext string, status int) {
@@ -78,12 +89,6 @@ func (h *Handler) respondWithExistingConnection(w http.ResponseWriter, r *http.R
 
 func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r)
-
-	// Per-user rate limit: prevent connection-spam / brute-force reconnects.
-	if h.connectLimiter != nil && !h.connectLimiter.Allow(user.ID.String()) {
-		respond.JsonError(w, "too many connection requests — please wait before trying again", http.StatusTooManyRequests)
-		return
-	}
 
 	var req ConnectRequest
 	if err := decodeStrictJSON(r.Body, &req); err != nil {
@@ -157,6 +162,14 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		return
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		respond.SafeError(w, "failed to inspect active connection", err, http.StatusInternalServerError)
+		return
+	}
+
+	// Only new provisioning consumes the connection rate limit. A retry with
+	// the same public key must remain able to retrieve an existing durable
+	// operation or peer after an ambiguous response.
+	if h.connectLimiter != nil && !h.connectLimiter.Allow(user.ID.String()) {
+		respond.JsonError(w, "too many connection requests — please wait before trying again", http.StatusTooManyRequests)
 		return
 	}
 
@@ -330,20 +343,23 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, "failed to connect to VPN server", http.StatusBadGateway)
 		return
 	}
-	if err := h.peerOperationRepo.MarkCoreApplied(r.Context(), operationID, coreResp.AllowedIP); err != nil {
+	completionCtx, cancelCompletion := postCoreCompletionContext(r.Context())
+	defer cancelCompletion()
+	completionRequest := r.Clone(completionCtx)
+	if err := h.peerOperationRepo.MarkCoreApplied(completionCtx, operationID, coreResp.AllowedIP); err != nil {
 		slog.Error("failed to persist applied Core operation", "operation_id", operationID, "error", err)
 		respond.JsonError(w, "failed to persist connection progress", http.StatusInternalServerError)
 		return
 	}
-	peer, previousPeer, err := h.peerOperationRepo.CompleteConnect(r.Context(), operationID)
+	peer, previousPeer, err := h.peerOperationRepo.CompleteConnect(completionCtx, operationID)
 	if err != nil {
 		if errors.Is(err, repo.ErrAccessRevoked) {
-			cleanupErr := CallCoreRemovePeerContext(r.Context(), server, req.PublicKey, operationID.String())
+			cleanupErr := CallCoreRemovePeerContext(completionCtx, server, req.PublicKey, operationID.String())
 			if cleanupErr == nil {
-				cleanupErr = h.peerOperationRepo.CancelDeniedConnect(r.Context(), operationID)
+				cleanupErr = h.peerOperationRepo.CancelDeniedConnect(completionCtx, operationID)
 			}
 			if cleanupErr != nil {
-				h.recordDisconnectFailure(r.Context(), operationID, cleanupErr)
+				h.recordDisconnectFailure(completionCtx, operationID, cleanupErr)
 			}
 			respond.JsonError(w, "account or device access was revoked", http.StatusForbidden)
 			return
@@ -357,26 +373,26 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	if previousPeer != nil && previousPeer.IsActive {
 		if beginResult.Operation.PreviousOperationID == nil {
 			// The preflight observation already proved the legacy Core peer absent.
-			_ = h.peerOperationRepo.CompleteCleanup(r.Context(), operationID)
+			_ = h.peerOperationRepo.CompleteCleanup(completionCtx, operationID)
 		} else {
-			previousServer, loadErr := h.serverRepo.GetByID(r.Context(), previousPeer.ServerID)
+			previousServer, loadErr := h.serverRepo.GetByID(completionCtx, previousPeer.ServerID)
 			if loadErr != nil {
-				_ = h.peerOperationRepo.MarkCleanupPending(r.Context(), operationID, loadErr)
+				_ = h.peerOperationRepo.MarkCleanupPending(completionCtx, operationID, loadErr)
 			} else {
 				cleanupErr := CallCoreRemovePeer(previousServer, previousPeer.PublicKey, beginResult.Operation.PreviousOperationID.String())
 				if cleanupErr != nil {
 					slog.Error("replaced peer cleanup is pending", "operation_id", operationID, "peer_id", previousPeer.ID, "error", cleanupErr)
-					_ = h.peerOperationRepo.MarkCleanupPending(r.Context(), operationID, cleanupErr)
-				} else if completeErr := h.peerOperationRepo.CompleteCleanup(r.Context(), operationID); completeErr != nil {
+					_ = h.peerOperationRepo.MarkCleanupPending(completionCtx, operationID, cleanupErr)
+				} else if completeErr := h.peerOperationRepo.CompleteCleanup(completionCtx, operationID); completeErr != nil {
 					slog.Error("failed to finalize replaced peer cleanup", "operation_id", operationID, "peer_id", previousPeer.ID, "error", completeErr)
 				}
 			}
 		}
 	}
 
-	h.attachPeerToMeshSessions(r.Context(), user.ID, peer)
+	h.attachPeerToMeshSessions(completionCtx, user.ID, peer)
 
-	h.auditRepo.Log(r.Context(), &user.ID, "peer.connect",
+	h.auditRepo.Log(completionCtx, &user.ID, "peer.connect",
 		map[string]interface{}{
 			"operation_id": operationID,
 			"peer_id":      peer.ID,
@@ -387,7 +403,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 			"psk_enabled":  psk != "",
 		}, r.RemoteAddr)
 
-	h.respondWithExistingConnection(w, r, peer, pqCiphertext, http.StatusCreated)
+	h.respondWithExistingConnection(w, completionRequest, peer, pqCiphertext, http.StatusCreated)
 }
 
 func (h *Handler) Disconnect(w http.ResponseWriter, r *http.Request) {
