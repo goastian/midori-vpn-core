@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -517,6 +518,91 @@ func TestPeerOperationConcurrentDeviceRequestsHaveOneWinner(t *testing.T) {
 	}
 }
 
+func TestPeerOperationFiftyConcurrentSameKeyRequestsConvergeToOnePeer(t *testing.T) {
+	fixture := newPeerOperationFixture(t, 50)
+	operationRepo := fixture.operationRepo()
+	publicKey := operationKey(52)
+	const requestCount = 50
+
+	results := make([]*repo.BeginConnectResult, requestCount)
+	errorsSeen := make([]error, requestCount)
+	start := make(chan struct{})
+	var wait sync.WaitGroup
+	wait.Add(requestCount)
+	for index := 0; index < requestCount; index++ {
+		index := index
+		go func() {
+			defer wait.Done()
+			<-start
+			results[index], errorsSeen[index] = operationRepo.BeginConnect(context.Background(), repo.BeginConnectParams{
+				OperationID:  uuid.New(),
+				UserID:       fixture.userID,
+				Device:       fixture.device,
+				ServerID:     fixture.serverID,
+				PublicKey:    publicKey,
+				PresharedKey: operationKey(202),
+				MaxDevices:   1,
+			})
+		}()
+	}
+	close(start)
+	wait.Wait()
+
+	winner := -1
+	blocked := 0
+	for index, err := range errorsSeen {
+		switch {
+		case err == nil:
+			if winner != -1 {
+				t.Fatalf("more than one request won: %d and %d", winner, index)
+			}
+			winner = index
+		case errors.Is(err, repo.ErrConnectionInProgress):
+			blocked++
+		default:
+			t.Fatalf("unexpected concurrent result %d: %v", index, err)
+		}
+	}
+	if winner == -1 || blocked != requestCount-1 {
+		t.Fatalf("concurrent outcomes: winner=%d blocked=%d", winner, blocked)
+	}
+
+	peer, _ := completeFixtureConnect(t, operationRepo, results[winner].Operation.ID, "10.90.0.52/32")
+	for index := 0; index < requestCount; index++ {
+		retry, err := operationRepo.BeginConnect(context.Background(), repo.BeginConnectParams{
+			OperationID:  uuid.New(),
+			UserID:       fixture.userID,
+			Device:       fixture.device,
+			ServerID:     fixture.serverID,
+			PublicKey:    publicKey,
+			PresharedKey: operationKey(202),
+			MaxDevices:   1,
+		})
+		if err != nil || retry.ExistingPeer == nil || retry.ExistingPeer.ID != peer.ID {
+			t.Fatalf("retry %d did not converge to peer %s: result=%#v err=%v", index, peer.ID, retry, err)
+		}
+	}
+
+	var activePeers, assignedIPs, operations, currentPeers int
+	if err := fixture.pool.QueryRow(context.Background(), `
+		SELECT
+			COUNT(*) FILTER (WHERE peer.is_active),
+			COUNT(DISTINCT peer.assigned_ip) FILTER (WHERE peer.is_active),
+			COUNT(DISTINCT operation.id),
+			MAX(server.current_peers)
+		FROM peer_operations operation
+		JOIN vpn_servers server ON server.id = operation.server_id
+		LEFT JOIN peers peer ON peer.provision_operation_id = operation.id
+		WHERE operation.user_id = $1 AND operation.public_key = $2`,
+		fixture.userID, publicKey).Scan(&activePeers, &assignedIPs, &operations, &currentPeers); err != nil {
+		t.Fatalf("load converged concurrent state: %v", err)
+	}
+	if activePeers != 1 || assignedIPs != 1 || operations != 1 || currentPeers != 1 {
+		t.Fatalf("concurrent state diverged: active=%d ips=%d operations=%d slots=%d",
+			activePeers, assignedIPs, operations, currentPeers)
+	}
+}
+
 func TestPeerOperationRechecksQuotaBeforeCapacity(t *testing.T) {
 	fixture := newPeerOperationFixture(t, 1)
 	operationRepo := fixture.operationRepo()
@@ -598,6 +684,74 @@ func TestPeerOperationDisconnectIsDurableIdempotentAndRecounts(t *testing.T) {
 	retry, err := operationRepo.BeginDisconnect(context.Background(), peer.ID)
 	if err != nil || !retry.AlreadyConverged {
 		t.Fatalf("completed disconnect retry = %#v, %v", retry, err)
+	}
+}
+
+func TestPeerOperationDisconnectRecoversAfterDatabaseFailureFollowingCoreRemoval(t *testing.T) {
+	fixture := newPeerOperationFixture(t, 1)
+	operationRepo := fixture.operationRepo()
+	connect := beginFixtureConnect(t, fixture, operationRepo, operationKey(76))
+	peer, _ := completeFixtureConnect(t, operationRepo, connect.Operation.ID, "10.90.0.76/32")
+	disconnect, err := operationRepo.BeginDisconnect(context.Background(), peer.ID)
+	if err != nil {
+		t.Fatalf("BeginDisconnect: %v", err)
+	}
+
+	// Core has already confirmed removal. Hold the durable operation row to
+	// reproduce PostgreSQL becoming unavailable before the local completion can
+	// commit, then verify that a later retry converges the same operation.
+	lock, err := fixture.pool.Begin(context.Background())
+	if err != nil {
+		t.Fatalf("begin failure injection transaction: %v", err)
+	}
+	if _, err := lock.Exec(context.Background(), `
+		SELECT id FROM peer_operations WHERE id = $1 FOR UPDATE`, disconnect.Operation.ID); err != nil {
+		_ = lock.Rollback(context.Background())
+		t.Fatalf("lock disconnect operation: %v", err)
+	}
+	failureContext, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	_, completionErr := operationRepo.CompleteDisconnect(failureContext, disconnect.Operation.ID)
+	cancel()
+	if completionErr == nil {
+		_ = lock.Rollback(context.Background())
+		t.Fatal("disconnect completion unexpectedly succeeded while PostgreSQL was blocked")
+	}
+	if err := lock.Rollback(context.Background()); err != nil {
+		t.Fatalf("release failure injection lock: %v", err)
+	}
+
+	var state models.PeerOperationState
+	var active bool
+	var currentPeers int
+	if err := fixture.pool.QueryRow(context.Background(), `
+		SELECT operation.state, peer.is_active, server.current_peers
+		FROM peer_operations operation
+		JOIN peers peer ON peer.id = operation.previous_peer_id
+		JOIN vpn_servers server ON server.id = peer.server_id
+		WHERE operation.id = $1`, disconnect.Operation.ID).Scan(&state, &active, &currentPeers); err != nil {
+		t.Fatalf("load state after database failure: %v", err)
+	}
+	if state != models.PeerOperationPending || !active || currentPeers != 1 {
+		t.Fatalf("database failure lost durable intent: state=%s active=%t current=%d", state, active, currentPeers)
+	}
+
+	disconnected, err := operationRepo.CompleteDisconnect(context.Background(), disconnect.Operation.ID)
+	if err != nil {
+		t.Fatalf("retry CompleteDisconnect: %v", err)
+	}
+	if disconnected.IsActive {
+		t.Fatal("retry left the peer active")
+	}
+	if err := fixture.pool.QueryRow(context.Background(), `
+		SELECT operation.state, peer.is_active, server.current_peers
+		FROM peer_operations operation
+		JOIN peers peer ON peer.id = operation.previous_peer_id
+		JOIN vpn_servers server ON server.id = peer.server_id
+		WHERE operation.id = $1`, disconnect.Operation.ID).Scan(&state, &active, &currentPeers); err != nil {
+		t.Fatalf("load converged disconnect state: %v", err)
+	}
+	if state != models.PeerOperationCompleted || active || currentPeers != 0 {
+		t.Fatalf("disconnect retry did not converge: state=%s active=%t current=%d", state, active, currentPeers)
 	}
 }
 

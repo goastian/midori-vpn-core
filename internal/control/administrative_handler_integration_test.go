@@ -51,6 +51,20 @@ func TestDisconnectReturnsAcceptedWithoutHidingActiveAccess(t *testing.T) {
 	if recorder.Code != http.StatusAccepted || responseStatus(t, recorder) != "disconnect_pending" || recorder.Header().Get("Retry-After") != "5" {
 		t.Fatalf("disconnect response: status=%d body=%s retry=%q", recorder.Code, recorder.Body.String(), recorder.Header().Get("Retry-After"))
 	}
+	pool := handlerTestPool(t)
+	var active bool
+	var state models.PeerOperationState
+	if err := pool.QueryRow(context.Background(), `
+		SELECT peer.is_active, operation.state
+		FROM peers peer
+		JOIN peer_operations operation ON operation.previous_peer_id = peer.id
+		WHERE peer.id = $1 AND operation.action = 'disconnect'
+		ORDER BY operation.created_at DESC LIMIT 1`, activePeerID).Scan(&active, &state); err != nil {
+		t.Fatalf("load pending disconnect: %v", err)
+	}
+	if !active || state != models.PeerOperationPending {
+		t.Fatalf("pending disconnect hid access or lost intent: active=%t state=%s", active, state)
+	}
 }
 
 func TestDisconnectCompletesAfterCallerCancellation(t *testing.T) {
@@ -132,7 +146,7 @@ func TestDisconnectCompletesAfterCallerCancellation(t *testing.T) {
 }
 
 func TestBanBlocksFirstAndReportsPendingCleanup(t *testing.T) {
-	handler, user, _, _, _ := insertDeviceHandlerFixture(t)
+	handler, user, _, _, activePeerID := insertDeviceHandlerFixture(t)
 	admin := &models.User{ID: uuid.New(), Groups: []string{"midorivpn-admins"}}
 	request := withUser(
 		withChiParam(httptest.NewRequest(http.MethodPost, "/api/v1/admin/users/"+user.ID.String()+"/ban", jsonBody(t, map[string]string{"reason": "test"})), "id", user.ID.String()),
@@ -142,6 +156,25 @@ func TestBanBlocksFirstAndReportsPendingCleanup(t *testing.T) {
 	handler.AdminBanUser(recorder, request)
 	if recorder.Code != http.StatusAccepted || responseStatus(t, recorder) != "ban_cleanup_pending" {
 		t.Fatalf("ban response: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	pool := handlerTestPool(t)
+	var banned, active bool
+	var pending int
+	if err := pool.QueryRow(context.Background(), `
+		SELECT users.is_banned, peer.is_active,
+		       COUNT(operation.id) FILTER (
+		           WHERE operation.action = 'disconnect'
+		             AND operation.state IN ('pending', 'core_applied', 'cleanup_pending')
+		       )
+		FROM users
+		JOIN peers peer ON peer.user_id = users.id AND peer.id = $2
+		LEFT JOIN peer_operations operation ON operation.previous_peer_id = peer.id
+		WHERE users.id = $1
+		GROUP BY users.is_banned, peer.is_active`, user.ID, activePeerID).Scan(&banned, &active, &pending); err != nil {
+		t.Fatalf("load pending ban cleanup: %v", err)
+	}
+	if !banned || !active || pending != 1 {
+		t.Fatalf("ban ordering diverged: banned=%t active=%t pending=%d", banned, active, pending)
 	}
 }
 
