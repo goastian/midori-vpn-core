@@ -35,13 +35,14 @@ type ConnectRequest struct {
 	PQKEMPublicKey   string                  `json:"pq_kem_public_key,omitempty"`
 }
 
-const postCoreCompletionTimeout = 20 * time.Second
+const durablePeerOperationTimeout = 20 * time.Second
 
-// postCoreCompletionContext preserves only request values after Core has
-// accepted the peer. At that point an HTTP disconnect is an ambiguous result,
-// not authorization to abandon the durable PostgreSQL transition.
+// postCoreCompletionContext preserves only request values for a bounded
+// durable peer transition. Once Core has accepted a peer, or an authorized
+// disconnect starts, an HTTP disconnect is an ambiguous result rather than
+// authorization to abandon the PostgreSQL operation.
 func postCoreCompletionContext(requestContext context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(requestContext), postCoreCompletionTimeout)
+	return context.WithTimeout(context.WithoutCancel(requestContext), durablePeerOperationTimeout)
 }
 
 func (h *Handler) respondWithExistingConnection(w http.ResponseWriter, r *http.Request, peer *models.Peer, pqCiphertext string, status int) {

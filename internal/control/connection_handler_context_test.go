@@ -21,7 +21,7 @@ func TestPostCoreCompletionContextOutlivesCanceledRequest(t *testing.T) {
 		t.Fatalf("completion context value = %v, want kept", got)
 	}
 	deadline, ok := completionCtx.Deadline()
-	if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > postCoreCompletionTimeout {
+	if !ok || time.Until(deadline) <= 0 || time.Until(deadline) > durablePeerOperationTimeout {
 		t.Fatalf("completion deadline = %v, bounded=%v", deadline, ok)
 	}
 }

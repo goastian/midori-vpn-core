@@ -171,7 +171,10 @@ strictly bounded context so an HTTP disconnect cannot abandon the durable
 transition. Desktop retries an ambiguous transport/5xx result and
 `connection_in_progress` with the same WireGuard public key; definitive 4xx
 responses remain terminal. Thus a lost response is resolved through the same
-operation/session instead of allocating another peer. Control reconciles
+operation/session instead of allocating another peer. Authorized disconnects
+run under the same bounded, request-independent operation
+context, so a caller timeout cannot cancel intent persistence or exact Core
+cleanup midway through the lifecycle. Control reconciles
 immediately at startup and every 60 seconds. Operations become
 eligible for recovery after two minutes, while fresh operations remain
 protected from an older Core snapshot.

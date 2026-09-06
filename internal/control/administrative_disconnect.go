@@ -23,6 +23,10 @@ type disconnectOutcome struct {
 // point is retryable by the reconciler and therefore returns a pending outcome
 // rather than pretending the session is gone.
 func (h *Handler) disconnectPeer(ctx context.Context, peerID uuid.UUID) (disconnectOutcome, error) {
+	durableCtx, cancel := postCoreCompletionContext(ctx)
+	defer cancel()
+	ctx = durableCtx
+
 	result, err := h.peerOperationRepo.BeginDisconnect(ctx, peerID)
 	if err != nil {
 		return disconnectOutcome{}, err

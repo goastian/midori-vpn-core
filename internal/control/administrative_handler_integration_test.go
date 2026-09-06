@@ -1,6 +1,10 @@
 package control_test
 
 import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/goastian/midori-vpn-core/internal/control"
 	"github.com/goastian/midori-vpn-core/internal/models"
 )
 
@@ -45,6 +50,84 @@ func TestDisconnectReturnsAcceptedWithoutHidingActiveAccess(t *testing.T) {
 	handler.Disconnect(recorder, request)
 	if recorder.Code != http.StatusAccepted || responseStatus(t, recorder) != "disconnect_pending" || recorder.Header().Get("Retry-After") != "5" {
 		t.Fatalf("disconnect response: status=%d body=%s retry=%q", recorder.Code, recorder.Body.String(), recorder.Header().Get("Retry-After"))
+	}
+}
+
+func TestDisconnectCompletesAfterCallerCancellation(t *testing.T) {
+	handler, user, _, _, activePeerID := insertDeviceHandlerFixture(t)
+	pool := handlerTestPool(t)
+	operationID := uuid.New()
+	deleteObserved := make(chan struct{}, 1)
+	requestContext, cancelRequest := context.WithCancel(context.Background())
+	defer cancelRequest()
+
+	coreServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet:
+			cancelRequest()
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok":   true,
+				"data": map[string]string{"operation_id": operationID.String()},
+			})
+		case r.Method == http.MethodDelete:
+			deleteObserved <- struct{}{}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer coreServer.Close()
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate Control signing identity: %v", err)
+	}
+	if err := control.InitCoreSigningIdentity("disconnect-context-test", base64.RawURLEncoding.EncodeToString(privateKey)); err != nil {
+		t.Fatalf("initialize Control signing identity: %v", err)
+	}
+	control.InitCoreClient(false, true, "")
+	t.Cleanup(func() {
+		control.CloseCoreClient()
+		control.InitCoreClient(false, false, "")
+	})
+
+	var serverID uuid.UUID
+	if err := pool.QueryRow(context.Background(), `
+		SELECT server_id FROM peers WHERE id = $1`, activePeerID).Scan(&serverID); err != nil {
+		t.Fatalf("load disconnect server: %v", err)
+	}
+	if _, err := pool.Exec(context.Background(), `
+		UPDATE vpn_servers SET host = $2 WHERE id = $1`, serverID, coreServer.URL); err != nil {
+		t.Fatalf("point disconnect server at fixture Core: %v", err)
+	}
+
+	request := withUser(
+		withChiParam(httptest.NewRequest(http.MethodDelete, "/api/v1/control/connections/"+activePeerID.String(), nil).WithContext(requestContext), "id", activePeerID.String()),
+		user,
+	)
+	recorder := httptest.NewRecorder()
+	handler.Disconnect(recorder, request)
+	if recorder.Code != http.StatusOK || responseStatus(t, recorder) != "disconnected" {
+		t.Fatalf("disconnect response after cancellation: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	select {
+	case <-deleteObserved:
+	default:
+		t.Fatal("Core did not observe the exact disconnect after caller cancellation")
+	}
+
+	var active bool
+	var state models.PeerOperationState
+	if err := pool.QueryRow(context.Background(), `
+		SELECT peer.is_active, operation.state
+		FROM peers peer
+		JOIN peer_operations operation ON operation.previous_peer_id = peer.id
+		WHERE peer.id = $1 AND operation.action = 'disconnect'
+		ORDER BY operation.created_at DESC LIMIT 1`, activePeerID).Scan(&active, &state); err != nil {
+		t.Fatalf("load completed disconnect: %v", err)
+	}
+	if active || state != models.PeerOperationCompleted {
+		t.Fatalf("disconnect did not converge: active=%t state=%s", active, state)
 	}
 }
 
