@@ -209,8 +209,15 @@ list returns active sessions only. Revoking a device first requires its Core
 peer removal to converge, then atomically deactivates the database session,
 invalidates recoverable peer material, revokes its client certificates and
 marks the device revoked without deleting audit history. Until durable cleanup
-operations are introduced, a failed Core removal returns an explicit retryable
-failure and leaves the device active.
+converges, the API returns an explicit pending state and retains the operation
+for reconciliation instead of reporting success or discarding intent.
+
+JWT/JWE validation resolves an existing Authentik subject with a read-only
+MVCC lookup when its email and group claims are unchanged. Only a real claim
+change performs the conditional JIT upsert. This keeps ordinary authenticated
+requests, including Disconnect, independent of row locks held briefly by peer
+lifecycle transactions while preserving fail-closed synchronization for new
+or changed identities.
 
 A successful connection or replacement follows this order:
 
@@ -235,6 +242,13 @@ database sessions absent from a valid observation and removes Core orphans by
 their exact `(public_key, operation_id)`. Peer state and the logical server
 counter are repaired in the same PostgreSQL transaction. Retrying a completed
 operation cannot allocate another address or count the same peer twice.
+
+Desktop records the exact peer ID in a private atomic per-user cleanup queue
+before it tears down a local transport. Backend failures retain that entry for
+bounded retry and process restart; a successful or accepted idempotent DELETE
+removes it. If neither durable local recording nor immediate backend retirement
+is possible, the client keeps the active connection identity and reports an
+error so a later request can retry safely.
 
 There is no cross-cluster replication of WireGuard runtime state. Moving a
 device to another server creates a new placement and removes the old one after

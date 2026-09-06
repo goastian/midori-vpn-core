@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -38,6 +39,22 @@ func scanUser(row interface{ Scan(...interface{}) error }) (*models.User, error)
 }
 
 func (r *UserRepo) UpsertByAuthentikUID(ctx context.Context, authentikUID, email string, groups []string) (*models.User, error) {
+	if groups == nil {
+		groups = []string{}
+	}
+	// Authenticated requests overwhelmingly carry claims that are already in
+	// sync. Resolve that path with a plain MVCC read so unrelated connection
+	// lifecycle transactions holding the user row cannot block every request.
+	// A real claim change still uses the conditional upsert below and therefore
+	// remains serialized and fail-closed.
+	existing, err := r.getByAuthentikUID(ctx, authentikUID)
+	if err == nil && existing.Email == email && slices.Equal(existing.Groups, groups) {
+		return existing, nil
+	}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("resolve JIT user: %w", err)
+	}
+
 	query := `
 		INSERT INTO users (authentik_uid, email, groups, updated_at)
 		VALUES ($1, $2, $3, NOW())
@@ -45,13 +62,26 @@ func (r *UserRepo) UpsertByAuthentikUID(ctx context.Context, authentikUID, email
 		SET email = EXCLUDED.email,
 		    groups = EXCLUDED.groups,
 		    updated_at = NOW()
+		WHERE users.email IS DISTINCT FROM EXCLUDED.email
+		   OR users.groups IS DISTINCT FROM EXCLUDED.groups
 		RETURNING ` + userColumns
 
 	u, err := scanUser(r.pool.QueryRow(ctx, query, authentikUID, email, groups))
+	if errors.Is(err, pgx.ErrNoRows) {
+		// A concurrent request may have installed these exact claims between the
+		// read and upsert. Return that committed row without manufacturing a
+		// second write solely to obtain RETURNING data.
+		u, err = r.getByAuthentikUID(ctx, authentikUID)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("upsert user: %w", err)
 	}
 	return u, nil
+}
+
+func (r *UserRepo) getByAuthentikUID(ctx context.Context, authentikUID string) (*models.User, error) {
+	query := `SELECT ` + userColumns + ` FROM users WHERE authentik_uid = $1`
+	return scanUser(r.pool.QueryRow(ctx, query, authentikUID))
 }
 
 func (r *UserRepo) GetByID(ctx context.Context, id uuid.UUID) (*models.User, error) {
