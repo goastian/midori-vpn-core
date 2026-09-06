@@ -183,13 +183,17 @@ func TestDeviceCertificateRepoUsesDeviceIdentityInsteadOfName(t *testing.T) {
 	certificateRepo := repo.NewDeviceCertificateRepo(pool)
 	userID := insertTestUser(t, pool)
 	serverID := insertDeviceTestServer(t, pool)
-	first, err := deviceRepo.ResolveRegistered(context.Background(), userID, uuid.New(), "same-host", models.DeviceTypeDesktop, "")
+	sharedReference := "net-v1:" + strings.Repeat("C", 43)
+	first, err := deviceRepo.ResolveRegistered(context.Background(), userID, uuid.New(), "same-host", models.DeviceTypeDesktop, sharedReference)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := deviceRepo.ResolveRegistered(context.Background(), userID, uuid.New(), "same-host", models.DeviceTypeDesktop, "")
+	second, err := deviceRepo.ResolveRegistered(context.Background(), userID, uuid.New(), "same-host", models.DeviceTypeDesktop, sharedReference)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if first.ID == second.ID {
+		t.Fatal("same hostname and adapter reference merged distinct installation identities")
 	}
 
 	newCertificate := func(deviceID uuid.UUID, serial string) *models.DeviceCertificate {
