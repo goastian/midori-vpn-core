@@ -106,7 +106,8 @@ the private bundle; the controller downloads rather than rebuilds that bundle.
 Configure these non-secret Variables:
 
 - `MIDORIVPN_DEPLOY_ENABLED=true`
-- `MIDORIVPN_DEPLOY_HOST`, `MIDORIVPN_DEPLOY_PORT`, `MIDORIVPN_DEPLOY_USER`
+- `MIDORIVPN_DEPLOY_HOST`, `MIDORIVPN_DEPLOY_PORT`, `MIDORIVPN_DEPLOY_USER`,
+  `MIDORIVPN_DEPLOY_SERVICE_USER`
 - `MIDORIVPN_GHCR_PULL_USER`
 - `MIDORIVPN_DEPLOY_VALUES`, a newline-delimited dotenv fragment containing
   only keys classified as `variable`

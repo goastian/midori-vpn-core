@@ -28,12 +28,16 @@ sudo bash deploy/host/prepare-opensuse.sh --check --service-user midorivpn
 sudo bash deploy/host/prepare-opensuse.sh --apply --service-user midorivpn
 ```
 
-The apply operation installs Podman, Nginx, firewalld, SELinux utilities,
-rootless networking helpers and the openSUSE Python 3.13 Certbot/Nginx packages.
-It enables user linger and creates private directories. It deliberately does
-not open firewall ports or issue a certificate: those actions depend on the
-approved hostname and transport set. Once `.env` is complete, apply only the
-declared public ingress (HTTP/HTTPS, WireGuard and enabled proxy/MASQUE):
+The apply operation installs Podman, Nginx, firewalld, SELinux utilities and
+rootless networking helpers. It preserves an existing `certbot` installation
+when its Nginx plugin is functional; otherwise it selects the native Certbot
+packages for Leap or Tumbleweed. It verifies a subordinate UID/GID range of at
+least 65,536 IDs, Podman Quadlet, user linger and private directories. It
+deliberately does not open firewall ports or issue a certificate: those actions
+depend on the approved hostname and transport set. The service account name is
+operator-selectable; use the same value in every subsequent command. Once
+`.env` is complete, apply only the declared public ingress (HTTP/HTTPS,
+WireGuard and enabled proxy/MASQUE):
 
 ```bash
 sudo bash deploy/host/configure-firewall.sh \

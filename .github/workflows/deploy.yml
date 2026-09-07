@@ -33,6 +33,7 @@ jobs:
           DEPLOY_HOST: ${{ vars.MIDORIVPN_DEPLOY_HOST }}
           DEPLOY_PORT: ${{ vars.MIDORIVPN_DEPLOY_PORT }}
           DEPLOY_USER: ${{ vars.MIDORIVPN_DEPLOY_USER }}
+          DEPLOY_SERVICE_USER: ${{ vars.MIDORIVPN_DEPLOY_SERVICE_USER }}
           DEPLOY_VALUES: ${{ vars.MIDORIVPN_DEPLOY_VALUES }}
           DEPLOY_SECRETS: ${{ secrets.MIDORIVPN_DEPLOY_SECRETS }}
           SSH_PRIVATE_KEY: ${{ secrets.MIDORIVPN_DEPLOY_SSH_PRIVATE_KEY }}
@@ -49,6 +50,8 @@ jobs:
           [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$ ]]
           [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]] && ((DEPLOY_PORT >= 1 && DEPLOY_PORT <= 65535))
           [[ "$DEPLOY_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]
+          [[ "$DEPLOY_SERVICE_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]
+          test "$DEPLOY_SERVICE_USER" != root
           [[ "$GHCR_PULL_USER" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,78}$ ]]
           test -n "$DEPLOY_VALUES" && test -n "$DEPLOY_SECRETS"
           test -n "$SSH_PRIVATE_KEY" && test -n "$SSH_KNOWN_HOSTS"
@@ -144,6 +147,7 @@ jobs:
           DEPLOY_HOST: ${{ vars.MIDORIVPN_DEPLOY_HOST }}
           DEPLOY_PORT: ${{ vars.MIDORIVPN_DEPLOY_PORT }}
           DEPLOY_USER: ${{ vars.MIDORIVPN_DEPLOY_USER }}
+          DEPLOY_SERVICE_USER: ${{ vars.MIDORIVPN_DEPLOY_SERVICE_USER }}
           GHCR_PULL_USER: ${{ vars.MIDORIVPN_GHCR_PULL_USER }}
           GHCR_PULL_TOKEN: ${{ secrets.MIDORIVPN_GHCR_PULL_TOKEN }}
         run: |
@@ -162,13 +166,13 @@ jobs:
           ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "chmod 600 '$remote_dir/deployment.env' '$remote_dir/runtime-images.json'"
           # shellcheck disable=SC2029
           ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "cd '$remote_dir' && sha256sum --check 'midorivpn-${RELEASE_VERSION}.tar.gz.sha256' && tar -xzf 'midorivpn-${RELEASE_VERSION}.tar.gz' && sudo bash 'midorivpn-${RELEASE_VERSION}/deploy/host/prepare-opensuse.sh' --apply --service-user midorivpn"
+            "cd '$remote_dir' && sha256sum --check 'midorivpn-${RELEASE_VERSION}.tar.gz.sha256' && tar -xzf 'midorivpn-${RELEASE_VERSION}.tar.gz' && sudo bash 'midorivpn-${RELEASE_VERSION}/deploy/host/prepare-opensuse.sh' --apply --service-user '$DEPLOY_SERVICE_USER'"
           # shellcheck disable=SC2029
           printf '%s' "$GHCR_PULL_TOKEN" | ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "service_home=\$(getent passwd midorivpn | cut -d: -f6); sudo -u midorivpn env HOME=\"\$service_home\" podman login --username '$GHCR_PULL_USER' --password-stdin ghcr.io"
+            "service_home=\$(getent passwd '$DEPLOY_SERVICE_USER' | cut -d: -f6); sudo -u '$DEPLOY_SERVICE_USER' env HOME=\"\$service_home\" podman login --username '$GHCR_PULL_USER' --password-stdin ghcr.io"
           # shellcheck disable=SC2029
           ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
-            "sudo bash '$remote_dir/midorivpn-${RELEASE_VERSION}/scripts/release/apply-deployment.sh' --bundle-dir '$remote_dir/midorivpn-${RELEASE_VERSION}' --values-file '$remote_dir/deployment.env' --image-lock '$remote_dir/runtime-images.json' --service-user midorivpn --deployment-id '${RELEASE_VERSION}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}'"
+            "sudo bash '$remote_dir/midorivpn-${RELEASE_VERSION}/scripts/release/apply-deployment.sh' --bundle-dir '$remote_dir/midorivpn-${RELEASE_VERSION}' --values-file '$remote_dir/deployment.env' --image-lock '$remote_dir/runtime-images.json' --service-user '$DEPLOY_SERVICE_USER' --deployment-id '${RELEASE_VERSION}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}'"
           # shellcheck disable=SC2029
           ssh "${ssh_opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "rm -rf -- '$remote_dir'"
 

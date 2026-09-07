@@ -144,6 +144,7 @@ values as Environment Variables:
 | `MIDORIVPN_DEPLOY_HOST` | Exact approved DNS name, never a shell fragment |
 | `MIDORIVPN_DEPLOY_PORT` | SSH port from 1 through 65535 |
 | `MIDORIVPN_DEPLOY_USER` | Unprivileged SSH operator with the approved `sudo` path |
+| `MIDORIVPN_DEPLOY_SERVICE_USER` | Dedicated non-root account that owns the rootless runtime, such as `midori` |
 | `MIDORIVPN_GHCR_PULL_USER` | Identity with read-only access to the two private packages |
 | `MIDORIVPN_DEPLOY_VALUES` | Multiline dotenv fragment containing non-secret managed values |
 
@@ -275,8 +276,13 @@ sudo bash deploy/host/prepare-opensuse.sh --apply --service-user midorivpn
 ```
 
 This creates the dedicated service account and private directories, installs
-the required Podman/Nginx/firewalld/SELinux/Certbot packages and enables user
-linger. It does not issue a certificate, open firewall ports or build an image.
+the required Podman/Nginx/firewalld/SELinux packages and enables user linger.
+It preserves an existing Certbot installation when the Nginx plugin works;
+otherwise it installs the native Leap or Tumbleweed package names. It also
+requires Podman Quadlet and subordinate UID/GID ranges of at least 65,536 IDs.
+The protected `MIDORIVPN_DEPLOY_SERVICE_USER` value must match the account used
+here and cannot be `root`. The preparer does not issue a certificate, open
+firewall ports or build an image.
 
 Use an out-of-band channel to verify the SSH host fingerprint before storing
 `MIDORIVPN_DEPLOY_SSH_KNOWN_HOSTS`. Do not obtain trust with `ssh-keyscan` in the

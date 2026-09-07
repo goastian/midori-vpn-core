@@ -226,4 +226,9 @@ rg -Fq "github.repository == 'goastian/midori-vpn-core'" "${ROOT_DIR}/.github/wo
 [[ "$(rg -Fc 'password: ${{ secrets.GITHUB_TOKEN }}' "${ROOT_DIR}/.github/workflows/publish.yml")" == 1 ]] || fail "Core publication does not restore its job-scoped registry credential"
 rg -Fq 'resolve-runtime-images.sh' "${ROOT_DIR}/.github/workflows/deploy.yml" || fail "deploy controller does not lock pulled tags"
 rg -Fq -- '--image-lock' "${ROOT_DIR}/.github/workflows/deploy.yml" || fail "deploy controller does not transfer the runtime lock"
+rg -Fq 'DEPLOY_SERVICE_USER: ${{ vars.MIDORIVPN_DEPLOY_SERVICE_USER }}' "${ROOT_DIR}/.github/workflows/deploy.yml" || fail "deploy controller does not expose the rootless service user"
+[[ "$(rg -Fc -- "--service-user '\$DEPLOY_SERVICE_USER'" "${ROOT_DIR}/.github/workflows/deploy.yml")" == 2 ]] || fail "deploy controller does not consistently use the validated service user"
+if rg -Fq -- '--service-user midorivpn' "${ROOT_DIR}/.github/workflows/deploy.yml"; then
+  fail "deploy controller still hard-codes the rootless service user"
+fi
 printf 'Tagged private CI/CD tests passed.\n'

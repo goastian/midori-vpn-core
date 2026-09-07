@@ -185,8 +185,15 @@ fi
 assert_contains "${rendered}/rootless/env/grafana.env" 'GF_SECURITY_ADMIN_USER=admin'
 assert_contains "${rendered}/rootless/env/grafana.env" 'GF_SECURITY_ADMIN_PASSWORD=grafana-secret-strong'
 grep -Fq "Image=registry.example.test/midori/core:${tag_a}" "${rendered}/rootless/midorivpn-core.container" || fail "Core version tag missing"
-if [[ -x /usr/libexec/podman/quadlet ]]; then
-  QUADLET_UNIT_DIRS="${rendered}/rootless" /usr/libexec/podman/quadlet -user -dryrun > "${test_root}/quadlet-dryrun.txt" 2>&1 || {
+quadlet_bin=''
+for candidate in /usr/libexec/podman/quadlet /usr/lib/podman/quadlet; do
+  if [[ -x "${candidate}" ]]; then
+    quadlet_bin="${candidate}"
+    break
+  fi
+done
+if [[ -n "${quadlet_bin}" ]]; then
+  QUADLET_UNIT_DIRS="${rendered}/rootless" "${quadlet_bin}" -user -dryrun > "${test_root}/quadlet-dryrun.txt" 2>&1 || {
     tail -n 160 "${test_root}/quadlet-dryrun.txt" >&2
     fail "Podman Quadlet rejected the rendered rootless units"
   }
@@ -216,8 +223,8 @@ chmod 0600 "${gateway_env}"
 bash "${HOST_DIR}/render-quadlets.sh" --env-file "${gateway_env}" --output-dir "${test_root}/gateway-render" --runtime-dir "${runtime_dir}" >/dev/null
 [[ -f "${test_root}/gateway-render/rootful/midorivpn-openvpn.container" ]] || fail "OpenVPN rootful unit was not rendered"
 [[ -f "${test_root}/gateway-render/rootful/midorivpn-ikev2.container" ]] || fail "IKEv2 rootful unit was not rendered"
-if [[ -x /usr/libexec/podman/quadlet ]]; then
-  QUADLET_UNIT_DIRS="${test_root}/gateway-render/rootful" /usr/libexec/podman/quadlet -dryrun > "${test_root}/rootful-quadlet-dryrun.txt" 2>&1 || {
+if [[ -n "${quadlet_bin}" ]]; then
+  QUADLET_UNIT_DIRS="${test_root}/gateway-render/rootful" "${quadlet_bin}" -dryrun > "${test_root}/rootful-quadlet-dryrun.txt" 2>&1 || {
     tail -n 120 "${test_root}/rootful-quadlet-dryrun.txt" >&2
     fail "Podman Quadlet rejected the rendered rootful gateway units"
   }
