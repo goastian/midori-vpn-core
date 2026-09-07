@@ -40,8 +40,9 @@ Set `DEPLOYMENT_PROFILE=principal`, choose a unique lowercase
 `CORE_NODE_NAME`, and follow [`host/README.md`](host/README.md) as the dedicated
 unprivileged service account. The canonical renderer and installer produce
 independently supervised Quadlets. The pod infra process uses the minimal pause
-3.10.1 OCI image hosted at `registry.k8s.io`, at the exact linux/amd64 digest
-recorded in `.env.example`; this is only the pod namespace process and does not
+3.10.1 OCI image hosted at `registry.k8s.io`, with the exact version tag
+recorded in `.env.example` and a digest captured in the deployment image lock;
+this is only the pod namespace process and does not
 install or operate Kubernetes. It avoids relying on Podman's host-binary
 scratch infra path and keeps SELinux separation enabled. CI publishes the
 pinned pooler image; a production host never builds it. The effective pod
@@ -49,7 +50,7 @@ contract is:
 
 ```ini
 [Pod]
-PodmanArgs=--infra-image=registry.k8s.io/pause@sha256:e5b941ef8f71de54dc3a13398226c269ba217d06650a21bd3afcf9d890cf1f41 --infra-command=/pause
+PodmanArgs=--infra-image=registry.k8s.io/pause:3.10.1 --infra-command=/pause
 ```
 
 Use the same arguments in Quadlet-managed installations; do not replace them
@@ -68,14 +69,15 @@ If either port is already assigned, verify that it is `http_port_t` instead of
 blindly adding a duplicate. `httpd_can_network_connect` remains off.
 
 The PgBouncer image is built and scanned by tagged CI, stored in the private
-registry and deployed by digest. A production host never builds it locally.
+registry and deployed by an exact version tag after its digest is locked. A
+production host never builds it locally.
 
 Validate the pooler against an isolated PostgreSQL instance before deployment:
 
 ```text
 PGBOUNCER_IMAGE=localhost/midorivpn-pgbouncer:2.0.0 \
 CORE_IMAGE=localhost/midori-vpn-core:2.0.0 \
-POSTGRES_IMAGE=<postgres-18-image-by-digest> \
+POSTGRES_IMAGE=<postgres-18-image-with-exact-version-tag> \
 bash scripts/test-pgbouncer.sh
 ```
 

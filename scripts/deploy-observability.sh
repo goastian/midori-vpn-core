@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=deploy/host/lib/common.sh
+source "${ROOT_DIR}/deploy/host/lib/common.sh"
+
 : "${OBSERVABILITY_CONFIG_DIR:?OBSERVABILITY_CONFIG_DIR is required}"
 : "${QUADLET_DIR:?QUADLET_DIR is required}"
 : "${CORE_IMAGE:?CORE_IMAGE is required}"
@@ -56,8 +61,8 @@ wait_principal_target() {
 prepare_prometheus_volume() {
   local prometheus_image
   prometheus_image="$(awk -F= '$1 == "Image" { print $2; exit }' "${OBSERVABILITY_CONFIG_DIR}/midorivpn-prometheus.container")"
-  [[ "${prometheus_image}" =~ @sha256:[0-9a-f]{64}$ ]] || die "rendered Prometheus image must be pinned by digest"
-  podman image exists "${prometheus_image}" || die "pinned Prometheus image is not loaded"
+  host_validate_versioned_image "${prometheus_image}" PROMETHEUS_IMAGE
+  podman image exists "${prometheus_image}" || die "versioned Prometheus image is not loaded"
   systemctl --user start midorivpn-prometheus-data-volume.service
   podman volume exists midorivpn-prometheus-data || die "Prometheus data volume was not created"
   podman run --rm \
@@ -100,6 +105,7 @@ rollback() {
 
 [[ "${OBSERVABILITY_CONFIG_DIR}" = /* && "${QUADLET_DIR}" = /* ]] || die "configuration paths must be absolute"
 [[ "${CORE_IMAGE}" == localhost/* ]] || die "CORE_IMAGE must be a verified local staging image"
+host_validate_versioned_image "${CORE_IMAGE}" CORE_IMAGE
 if [[ ! "${GRAFANA_STARTUP_ATTEMPTS}" =~ ^[0-9]+$ ]] || ((GRAFANA_STARTUP_ATTEMPTS < 1)); then
   die "GRAFANA_STARTUP_ATTEMPTS must be a positive integer"
 fi

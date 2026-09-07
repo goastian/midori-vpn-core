@@ -58,11 +58,11 @@ host_require_env() {
   [[ -v "values_ref[${key}]" && -n "${values_ref[${key}]}" ]] || host_die "missing required environment value: ${key}"
 }
 
-host_validate_digest_image() {
+host_validate_versioned_image() {
   local value="$1"
   local key="$2"
-  [[ "${value}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?/[A-Za-z0-9._/-]+@sha256:[a-f0-9]{64}$ ]] ||
-    host_die "${key} must be a fully qualified image pinned by sha256 digest"
+  [[ "${value}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?/[A-Za-z0-9._/-]+:[0-9]+\.[0-9]+\.[0-9]+([._-][A-Za-z0-9][A-Za-z0-9._-]*)?$ ]] ||
+    host_die "${key} must be a fully qualified image with an exact version tag"
 }
 
 host_validate_port() {

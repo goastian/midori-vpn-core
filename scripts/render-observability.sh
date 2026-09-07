@@ -4,6 +4,8 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ENV_FILE="${ENV_FILE:-${ROOT_DIR}/.env}"
+# shellcheck source=deploy/host/lib/common.sh
+source "${ROOT_DIR}/deploy/host/lib/common.sh"
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -27,7 +29,7 @@ write_env_file_value() {
 
 render() {
   local source="$1"
-  local destination="$2"
+  local render_destination="$2"
   sed \
     -e "s|__OBSERVABILITY_CLUSTER__|$(escape_sed "${OBSERVABILITY_CLUSTER}")|g" \
     -e "s|__OBSERVABILITY_NETWORK__|$(escape_sed "${OBSERVABILITY_NETWORK}")|g" \
@@ -41,8 +43,8 @@ render() {
     -e "s|__PROMETHEUS_MTLS_CLIENT_CERT__|$(escape_sed "${PROMETHEUS_MTLS_CLIENT_CERT}")|g" \
     -e "s|__PROMETHEUS_MTLS_CLIENT_KEY__|$(escape_sed "${PROMETHEUS_MTLS_CLIENT_KEY}")|g" \
     -e "s|__OBSERVABILITY_CONFIG_DIR__|$(escape_sed "${output_dir}")|g" \
-    "${source}" >"${destination}"
-  chmod 0644 "${destination}"
+    "${source}" >"${render_destination}"
+  chmod 0644 "${render_destination}"
 }
 
 [ -f "${ENV_FILE}" ] || die "environment file not found: ${ENV_FILE}"
@@ -71,8 +73,8 @@ for port_name in PROMETHEUS_HOST_PORT GRAFANA_HOST_PORT; do
     die "${port_name} must be a valid TCP port"
   fi
 done
-[[ "${PROMETHEUS_IMAGE}" =~ @sha256:[0-9a-f]{64}$ ]] || die "PROMETHEUS_IMAGE must be pinned by sha256 digest"
-[[ "${GRAFANA_IMAGE}" =~ @sha256:[0-9a-f]{64}$ ]] || die "GRAFANA_IMAGE must be pinned by sha256 digest"
+host_validate_versioned_image "${PROMETHEUS_IMAGE}" PROMETHEUS_IMAGE
+host_validate_versioned_image "${GRAFANA_IMAGE}" GRAFANA_IMAGE
 (( ${#GRAFANA_ADMIN_PASSWORD} >= 16 )) || die "GRAFANA_ADMIN_PASSWORD must contain at least 16 characters"
 for tls_path_name in PROMETHEUS_MTLS_CA PROMETHEUS_MTLS_CLIENT_CERT PROMETHEUS_MTLS_CLIENT_KEY; do
   tls_path="${!tls_path_name}"

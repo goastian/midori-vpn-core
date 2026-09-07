@@ -31,15 +31,15 @@ done
 host_require_regular_file "${variables_file}"
 host_require_regular_file "${secrets_file}"
 host_require_regular_file "${map_file}"
-host_validate_digest_image "${core_image}" CORE_IMAGE
-host_validate_digest_image "${control_image}" CONTROL_IMAGE
+host_validate_versioned_image "${core_image}" CORE_IMAGE
+host_validate_versioned_image "${control_image}" CONTROL_IMAGE
 bash "${ROOT_DIR}/scripts/release/validate-deployment-environment-map.sh" "${map_file}" "${ROOT_DIR}/deploy/host/managed-env-keys.txt" >/dev/null
 
 declare -A variables=() secrets=() seen=()
 host_load_env "${variables_file}" variables
 host_load_env "${secrets_file}" secrets
 for image_key in CORE_IMAGE CONTROL_IMAGE; do
-  [[ ! -v "variables[${image_key}]" && ! -v "secrets[${image_key}]" ]] || host_die "${image_key} is supplied only by the verified release digest"
+  [[ ! -v "variables[${image_key}]" && ! -v "secrets[${image_key}]" ]] || host_die "${image_key} is supplied only by the verified release tag"
 done
 
 validate_class() {

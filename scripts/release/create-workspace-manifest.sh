@@ -76,7 +76,7 @@ done
 
 mkdir -p "$(dirname "${OUTPUT_FILE}")"
 {
-  printf '{\n  "schema_version": 1,\n  "version": "%s",\n  "source_date_epoch": %s,\n  "repositories": [\n' "${expected_version}" "${epoch}"
+  printf '{\n  "schema_version": 2,\n  "product_version": "%s",\n  "source_date_epoch": %s,\n  "repositories": [\n' "${expected_version}" "${epoch}"
   for entry_index in "${!entries[@]}"; do
     [[ "${entry_index}" -eq 0 ]] || printf ',\n'
     printf '    %s' "${entries[${entry_index}]}"

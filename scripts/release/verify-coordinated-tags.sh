@@ -16,7 +16,7 @@ die() {
 
 [[ "${TAG}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]] ||
   die "release tag must be semantic and start with v"
-version="${TAG#v}"
+release_version="${TAG#v}"
 
 for command_name in git jq; do
   command -v "${command_name}" >/dev/null || die "${command_name} is required"
@@ -32,10 +32,10 @@ EXTENSION_DIR="$(midorivpn_resolve_related_repo "${ROOT_DIR}" midorivpn-extensio
 paths=("${ROOT_DIR}" "${CONTROL_DIR}" "${DESKTOP_DIR}" "${EXTENSION_DIR}")
 components=(core control desktop extension)
 repositories=(
-  goastian/midori-vpn-core
-  goastian/midori-vpn-control
-  goastian/midori-vpn-desktop
-  goastian/midorivpn-extension
+  goastian/midori-vpn-core-dev
+  goastian/midori-vpn-control-dev
+  goastian/midori-vpn-desktop-dev
+  goastian/midorivpn-extension-dev
 )
 
 entries=()
@@ -61,23 +61,28 @@ for index in "${!paths[@]}"; do
     '{component:$component,repository:$repository,tag:$tag,commit:$commit,tagger_epoch:$tagger_epoch}')")
 done
 
-[[ "$(<"${ROOT_DIR}/VERSION")" == "${version}" ]] || die "Core VERSION does not match ${TAG}"
+product_version="$(<"${ROOT_DIR}/VERSION")"
+[[ "${product_version}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] ||
+  die "Core VERSION must be a stable semantic product version"
+[[ "${release_version}" == "${product_version}" || "${release_version}" == "${product_version}"-* ]] ||
+  die "release version must equal or be a prerelease of product version ${product_version}"
 for package_file in "${CONTROL_DIR}/package.json" "${DESKTOP_DIR}/package.json" "${EXTENSION_DIR}/package.json"; do
-  [[ "$(jq -r .version "${package_file}")" == "${version}" ]] || die "version mismatch in ${package_file}"
+  [[ "$(jq -r .version "${package_file}")" == "${product_version}" ]] || die "product version mismatch in ${package_file}"
 done
-[[ "$(jq -r .version "${EXTENSION_DIR}/manifest/main.json")" == "${version}" ]] ||
-  die "extension manifest version does not match ${TAG}"
-[[ "$(awk '$1 == "Version:" {print $2; exit}' "${DESKTOP_DIR}/packaging/midori-vpn.spec")" == "${version}" ]] ||
-  die "RPM spec version does not match ${TAG}"
+[[ "$(jq -r .version "${EXTENSION_DIR}/manifest/main.json")" == "${product_version}" ]] ||
+  die "extension manifest product version does not match ${TAG}"
+[[ "$(awk '$1 == "Version:" {print $2; exit}' "${DESKTOP_DIR}/packaging/midori-vpn.spec")" == "${product_version}" ]] ||
+  die "RPM spec product version does not match ${TAG}"
 
 source_date_epoch="$(git -C "${ROOT_DIR}" show -s --format=%ct HEAD)"
 mkdir -p -- "$(dirname -- "${OUTPUT_FILE}")"
 jq -n \
-  --arg version "${version}" \
+  --arg product_version "${product_version}" \
+  --arg release_version "${release_version}" \
   --arg tag "${TAG}" \
   --argjson source_date_epoch "${source_date_epoch}" \
   --argjson repositories "$(printf '%s\n' "${entries[@]}" | jq -s .)" \
-  '{schema_version:2,version:$version,tag:$tag,source_date_epoch:$source_date_epoch,repositories:$repositories}' \
+  '{schema_version:3,product_version:$product_version,release_version:$release_version,git_tag:$tag,source_date_epoch:$source_date_epoch,repositories:$repositories}' \
   > "${OUTPUT_FILE}"
 chmod 0600 "${OUTPUT_FILE}"
 jq -e '.repositories | length == 4' "${OUTPUT_FILE}" >/dev/null

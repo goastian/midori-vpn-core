@@ -18,8 +18,8 @@ assert_contains() {
   grep -Fqx -- "${expected}" "${file}" || fail "${file} does not contain ${expected}"
 }
 
-digest_a="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-digest_b="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+tag_a="2.0.0-rc.1"
+tag_b="2.0.0-rc.2"
 
 target_env="${test_root}/config/midorivpn.env"
 values_env="${test_root}/values.env"
@@ -28,18 +28,18 @@ cat > "${target_env}" <<EOF
 # keep this operator comment
 UNMANAGED_LOCAL=value that stays
 DOMAIN=old.example.test
-CORE_IMAGE=registry.example.test/midori/core@${digest_a}
+CORE_IMAGE=registry.example.test/midori/core:${tag_a}
 EOF
 cat > "${values_env}" <<EOF
 DOMAIN=new.example.test
-CORE_IMAGE=registry.example.test/midori/core@${digest_b}
+CORE_IMAGE=registry.example.test/midori/core:${tag_b}
 EOF
 chmod 0600 "${target_env}" "${values_env}"
 bash "${HOST_DIR}/patch-env.sh" --env-file "${target_env}" --values-file "${values_env}" --backup-dir "${test_root}/backups" --backup-record "${test_root}/env-backup-record" >/dev/null
 assert_contains "${target_env}" '# keep this operator comment'
 assert_contains "${target_env}" 'UNMANAGED_LOCAL=value that stays'
 assert_contains "${target_env}" 'DOMAIN=new.example.test'
-assert_contains "${target_env}" "CORE_IMAGE=registry.example.test/midori/core@${digest_b}"
+assert_contains "${target_env}" "CORE_IMAGE=registry.example.test/midori/core:${tag_b}"
 [[ "$(stat -c '%a' "${target_env}")" == 600 ]] || fail "patched environment is not mode 0600"
 [[ "$(find "${test_root}/backups" -type f | wc -l)" == 1 ]] || fail "patch did not create exactly one backup"
 env_backup="$(find "${test_root}/backups" -type f -print -quit)"
@@ -71,14 +71,14 @@ cat > "${render_env}" <<EOF
 DEPLOYMENT_PROFILE=principal
 CORE_NODE_NAME=main
 APP_ENV=production
-CORE_IMAGE=registry.example.test/midori/core@${digest_a}
-CONTROL_IMAGE=registry.example.test/midori/control@${digest_a}
-POD_INFRA_IMAGE=registry.example.test/base/pause@${digest_a}
-POSTGRES_IMAGE=registry.example.test/base/postgres@${digest_a}
-PGBOUNCER_IMAGE=registry.example.test/midori/pgbouncer@${digest_a}
-REDIS_IMAGE=registry.example.test/base/redis@${digest_a}
-PROMETHEUS_IMAGE=registry.example.test/base/prometheus@${digest_a}
-GRAFANA_IMAGE=registry.example.test/base/grafana@${digest_a}
+CORE_IMAGE=registry.example.test/midori/core:${tag_a}
+CONTROL_IMAGE=registry.example.test/midori/control:${tag_a}
+POD_INFRA_IMAGE=registry.example.test/base/pause:3.10.1
+POSTGRES_IMAGE=registry.example.test/base/postgres:18.6.0-alpine
+PGBOUNCER_IMAGE=registry.example.test/midori/pgbouncer:1.25.2
+REDIS_IMAGE=registry.example.test/base/redis:8.2.1-alpine
+PROMETHEUS_IMAGE=registry.example.test/base/prometheus:3.14.0
+GRAFANA_IMAGE=registry.example.test/base/grafana:13.2.1
 VPN_CORE_PORT=8085
 VPN_CORE_HOST_PORT=8085
 CONTROL_CONTAINER_PORT=80
@@ -184,7 +184,7 @@ if grep -Fq 'grafana-secret' "${rendered}/rootless/env/core.env"; then
 fi
 assert_contains "${rendered}/rootless/env/grafana.env" 'GF_SECURITY_ADMIN_USER=admin'
 assert_contains "${rendered}/rootless/env/grafana.env" 'GF_SECURITY_ADMIN_PASSWORD=grafana-secret-strong'
-grep -Fq "Image=registry.example.test/midori/core@${digest_a}" "${rendered}/rootless/midorivpn-core.container" || fail "Core image digest missing"
+grep -Fq "Image=registry.example.test/midori/core:${tag_a}" "${rendered}/rootless/midorivpn-core.container" || fail "Core version tag missing"
 if [[ -x /usr/libexec/podman/quadlet ]]; then
   QUADLET_UNIT_DIRS="${rendered}/rootless" /usr/libexec/podman/quadlet -user -dryrun > "${test_root}/quadlet-dryrun.txt" 2>&1 || {
     tail -n 160 "${test_root}/quadlet-dryrun.txt" >&2
@@ -209,8 +209,8 @@ grep -Fq 'PublishPort=8443:443/udp' "${test_root}/masque-render/rootless/midoriv
 gateway_env="${test_root}/gateways.env"
 sed -e 's/^OPENVPN_ENABLED=false$/OPENVPN_ENABLED=true/' -e 's/^IKEV2_ENABLED=false$/IKEV2_ENABLED=true/' "${render_env}" > "${gateway_env}"
 cat >> "${gateway_env}" <<EOF
-OPENVPN_IMAGE=registry.example.test/midori/openvpn@${digest_a}
-IKEV2_IMAGE=registry.example.test/midori/ikev2@${digest_a}
+OPENVPN_IMAGE=registry.example.test/midori/openvpn:${tag_a}
+IKEV2_IMAGE=registry.example.test/midori/ikev2:${tag_a}
 EOF
 chmod 0600 "${gateway_env}"
 bash "${HOST_DIR}/render-quadlets.sh" --env-file "${gateway_env}" --output-dir "${test_root}/gateway-render" --runtime-dir "${runtime_dir}" >/dev/null
@@ -228,9 +228,9 @@ cat > "${regional_env}" <<EOF
 DEPLOYMENT_PROFILE=core-node
 CORE_NODE_NAME=regional-one
 APP_ENV=production
-CORE_IMAGE=registry.example.test/midori/core@${digest_a}
-POD_INFRA_IMAGE=registry.example.test/base/pause@${digest_a}
-REDIS_IMAGE=registry.example.test/base/redis@${digest_a}
+CORE_IMAGE=registry.example.test/midori/core:${tag_a}
+POD_INFRA_IMAGE=registry.example.test/base/pause:3.10.1
+REDIS_IMAGE=registry.example.test/base/redis:8.2.1-alpine
 REDIS_PASSWORD=regional-redis-secret
 REDIS_DB=0
 VPN_CORE_PORT=8085
@@ -307,8 +307,8 @@ done < "${regional_env}"
 chmod 0600 "${regional_variables}" "${regional_secrets}"
 bash "${ROOT}/scripts/release/compose-deployment-values.sh" \
   --variables-file "${regional_variables}" --secrets-file "${regional_secrets}" \
-  --core-image "registry.example.test/midori/core@${digest_a}" \
-  --control-image "registry.example.test/midori/control@${digest_a}" \
+  --core-image "registry.example.test/midori/core:${tag_a}" \
+  --control-image "registry.example.test/midori/control:${tag_a}" \
   --output "${test_root}/regional-composed.env" >/dev/null
 if grep -q '^CONTROL_IMAGE=' "${test_root}/regional-composed.env"; then
   fail "regional Actions composition injected Control"
@@ -324,12 +324,22 @@ if bash "${HOST_DIR}/render-quadlets.sh" --env-file "${test_root}/regional-secre
   fail "regional renderer accepted a principal-only secret"
 fi
 
-tag_env="${test_root}/tag.env"
-sed "s|CORE_IMAGE=registry.example.test/midori/core@${digest_a}|CORE_IMAGE=registry.example.test/midori/core:2.0.0|" "${render_env}" > "${tag_env}"
-chmod 0600 "${tag_env}"
-if bash "${HOST_DIR}/render-quadlets.sh" --env-file "${tag_env}" --output-dir "${test_root}/bad-render" --runtime-dir "${runtime_dir}" >/dev/null 2>&1; then
-  fail "renderer accepted a mutable image tag"
-fi
+bad_image_cases=(
+  'registry.example.test/midori/core@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+  'registry.example.test/midori/core:latest'
+  'registry.example.test/midori/core:stable'
+  'registry.example.test/midori/core'
+)
+bad_image_index=0
+for bad_image in "${bad_image_cases[@]}"; do
+  bad_image_index=$((bad_image_index + 1))
+  bad_env="${test_root}/bad-image-${bad_image_index}.env"
+  sed "s|CORE_IMAGE=registry.example.test/midori/core:${tag_a}|CORE_IMAGE=${bad_image}|" "${render_env}" > "${bad_env}"
+  chmod 0600 "${bad_env}"
+  if bash "${HOST_DIR}/render-quadlets.sh" --env-file "${bad_env}" --output-dir "${bad_env}.rendered" --runtime-dir "${runtime_dir}" >/dev/null 2>&1; then
+    fail "renderer accepted invalid runtime image reference: ${bad_image}"
+  fi
+done
 
 fake_bin="${test_root}/bin"
 install -d -m 0700 "${fake_bin}"
@@ -372,7 +382,7 @@ EOF
 chmod 0700 "${fake_bin}/systemctl"
 extra_bundle="${test_root}/extra-bundle"
 cp -a "${rendered}" "${extra_bundle}"
-printf '[Container]\nImage=registry.example.test/evil@%s\n' "${digest_a}" > "${extra_bundle}/rootless/unmanifested.container"
+printf '[Container]\nImage=registry.example.test/evil:%s\n' "${tag_a}" > "${extra_bundle}/rootless/unmanifested.container"
 chmod 0600 "${extra_bundle}/rootless/unmanifested.container"
 if PATH="${fake_bin}:${PATH}" bash "${HOST_DIR}/install-quadlets.sh" --bundle "${extra_bundle}" --target-dir "${test_root}/bad-install/midorivpn" --backup-root "${test_root}/bad-backups" --no-start >/dev/null 2>&1; then
   fail "installer accepted an unmanifested unit"

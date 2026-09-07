@@ -12,13 +12,13 @@ observability and the 2.0.0 availability boundary, continue with
 
 Before any release attempt, repository administrators create these GitHub
 environments and enable required reviewers, prevent self-review where the plan
-supports it, and restrict deployment refs to the annotated `v2.0.0` tag:
+supports it, and restrict deployment refs to the approved annotated `v*` tag:
 
 | Repository | Environment | Required variable or secret |
 |---|---|---|
-| Core | `release-production` | variable `RELEASE_SIGNING_ENABLED=true`; `GITHUB_TOKEN` may read the private Control package |
-| Control | `release-production` | variable `RELEASE_SIGNING_ENABLED=true` |
-| Core | `deploy-production` | protected deployment variables/secrets below; required reviewers; only protected `v*` tags |
+| Private Core `midori-vpn-core-dev` | `release-production` | variables `RELEASE_SIGNING_ENABLED=true` and `MIDORIVPN_RELEASE_READ_USER`; repository/org Actions secret `MIDORIVPN_RELEASE_READ_TOKEN` may read the other private source repositories, the Control package and its evidence |
+| Private Control `midori-vpn-control-dev` | `release-production` | variable `RELEASE_SIGNING_ENABLED=true` |
+| Public production Core `midori-vpn-core` | `deploy-production` | protected deployment variables/secrets below; required reviewers; only protected `v*` tags |
 | Desktop | `release-signing` | variable `RELEASE_SIGNING_ENABLED=true`; secret `RPM_SIGNING_PRIVATE_KEY` |
 
 The environment switch is deliberately absent by default. Do not create the
@@ -55,12 +55,22 @@ must be annotated. Create the same tag locally at each frozen commit, then push
 Control, Desktop and Extension first. Approve Control's `release-production`
 job and push Core last. The Core tag is the coordinator: it checks out all four
 tags, rejects a lightweight, missing or mismatched tag and emits the
-authoritative schema-2 source manifest. Never repair failure by moving a tag;
+authoritative schema-3 source manifest with separate product version, release
+version and Git tag. Product metadata stays `2.0.0`; the first candidate is
+release `2.0.0-rc.1` under `v2.0.0-rc.1`. Never repair failure by moving a tag;
 use a new version.
+
+After the private publication is complete, promote the exact frozen Core
+commit to the public production repository. Creating the matching annotated
+tag there is a separate authorized action; it starts only `deploy.yml`. The
+public controller retrieves the successful private Core workflow artifact,
+requires its Core commit to equal the public tag commit and never rebuilds or
+re-signs either image.
 
 ## OCI publication gate
 
-Control and Core `publish.yml` run only from pushed semantic tags. Each enters
+Control and Core `publish.yml` run only from pushed semantic tags in their
+private `*-dev` repositories. Each enters
 the protected `release-production` environment, refuses an existing version,
 builds cleanly twice, requires equal digests, pushes a third identical build,
 scans the exact digest, creates independent SPDX plus GitHub provenance/SBOM
@@ -74,6 +84,15 @@ containing host scripts/templates, public operator documentation, four commits,
 two OCI digests, database schema compatibility and checksums. It contains no
 deployment values, pull token, SSH key or application secret.
 
+`MIDORIVPN_RELEASE_READ_TOKEN` must be available as a repository- or
+organization-level Actions secret, not only as an Environment secret: the
+Core tag-validation job uses it before `release-production`. The workflow uses
+it for read-only checkouts, the Control package pull and Control evidence; it
+pairs the token with the protected `MIDORIVPN_RELEASE_READ_USER` variable for
+GHCR, then logs in again with the job-scoped `GITHUB_TOKEN` before publishing
+Core.
+
+The bundle stores the exact pull tags and their expected digests separately.
 The workflow file, Actions and scanner are pinned to full commits or image
 digests. It has `packages`, `id-token`, `attestations` and artifact metadata
 write access only inside the protected publication job. Neither workflow
@@ -81,7 +100,9 @@ creates a GitHub Release or changes package visibility to public.
 
 ## Protected deployment environment
 
-The Core `deploy-production` Environment is a second independent approval gate.
+The public production Core `deploy-production` Environment is a second
+independent approval gate. Its tag must identify the same frozen Core commit as
+the private bundle; the controller downloads rather than rebuilds that bundle.
 Configure these non-secret Variables:
 
 - `MIDORIVPN_DEPLOY_ENABLED=true`
@@ -95,17 +116,24 @@ Configure these Secrets:
 - `MIDORIVPN_DEPLOY_SSH_PRIVATE_KEY`
 - `MIDORIVPN_DEPLOY_SSH_KNOWN_HOSTS`
 - `MIDORIVPN_GHCR_PULL_TOKEN`, scoped only to read the two private packages
+- `MIDORIVPN_PRIVATE_RELEASE_TOKEN`, scoped to read the private Core workflow
+  artifact and the two private repositories' attestations
 - `MIDORIVPN_DEPLOY_SECRETS`, a newline-delimited dotenv fragment containing
   only keys classified as `secret`
 
 [`deploy/ci/environment-map.json`](../deploy/ci/environment-map.json) is the
 versioned classification authority. Its validator requires every host-managed
 key exactly once. `CORE_IMAGE` and `CONTROL_IMAGE` cannot come from either
-fragment; the workflow injects the verified immutable digests. Fragments patch
+fragment; the workflow injects the verified complete version tags. Fragments patch
 only their corresponding keys atomically and never replace the server `.env`.
 
-SSH uses the supplied host key with strict checking. The pull credential enters
-Podman through standard input. On an existing principal, deployment first
+Before SSH, the protected controller pulls every runtime tag and creates a
+mode-0600 image lock containing the resolved digests. It verifies Core and
+Control labels, exact private workflow identities, SLSA provenance and SPDX
+attestations by those digests. SSH uses the supplied host key with strict
+checking. The pull credential enters Podman through standard input. The host
+pulls the tags again and rejects any digest change before installing Quadlets.
+On an existing principal, deployment first
 creates a custom-format PostgreSQL backup and proves an isolated restore. It
 then renders and installs Quadlets, runs migration units, applies Nginx and
 firewall configuration and requires the strict public 204 edge probe. Failure
@@ -133,18 +161,21 @@ rpmkeys --dbpath /tmp/midorivpn-rpmdb --checksig --verbose \
 
 ## Independent OCI verification
 
-Use the immutable digest printed by the approved workflow, never a tag:
+Use the release metadata and coordinated manifest. The verifier downloads by
+the approved tag, requires its resolved digest to match `release.json`, then
+checks the immutable verification reference:
 
 ```bash
 bash scripts/release/verify-oci-release.sh core \
-  sha256:<approved-core-digest>
+  release.json workspace-manifest.json
 bash scripts/release/verify-oci-release.sh control \
-  sha256:<approved-control-digest>
+  release.json workspace-manifest.json
 ```
 
 The verifier requires Cosign 3.1.3 and a current GitHub CLI. It checks the
-exact `publish.yml@refs/tags/v2.0.0` certificate identity, GitHub's OIDC issuer,
-SLSA provenance and SPDX 2.3 SBOM attestations.
+exact private `publish.yml@refs/tags/<git_tag>` certificate identity, GitHub's
+OIDC issuer, coordinated commit/version labels, SLSA provenance and SPDX 2.3
+SBOM attestations.
 
 Stop the release if an expected environment, reviewer, fingerprint, annotated
 tag, digest, signature or attestation is absent. Never repair a failed gate by

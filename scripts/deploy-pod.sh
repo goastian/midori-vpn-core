@@ -12,7 +12,9 @@ POSTGRES_ROLE_SQL="${SCRIPT_DIR}/../deploy/postgres/configure-roles.sql"
 POSTGRES_POLICY_SQL="${SCRIPT_DIR}/../deploy/postgres/check-policy.sql"
 POSTGRES_BACKUP_SCRIPT="${SCRIPT_DIR}/backup-postgres.sh"
 POSTGRES_RESTORE_SCRIPT="${SCRIPT_DIR}/restore-postgres-backup.sh"
-readonly VERIFIED_POD_INFRA_IMAGE='registry.k8s.io/pause@sha256:e5b941ef8f71de54dc3a13398226c269ba217d06650a21bd3afcf9d890cf1f41'
+readonly VERIFIED_POD_INFRA_IMAGE='registry.k8s.io/pause:3.10.1'
+# shellcheck source=deploy/host/lib/common.sh
+source "${SCRIPT_DIR}/../deploy/host/lib/common.sh"
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -152,7 +154,10 @@ for required_var in \
 done
 
 [[ "${POD_INFRA_IMAGE}" == "${VERIFIED_POD_INFRA_IMAGE}" ]] || \
-  die "POD_INFRA_IMAGE must use the verified Kubernetes pause 3.10.1 linux/amd64 digest"
+  die "POD_INFRA_IMAGE must use the verified Kubernetes pause 3.10.1 version tag"
+for runtime_image in CORE_IMAGE CONTROL_IMAGE POD_INFRA_IMAGE POSTGRES_IMAGE PGBOUNCER_IMAGE REDIS_IMAGE; do
+  host_validate_versioned_image "${!runtime_image}" "${runtime_image}"
+done
 
 for postgres_identifier in POSTGRES_ADMIN_USER POSTGRES_OWNER_ROLE POSTGRES_MIGRATOR_USER POSTGRES_RUNTIME_USER POSTGRES_BACKUP_USER POSTGRES_DB PGBOUNCER_ADMIN_USER; do
   require_identifier "${postgres_identifier}"

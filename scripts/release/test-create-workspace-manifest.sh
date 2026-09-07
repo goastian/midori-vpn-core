@@ -74,8 +74,8 @@ SOURCE_DATE_EPOCH=1788350400 \
 
 cmp -s "${NESTED_MANIFEST}" "${SIBLING_MANIFEST}" || fail "nested and sibling manifests differ"
 jq -e '
-  .schema_version == 1 and
-  .version == "2.0.0" and
+  .schema_version == 2 and
+  .product_version == "2.0.0" and
   .source_date_epoch == 1788350400 and
   ([.repositories[].component] == ["core", "control", "desktop", "extension"]) and
   ([.repositories[].path] == [".", "midori-vpn-control", "midori-vpn-desktop", "midorivpn-extension"])

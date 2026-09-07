@@ -37,16 +37,20 @@ for command_name in jq tar gzip sha256sum; do
 done
 
 jq -e '
-  .schema_version == 2 and
-  (.version | test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$")) and
-  .tag == ("v" + .version) and
+  (.product_version + "-") as $prerelease_prefix |
+  .schema_version == 3 and
+  (.product_version | test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")) and
+  (.release_version | test("^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$")) and
+  (.release_version == .product_version or (.release_version | startswith($prerelease_prefix))) and
+  .git_tag == ("v" + .release_version) and
   (.source_date_epoch | type == "number") and
   ([.repositories[].component] | sort) == ["control","core","desktop","extension"] and
   ([.repositories[].commit] | all(test("^[0-9a-f]{40}$")))
 ' "${manifest}" >/dev/null || die "release manifest is malformed or incomplete"
 
-version="$(jq -r .version "${manifest}")"
-tag="$(jq -r .tag "${manifest}")"
+product_version="$(jq -r .product_version "${manifest}")"
+release_version="$(jq -r .release_version "${manifest}")"
+tag="$(jq -r .git_tag "${manifest}")"
 epoch="$(jq -r .source_date_epoch "${manifest}")"
 schema_head="$(find "${ROOT_DIR}/internal/db/migrations" -maxdepth 1 -type f -name '*.up.sql' -printf '%f\n' | sort -V | tail -1 | sed -E 's/^0*([0-9]+)_.*/\1/')"
 [[ "${schema_head}" =~ ^[0-9]+$ ]] || die "database schema head could not be derived"
@@ -57,7 +61,7 @@ install -d -m 0700 -- "${parent}"
 staging="$(mktemp -d "${parent}/.midorivpn-bundle.XXXXXX")"
 cleanup() { rm -rf -- "${staging}"; }
 trap cleanup EXIT
-payload="${staging}/midorivpn-${version}"
+payload="${staging}/midorivpn-${release_version}"
 install -d -m 0700 -- "${payload}/deploy" "${payload}/docs" "${payload}/scripts/release"
 
 cp -a -- "${ROOT_DIR}/deploy/ci" "${ROOT_DIR}/deploy/host" "${ROOT_DIR}/deploy/nginx" \
@@ -80,16 +84,22 @@ install -m 0600 -- "${ROOT_DIR}/scripts/backup-postgres.sh" \
   "${ROOT_DIR}/scripts/restore-postgres-backup.sh" "${payload}/scripts/"
 install -m 0600 -- "${ROOT_DIR}/scripts/release/compose-deployment-values.sh" \
   "${ROOT_DIR}/scripts/release/validate-deployment-environment-map.sh" \
+  "${ROOT_DIR}/scripts/release/resolve-runtime-images.sh" \
+  "${ROOT_DIR}/scripts/release/verify-oci-release.sh" \
   "${ROOT_DIR}/scripts/release/database-backup-gate.sh" \
   "${ROOT_DIR}/scripts/release/apply-deployment.sh" "${payload}/scripts/release/"
 install -m 0600 -- "${manifest}" "${payload}/workspace-manifest.json"
 
 jq -n \
-  --arg version "${version}" --arg tag "${tag}" \
-  --arg core_image "ghcr.io/goastian/midori-vpn-core@${core_digest}" \
-  --arg control_image "ghcr.io/goastian/midori-vpn-control@${control_digest}" \
+  --arg product_version "${product_version}" --arg release_version "${release_version}" --arg git_tag "${tag}" \
+  --arg core_pull_ref "ghcr.io/goastian/midori-vpn-core:${release_version}" \
+  --arg core_digest "${core_digest}" \
+  --arg core_verification_ref "ghcr.io/goastian/midori-vpn-core@${core_digest}" \
+  --arg control_pull_ref "ghcr.io/goastian/midori-vpn-control:${release_version}" \
+  --arg control_digest "${control_digest}" \
+  --arg control_verification_ref "ghcr.io/goastian/midori-vpn-control@${control_digest}" \
   --argjson database_schema_head "${schema_head}" \
-  '{schema_version:1,version:$version,tag:$tag,images:{core:$core_image,control:$control_image},database:{minimum_schema:0,target_schema:$database_schema_head,automatic_restore:false}}' \
+  '{schema_version:2,product_version:$product_version,release_version:$release_version,git_tag:$git_tag,images:{core:{pull_ref:$core_pull_ref,digest:$core_digest,verification_ref:$core_verification_ref,source_repository:"goastian/midori-vpn-core-dev",workflow_identity:("https://github.com/goastian/midori-vpn-core-dev/.github/workflows/publish.yml@refs/tags/" + $git_tag)},control:{pull_ref:$control_pull_ref,digest:$control_digest,verification_ref:$control_verification_ref,source_repository:"goastian/midori-vpn-control-dev",workflow_identity:("https://github.com/goastian/midori-vpn-control-dev/.github/workflows/publish.yml@refs/tags/" + $git_tag)}},database:{minimum_schema:0,target_schema:$database_schema_head,automatic_restore:false}}' \
   > "${payload}/release.json"
 
 if find "${payload}" -type l -print -quit | grep -q .; then

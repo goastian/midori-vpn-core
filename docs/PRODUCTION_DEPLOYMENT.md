@@ -41,7 +41,10 @@ until the acceptance gate in
 
 Production uses systemd Quadlet on openSUSE. Hosts never compile the
 application, follow `latest`, use registry auto-update or install a `.build`
-unit. Every runtime image is a complete `registry/path@sha256:digest` reference.
+unit. Every runtime image is a complete
+`registry/path:major.minor.patch[-prerelease]` reference. CI resolves and records
+the corresponding digest for verification, evidence and rollback, but hosts pull
+and run the approved version tag.
 
 Use the lowest working privilege level:
 
@@ -57,8 +60,9 @@ Use the lowest working privilege level:
 5. A hardened host gateway is a recorded fallback only after the equivalent
    rootful gateway has failed its kernel data-plane test.
 
-The pod infra container uses a minimal digest-pinned pause OCI image hosted at
-`registry.k8s.io`. That image supplies only the pod namespace process; this
+The pod infra container uses the exact `registry.k8s.io/pause:3.10.1` version
+tag. Its resolved digest is captured in the protected runtime image lock before
+deployment. That image supplies only the pod namespace process; this
 deployment does not install, configure or operate Kubernetes.
 
 PostgreSQL, PgBouncer, Redis, plain Core HTTP, Control container HTTP and
@@ -72,20 +76,21 @@ The immutable release flow is:
 
 ```text
 four clean commits
-  -> same annotated semantic tag in all four repositories
-  -> protected Control publication
+  -> same annotated semantic tag in all four private development repositories
+  -> protected private Control publication
   -> Core verifies Control and the four-commit manifest
   -> protected Core publication
   -> signatures, attestations, SBOM and vulnerability gates
   -> checksum-closed secret-free deployment bundle with operator documentation
-  -> independent protected deployment approval
+  -> matching annotated tag on the public production Core
+  -> independent protected public-repository deployment approval
   -> one approved destination host
 ```
 
 The workflow deploys exactly one destination configured in the protected
 `deploy-production` Environment per approved execution. It is not a fleet
 orchestrator. Deploying another host uses a separately reviewed invocation of
-the same verified bundle and immutable digests; it must not move or recreate
+the same verified bundle and runtime image lock; it must not move or recreate
 the tag. Never change a protected destination while an approval is pending.
 
 The source and release contracts are:
@@ -108,22 +113,30 @@ where organization policy permits it.
 
 ### Publication Environment
 
-Create `release-production` in the Core and Control repositories and set the
+Create `release-production` in the private Core and Control `*-dev`
+repositories and set the
 non-secret variable:
 
 ```text
 RELEASE_SIGNING_ENABLED=true
+MIDORIVPN_RELEASE_READ_USER=<read-only GitHub identity>
 ```
 
-The workflow-provided `GITHUB_TOKEN` performs the registry and attestation
-operations. Do not create a long-lived Cosign private key: OCI signatures use
-the short-lived GitHub Actions OIDC workflow identity. The Core workflow token
-must be authorized to read the private Control package.
+The workflow-provided `GITHUB_TOKEN` performs each repository's own registry
+and attestation operations. Core additionally requires the repository- or
+organization-level Actions secret `MIDORIVPN_RELEASE_READ_TOKEN` because the
+tag-validation job runs before the protected Environment is entered. Scope it
+only to read the other three private source repositories, the private Control
+package and its release evidence. Do not create a long-lived Cosign private
+key: OCI signatures use the short-lived GitHub Actions OIDC workflow identity.
+The Core workflow pairs it with `MIDORIVPN_RELEASE_READ_USER` for the Control
+pull, then authenticates the Core push separately with its job `GITHUB_TOKEN`.
 
 ### Deployment Environment
 
-Create `deploy-production` in Core. Store these values as Environment
-Variables:
+Create `deploy-production` in the public production Core repository. This is
+the protected controller required by the GitHub Free topology. Store these
+values as Environment Variables:
 
 | Variable | Meaning |
 | --- | --- |
@@ -141,6 +154,7 @@ Store these values as Environment Secrets:
 | `MIDORIVPN_DEPLOY_SSH_PRIVATE_KEY` | Dedicated deployment key |
 | `MIDORIVPN_DEPLOY_SSH_KNOWN_HOSTS` | Out-of-band verified host-key line for the exact host and port |
 | `MIDORIVPN_GHCR_PULL_TOKEN` | Read-only package token, passed to Podman through standard input |
+| `MIDORIVPN_PRIVATE_RELEASE_TOKEN` | Read-only access to the private Core release workflow artifact and attestations |
 | `MIDORIVPN_DEPLOY_SECRETS` | Multiline dotenv fragment containing secret managed values |
 
 Do not put application secrets in repository secrets shared with unrelated
@@ -153,8 +167,9 @@ dotenv fragment.
 classification authority. It classifies every host-managed key exactly once as
 `variable` or `secret`. The validator rejects unknown, duplicated and
 misclassified keys. `CORE_IMAGE` and `CONTROL_IMAGE` are reserved even though
-they appear in the host allowlist: the workflow injects their verified digest
-references and rejects either key in an Actions fragment.
+they appear in the host allowlist: the workflow injects their verified exact
+version tags and rejects either key in an Actions fragment. Digests travel in
+the separate generated runtime image lock, never as `.env` values.
 
 Use `.env.example` to determine the keys required by the selected profile, and
 query the map instead of guessing a classification:
@@ -213,7 +228,9 @@ The host patcher:
 1. Freeze clean, reviewed commits for Core, Control, Desktop and Extension.
 2. Run `bash scripts/release/create-workspace-manifest.sh` from the coordinated
    checkout and review the four full commit IDs and version.
-3. Create the same annotated semantic tag in all four repositories. A
+3. Create the same annotated semantic tag in all four private `*-dev`
+   repositories. Product metadata remains `2.0.0`; the first candidate uses
+   release version `2.0.0-rc.1` and Git tag `v2.0.0-rc.1`. A
    lightweight tag is invalid.
 4. Push Control, Desktop and Extension first. Approve Control's protected
    publication after its inputs are reviewed.
@@ -222,8 +239,11 @@ The host patcher:
 6. Approve Core publication only after the private Control digest exists.
 7. Review both private package visibilities, three matching build digests,
    vulnerability reports, SPDX documents, provenance and Cosign verification.
-8. Review the generated bundle checksum and `release.json` before approving a
-   deployment.
+8. Promote the frozen Core commit to the public production repository and,
+   only under separate authorization, create the matching annotated tag there.
+9. Review the generated bundle checksum and `release.json` before approving a
+   deployment. The public controller downloads that exact private workflow
+   artifact; it never rebuilds the images.
 
 Never repair a failed immutable release by moving or deleting its tag. Correct
 the source and use a new version. Neither workflow creates a public GitHub
@@ -274,24 +294,31 @@ Before approval:
    URI SANs. Private key files are mode 0600.
 4. Keep OpenVPN and IKEv2 disabled until their authenticated client E2E gates
    have passed.
-5. Confirm every non-application image is also pinned by digest.
+5. Confirm every non-application runtime image also uses an approved exact
+   version tag and that its resolved digest matches the release evidence.
 
 Approve the `deploy-production` job only after checking the destination and
 fragments. The workflow then:
 
 1. verifies and expands the secret-free bundle;
 2. composes an allowlisted mode-0600 patch with the verified Core and Control
-   digests;
-3. establishes strict SSH trust and logs in to GHCR through standard input;
-4. prepares the host and copies the release into the service user's private
+   version tags;
+3. pulls every runtime tag on the protected runner, records its digest, and
+   verifies Core/Control labels, Cosign identities, provenance and SPDX
+   attestations;
+4. establishes strict SSH trust and logs in to GHCR through standard input;
+5. prepares the host and copies the release plus image lock into the service
+   user's private
    release directory;
-5. creates and proves an isolated restore of the current database when one
+6. creates and proves an isolated restore of the current database when one
    exists;
-6. patches the existing environment atomically;
-7. renders and checksum-verifies rootless and optional rootful Quadlets;
-8. runs the database role policy and one-shot migration before Core;
-9. applies exact Nginx and firewalld configuration; and
-10. requires local readiness plus the public edge-health contract.
+7. patches the existing environment atomically;
+8. pulls every tag again as the service user and refuses installation if any
+   resolved digest differs from the protected lock;
+9. renders and checksum-verifies rootless and optional rootful Quadlets;
+10. runs the database role policy and one-shot migration before Core;
+11. applies exact Nginx and firewalld configuration; and
+12. requires local readiness plus the public edge-health contract.
 
 The raw composed patch exists only while the environment is being updated and
 is removed on success or handled failure. The rendered staging tree is also
@@ -350,7 +377,8 @@ Quadlet to follow a tag.
 3. On the principal, create a custom-format backup and prove an isolated
    restore before any mutation. The protected deployer performs this gate
    automatically when it finds an existing principal database.
-4. Drain and upgrade one non-principal node by digest.
+4. Drain and upgrade one non-principal node using the approved version tags
+   after validating their resolved digests against the lock.
 5. Verify signed management, heartbeat, desired/observed convergence, metrics
    and each advertised transport; then restore placement.
 6. Repeat one regional at a time.
@@ -362,7 +390,7 @@ Quadlet to follow a tag.
    window closes; remove them only under the approved retention policy.
 
 The current Actions job targets one host. Additional regional invocations must
-reuse the exact published bundle and digests and receive their own approval and
+reuse the exact published bundle and image lock and receive their own approval and
 evidence. Republishing a tag for another host is forbidden.
 
 ## Rollback
@@ -414,15 +442,16 @@ stored recoverable WireGuard PSKs cannot be decrypted.
 
 Stop new placement, drain or revoke the node centrally and preserve its
 desired state and evidence. Other healthy Cores and the principal continue.
-Rebuild the regional with its last approved digest and either its protected
+Rebuild the regional with its last approved version tag and locked digest, and either its protected
 node state or a newly enrolled identity; never clone one node identity onto a
 different active node.
 
 ### Registry unavailable
 
-Running digest-pinned containers continue without GHCR. New installation and
-upgrade stop until the exact private images are available again. Do not make a
-package public, substitute a tag or build on the host as a recovery shortcut.
+Running containers already loaded under approved version tags continue with
+`Pull=never` without GHCR. New installation and upgrade stop until those exact
+private tags resolve to their recorded digests again. Do not make a package
+public, substitute a tag or build on the host as a recovery shortcut.
 
 ### Bad desired state or signing failure
 
@@ -497,8 +526,8 @@ A source commit or green build alone is not production certification. Before
 declaring 2.0.0 ready, require all of the following:
 
 - all four annotated tags and commits match the reviewed release manifest;
-- Core and Control remain private and verify by digest, signature, provenance
-  and SPDX attestation;
+- Core and Control remain private, are pulled by exact release tag and verify
+  by resolved digest, signature, provenance and SPDX attestation;
 - the production principal was created from the approved empty-database path;
 - backup, isolated restore, migration, restart and configuration rollback were
   exercised on the approved release;

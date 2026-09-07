@@ -38,8 +38,8 @@ VPN_CORE_METRICS_TARGET=midori-control:8085
 VPN_CORE_HOST_PORT=8085
 PROMETHEUS_HOST_PORT=9090
 GRAFANA_HOST_PORT=3000
-PROMETHEUS_IMAGE=docker.io/prom/prometheus@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-GRAFANA_IMAGE=docker.io/grafana/grafana@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+PROMETHEUS_IMAGE=docker.io/prom/prometheus:3.14.0
+GRAFANA_IMAGE=docker.io/grafana/grafana:13.2.1
 GRAFANA_ADMIN_USER=test-admin
 GRAFANA_ADMIN_PASSWORD=test-password-only
 PROMETHEUS_MTLS_CA=${CHECK_DIR}/observability-ca.crt
@@ -82,7 +82,7 @@ rg -q '/etc/prometheus/mtls/client.key:ro,z$' "${CHECK_DIR}/rendered/midorivpn-p
 rg -Fq -- '--publish "${OBSERVABILITY_HOST_BIND}:${OBSERVABILITY_MTLS_PORT}:${OBSERVABILITY_MTLS_PORT}/tcp"' "${ROOT_DIR}/scripts/VPN/deploy-core-node.sh"
 rg -Fq 'for name in PROMETHEUS_MTLS_CLIENT_CERT PROMETHEUS_MTLS_CLIENT_KEY; do' "${ROOT_DIR}/scripts/VPN/deploy-core-node.sh"
 rg -Fq -- '--network "${OBSERVABILITY_NETWORK}"' "${ROOT_DIR}/scripts/deploy-pod.sh"
-rg -Fq "readonly VERIFIED_POD_INFRA_IMAGE='registry.k8s.io/pause@sha256:e5b941ef8f71de54dc3a13398226c269ba217d06650a21bd3afcf9d890cf1f41'" "${ROOT_DIR}/scripts/deploy-pod.sh"
+rg -Fq "readonly VERIFIED_POD_INFRA_IMAGE='registry.k8s.io/pause:3.10.1'" "${ROOT_DIR}/scripts/deploy-pod.sh"
 rg -Fq -- '--infra-image "${POD_INFRA_IMAGE}"' "${ROOT_DIR}/scripts/deploy-pod.sh"
 rg -Fq -- '--infra-command /pause' "${ROOT_DIR}/scripts/deploy-pod.sh"
 rg -Fq 'wait_principal_target' "${ROOT_DIR}/scripts/deploy-observability.sh"

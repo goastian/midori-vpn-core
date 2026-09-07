@@ -2,9 +2,11 @@
 
 This directory is the supported host-side path for MidoriVPN 2.0.0. It does
 not build software on a server. CI publishes private Core and Control images,
-plus any enabled gateway image, and supplies immutable `registry/path@sha256:`
-references. The renderer rejects tags, `latest`, Quadlet `.build` files and
-automatic image updates.
+plus any enabled gateway image, and supplies complete
+`registry/path:major.minor.patch[-prerelease]` references. The renderer rejects
+digests as runtime references, missing or moving tags such as `latest`, Quadlet
+`.build` files and automatic image updates. CI still records the resolved digest
+for verification, evidence and rollback.
 
 The application profile runs rootless as a dedicated user. PostgreSQL, Redis,
 PgBouncer, Core, Control, Prometheus and Grafana are reachable only through the
@@ -158,8 +160,9 @@ backup/restore procedure documented in `deploy/POSTGRESQL.md`.
 ## CI/CD handoff
 
 The release workflow is tag-driven. It must build Core and Control, scan them,
-push them to an authenticated private registry, resolve the registry-provided
-digest, and transfer the scripts plus a small protected values file. GitHub
+push them to an authenticated private registry, pull by exact version tag,
+resolve the registry-provided digest, and transfer the scripts, runtime image
+lock plus a small protected values file. GitHub
 Actions variables provide non-secret configuration and Actions secrets provide
 credentials. The remote job invokes `patch-env.sh`; it never substitutes the
 whole `.env`. Deployment remains blocked until image signatures, SBOM,
@@ -172,7 +175,9 @@ The exact Actions contract is versioned in
 `MIDORIVPN_DEPLOY_VALUES` Environment variable; sensitive entries arrive only
 through the `MIDORIVPN_DEPLOY_SECRETS` Environment secret. The validator rejects
 wrongly classified, duplicated or unknown keys, and the verified workflow
-injects `CORE_IMAGE` and `CONTROL_IMAGE` by digest itself. SSH private key,
+injects the exact tagged `CORE_IMAGE` and `CONTROL_IMAGE` references itself.
+The host pulls those tags and compares every resolved digest with the protected
+runtime lock before installing. SSH private key,
 pinned known-hosts material and the read-only GHCR token are separate protected
 secrets. The remote orchestrator performs a database backup plus isolated
 restore gate when PostgreSQL already exists and never restores live data

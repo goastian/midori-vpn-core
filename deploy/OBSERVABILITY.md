@@ -28,7 +28,7 @@ required; do not add a public Nginx location.
 ## Render and install
 
 Set the observability variables in the private deployment environment. Images
-must include immutable `@sha256:` digests. The renderer creates a dedicated
+must include complete, non-moving version tags. The renderer creates a dedicated
 Grafana environment containing only its two credentials; it never passes the
 Core environment or its secrets to either observability container.
 Rendered YAML/JSON is `0644` inside a host directory restricted to `0700`.

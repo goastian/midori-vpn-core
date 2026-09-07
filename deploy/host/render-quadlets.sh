@@ -51,7 +51,7 @@ for key in VPN_CORE_PORT VPN_CORE_HOST_PORT WG_PORT; do
 done
 host_validate_absolute_path "${cfg[WG_CONFIG_DIR]}" WG_CONFIG_DIR
 for key in CORE_IMAGE POD_INFRA_IMAGE REDIS_IMAGE; do
-  host_validate_digest_image "${cfg[${key}]}" "${key}"
+  host_validate_versioned_image "${cfg[${key}]}" "${key}"
 done
 
 if [[ "${profile}" == principal ]]; then
@@ -59,7 +59,7 @@ if [[ "${profile}" == principal ]]; then
     host_require_env cfg "${key}"
   done
   for key in CONTROL_IMAGE POSTGRES_IMAGE PGBOUNCER_IMAGE PROMETHEUS_IMAGE GRAFANA_IMAGE; do
-    host_validate_digest_image "${cfg[${key}]}" "${key}"
+    host_validate_versioned_image "${cfg[${key}]}" "${key}"
   done
   for key in CONTROL_CONTAINER_PORT CONTROL_HOST_PORT PROMETHEUS_HOST_PORT GRAFANA_HOST_PORT OBSERVABILITY_MTLS_PORT; do
     host_validate_port "${cfg[${key}]}" "${key}" 1
@@ -141,7 +141,7 @@ for optional_gateway in OPENVPN IKEV2; do
   [[ "${enabled}" == true || "${enabled}" == false ]] || host_die "${enabled_key} must be true or false"
   if [[ "${enabled}" == true ]]; then
     host_require_env cfg "${image_key}"
-    host_validate_digest_image "${cfg[${image_key}]}" "${image_key}"
+    host_validate_versioned_image "${cfg[${image_key}]}" "${image_key}"
   fi
 done
 if [[ "${cfg[MASQUE_ENABLED]:-false}" == true ]]; then

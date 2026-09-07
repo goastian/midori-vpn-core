@@ -7,14 +7,15 @@ trees whose exact commits are recorded; working branches are not release refs.
 
 ## Release set
 
-All components use version `2.0.0` and derive from an annotated `v2.0.0` tag
-created only after final approval. A release is incomplete unless every
+All components use product version `2.0.0`. Release candidates add a separate
+release suffix; the first is `2.0.0-rc.1` under the annotated Git tag
+`v2.0.0-rc.1`. A release is incomplete unless every
 applicable evidence file is produced from the same source revision.
 
 | Component | Primary artifact | Required evidence | Signing authority |
 |---|---|---|---|
-| Core | `ghcr.io/goastian/midori-vpn-core:2.0.0` at an immutable digest | SPDX JSON SBOM, BuildKit provenance, GitHub build and SBOM attestations, SHA-256 digest | GitHub Actions OIDC keyless identity and Cosign |
-| Control | `ghcr.io/goastian/midori-vpn-control:2.0.0` at an immutable digest | SPDX JSON SBOM, BuildKit provenance, GitHub build and SBOM attestations, SHA-256 digest | GitHub Actions OIDC keyless identity and Cosign |
+| Core | `ghcr.io/goastian/midori-vpn-core:<release_version>` plus its resolved immutable digest | SPDX JSON SBOM, BuildKit provenance, GitHub build and SBOM attestations, SHA-256 digest | private `midori-vpn-core-dev` GitHub Actions OIDC identity and Cosign |
+| Control | `ghcr.io/goastian/midori-vpn-control:<release_version>` plus its resolved immutable digest | SPDX JSON SBOM, BuildKit provenance, GitHub build and SBOM attestations, SHA-256 digest | private `midori-vpn-control-dev` GitHub Actions OIDC identity and Cosign |
 | Linux Desktop | `midori-vpn-2.0.0-1.x86_64.rpm` | exported RPM public key, `SHA256SUMS`, SPDX JSON SBOM, build provenance and dependency report | existing OpenPGP Ed25519 release identity |
 | Firefox/Midori | AMO upload ZIP, matching reviewer source ZIP and AMO-signed XPI | `SHA256SUMS`, SPDX JSON SBOM, exact public build inputs and reviewer build instructions | Mozilla Add-ons signing service |
 | Chromium | Chrome Web Store upload ZIP and store-delivered package | `SHA256SUMS`, SPDX JSON SBOM, exact public build inputs and manifest validation | Chrome Web Store signing service |
@@ -27,8 +28,9 @@ a new key.
 
 ## Build and provenance rules
 
-1. The version in the Git tag, package metadata, browser manifest and RPM spec
-   must match exactly. The four repositories must be clean and their full
+1. Product metadata, browser manifest and RPM spec remain exactly `2.0.0`.
+   The Git tag records the release version: either `v2.0.0` or a prerelease
+   such as `v2.0.0-rc.1`. The four repositories must be clean and their full
    commit hashes must be recorded in one release manifest.
 2. Builders, scanners and workflow actions must be pinned to immutable image
    digests or full action commit SHAs. Mutable `latest`, release branches and
@@ -89,12 +91,12 @@ sha256sum --check SHA256SUMS
 
 # GitHub build/SBOM attestations.
 gh attestation verify oci://ghcr.io/goastian/midori-vpn-core@sha256:<digest> \
-  --repo goastian/midori-vpn-core
+  --repo goastian/midori-vpn-core-dev
 
 # Public Sigstore signature. Keep the workflow identity exact.
 cosign verify \
   --certificate-identity \
-  'https://github.com/goastian/midori-vpn-core/.github/workflows/publish.yml@refs/tags/v2.0.0' \
+  'https://github.com/goastian/midori-vpn-core-dev/.github/workflows/publish.yml@refs/tags/v2.0.0-rc.1' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   ghcr.io/goastian/midori-vpn-core@sha256:<digest>
 ```
@@ -120,7 +122,7 @@ locked `web-ext` version.
 
 The remaining release gates are deliberately external to source control:
 
-- final approval and creation of the annotated `v2.0.0` tag;
+- final approval and creation of the coordinated annotated release tags;
 - protected GitHub environments, reviewers and enable switches;
 - the established RPM private identity in the protected signing environment;
 - AMO credentials and Chrome Web Store publisher/item IDs, OAuth credentials,
@@ -147,8 +149,9 @@ attestation and keyless OCI signing remain a separate approval-gated stage.
 
 ## Approval-gated signing stage
 
-Core and Control provide tag-driven `publish.yml` workflows bound to an
-annotated semantic tag and the protected `release-production` environment.
+Core and Control provide tag-driven `publish.yml` workflows in the private
+development repositories, bound to an annotated semantic tag and the protected
+`release-production` environment.
 Each refuses to replace an existing version, proves three matching builds,
 keeps its GHCR package private, creates GitHub SLSA and SPDX attestations, signs
 with the short-lived workflow OIDC identity through Cosign 3.1.3, and verifies
