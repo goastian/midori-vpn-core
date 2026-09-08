@@ -17,7 +17,7 @@ topology:
 
 | Repository | Scope | Required variable or secret |
 |---|---|---|
-| Private Core `midori-vpn-core-dev` | repository Actions | variables `MIDORIVPN_PRIVATE_CANDIDATE_ENABLED=true` and `MIDORIVPN_RELEASE_READ_USER`; repository/org Actions secret `MIDORIVPN_RELEASE_READ_TOKEN` may read the other private source repositories, the Control package and its evidence |
+| Private Core `midori-vpn-core-dev` | repository Actions | variables `MIDORIVPN_PRIVATE_CANDIDATE_ENABLED=true` and `MIDORIVPN_RELEASE_READ_USER`; `MIDORIVPN_RELEASE_SOURCE_TOKEN` is a fine-grained PAT limited to read-only Contents on the other three private repositories; separate `MIDORIVPN_RELEASE_READ_TOKEN` has only classic `read:packages` for private GHCR |
 | Private Control `midori-vpn-control-dev` | repository Actions | variable `MIDORIVPN_PRIVATE_CANDIDATE_ENABLED=true` |
 | Public production Core `midori-vpn-core` | `deploy-production` | protected deployment variables/secrets below; required reviewers; only protected `v*` tags |
 | Desktop | operator-controlled local signing | established OpenPGP identity; never copy `RPM_SIGNING_PRIVATE_KEY` into an unprotected repository Secret |
@@ -97,13 +97,16 @@ containing host scripts/templates, public operator documentation, four commits,
 two OCI digests, database schema compatibility and checksums. It contains no
 deployment values, pull token, SSH key or application secret.
 
-`MIDORIVPN_RELEASE_READ_TOKEN` must be available as a repository- or
-organization-level Actions secret. The Core tag-validation job uses it before
-any production gate. The workflow uses
-it for read-only checkouts, the Control package pull and Control evidence; it
-pairs the token with the repository `MIDORIVPN_RELEASE_READ_USER` variable for
-GHCR, then logs in again with the job-scoped `GITHUB_TOKEN` before publishing
-Core.
+Both read-only credentials must be available as repository- or
+organization-level Actions secrets because Core validates tags before any
+production gate. `MIDORIVPN_RELEASE_SOURCE_TOKEN` must be a fine-grained PAT
+limited to the Control, Desktop and Extension private repositories with
+read-only Contents access. `MIDORIVPN_RELEASE_READ_TOKEN` must remain a
+separate classic PAT with only `read:packages`; the workflow pairs it with
+`MIDORIVPN_RELEASE_READ_USER` for the Control pull and private visibility
+check. Attestation bundles are read from the authenticated OCI registry, so
+the source token needs no Attestations permission. The workflow logs in again
+with the job-scoped `GITHUB_TOKEN` before publishing Core.
 
 The bundle stores the exact pull tags and their expected digests separately.
 The workflow file, Actions and scanner are pinned to full commits or image

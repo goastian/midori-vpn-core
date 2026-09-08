@@ -67,10 +67,12 @@ cosign verify \
   "${verification_ref}"
 
 gh attestation verify "oci://${verification_ref}" \
+  --bundle-from-oci \
   --repo "${repository}" \
   --predicate-type https://slsa.dev/provenance/v1
 
 gh attestation verify "oci://${verification_ref}" \
+  --bundle-from-oci \
   --repo "${repository}" \
   --predicate-type https://spdx.dev/Document/v2.3
 

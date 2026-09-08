@@ -119,13 +119,19 @@ MIDORIVPN_RELEASE_READ_USER=<read-only GitHub identity>
 
 The workflow-provided `GITHUB_TOKEN` performs each repository's own registry
 and attestation operations. Control needs only
-`MIDORIVPN_PRIVATE_CANDIDATE_ENABLED`.
-Core additionally requires the repository- or organization-level Actions
-secret `MIDORIVPN_RELEASE_READ_TOKEN`. Scope it only to read the other three
-private source repositories, the private Control package and its release
-evidence. Do not create a long-lived Cosign private key: OCI signatures use the
-short-lived GitHub Actions OIDC workflow identity. The Core workflow pairs the
-read token with `MIDORIVPN_RELEASE_READ_USER` for the Control pull, then
+`MIDORIVPN_PRIVATE_CANDIDATE_ENABLED`. Core additionally requires two separate
+repository- or organization-level Actions secrets:
+
+- `MIDORIVPN_RELEASE_SOURCE_TOKEN`: a fine-grained PAT limited to the private
+  Control, Desktop and Extension repositories with read-only Contents access.
+- `MIDORIVPN_RELEASE_READ_TOKEN`: a classic PAT limited to `read:packages`,
+  paired with `MIDORIVPN_RELEASE_READ_USER` to pull and inspect the private
+  Control package.
+
+Do not combine these privileges in one token and do not grant `repo` to the
+package token. Attestation bundles are verified from the already authenticated
+OCI registry. Do not create a long-lived Cosign private key: OCI signatures use
+the short-lived GitHub Actions OIDC workflow identity. The Core workflow then
 authenticates the Core push separately with its job `GITHUB_TOKEN`.
 
 Repository Variables and Secrets are execution inputs, not a human approval

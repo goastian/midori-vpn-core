@@ -40,7 +40,7 @@ jobs:
           repository: goastian/midori-vpn-control-dev
           ref: ${{ github.ref_name }}
           path: midori-vpn-control
-          token: ${{ secrets.MIDORIVPN_RELEASE_READ_TOKEN }}
+          token: ${{ secrets.MIDORIVPN_RELEASE_SOURCE_TOKEN }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -50,7 +50,7 @@ jobs:
           repository: goastian/midori-vpn-desktop-dev
           ref: ${{ github.ref_name }}
           path: midori-vpn-desktop
-          token: ${{ secrets.MIDORIVPN_RELEASE_READ_TOKEN }}
+          token: ${{ secrets.MIDORIVPN_RELEASE_SOURCE_TOKEN }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -60,7 +60,7 @@ jobs:
           repository: goastian/midorivpn-extension-dev
           ref: ${{ github.ref_name }}
           path: midorivpn-extension
-          token: ${{ secrets.MIDORIVPN_RELEASE_READ_TOKEN }}
+          token: ${{ secrets.MIDORIVPN_RELEASE_SOURCE_TOKEN }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -159,9 +159,9 @@ jobs:
           identity="https://github.com/goastian/midori-vpn-control-dev/.github/workflows/publish.yml@refs/tags/${GITHUB_REF_NAME}"
           cosign verify --certificate-identity "$identity" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com "$verification_ref"
-          gh attestation verify "oci://${verification_ref}" --repo goastian/midori-vpn-control-dev \
+          gh attestation verify "oci://${verification_ref}" --bundle-from-oci --repo goastian/midori-vpn-control-dev \
             --predicate-type https://slsa.dev/provenance/v1
-          gh attestation verify "oci://${verification_ref}" --repo goastian/midori-vpn-control-dev \
+          gh attestation verify "oci://${verification_ref}" --bundle-from-oci --repo goastian/midori-vpn-control-dev \
             --predicate-type https://spdx.dev/Document/v2.3
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
 
@@ -315,9 +315,9 @@ jobs:
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$tag_ref")" = "$RELEASE_VERSION"
           cosign verify --certificate-identity "$identity" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com "$verification_ref"
-          gh attestation verify "oci://${verification_ref}" --repo goastian/midori-vpn-core-dev \
+          gh attestation verify "oci://${verification_ref}" --bundle-from-oci --repo goastian/midori-vpn-core-dev \
             --predicate-type https://slsa.dev/provenance/v1
-          gh attestation verify "oci://${verification_ref}" --repo goastian/midori-vpn-core-dev \
+          gh attestation verify "oci://${verification_ref}" --bundle-from-oci --repo goastian/midori-vpn-core-dev \
             --predicate-type https://spdx.dev/Document/v2.3
 
       - name: Create the secret-free deployment bundle
