@@ -77,12 +77,12 @@ The immutable release flow is:
 ```text
 four clean commits
   -> same annotated semantic tag in all four private development repositories
-  -> protected private Control publication
+  -> automatic private Control candidate publication
   -> Core verifies Control and the four-commit manifest
-  -> protected Core publication
+  -> automatic private Core candidate publication
   -> signatures, attestations, SBOM and vulnerability gates
   -> checksum-closed secret-free deployment bundle with operator documentation
-  -> matching annotated tag on the public production Core
+  -> protected matching annotated tag on the public production Core
   -> independent protected public-repository deployment approval
   -> one approved destination host
 ```
@@ -95,8 +95,9 @@ the tag. Never change a protected destination while an approval is pending.
 
 The source and release contracts are:
 
-- [`docs/RELEASE_OPERATIONS.md`](RELEASE_OPERATIONS.md): protected environments,
-  coordinated tags and independent artifact verification;
+- [`docs/RELEASE_OPERATIONS.md`](RELEASE_OPERATIONS.md): private candidate
+  credentials, the protected public Environment, coordinated tags and
+  independent artifact verification;
 - [`docs/RELEASE_SUPPLY_CHAIN.md`](RELEASE_SUPPLY_CHAIN.md): required artifacts,
   identities, SBOM and provenance;
 - [`deploy/host/README.md`](../deploy/host/README.md): individual host commands;
@@ -105,32 +106,32 @@ The source and release contracts are:
 - [`deploy/OBSERVABILITY.md`](../deploy/OBSERVABILITY.md): private metrics and
   certificate rotation.
 
-## Configure protected GitHub Environments
+## Configure Actions credentials and the public production gate
 
-Create both protected Environments before creating a release tag. Restrict
-them to the approved semantic tag, require reviewers and prevent self-review
-where organization policy permits it.
-
-### Publication Environment
-
-Create `release-production` in the private Core and Control `*-dev`
-repositories and set the
-non-secret variable:
+GitHub Free does not provide protected Environments or tag rulesets for private
+repositories. Core and Control private tags therefore generate private,
+immutable candidates only. Configure these repository Variables:
 
 ```text
-RELEASE_SIGNING_ENABLED=true
+MIDORIVPN_PRIVATE_CANDIDATE_ENABLED=true
 MIDORIVPN_RELEASE_READ_USER=<read-only GitHub identity>
 ```
 
 The workflow-provided `GITHUB_TOKEN` performs each repository's own registry
-and attestation operations. Core additionally requires the repository- or
-organization-level Actions secret `MIDORIVPN_RELEASE_READ_TOKEN` because the
-tag-validation job runs before the protected Environment is entered. Scope it
-only to read the other three private source repositories, the private Control
-package and its release evidence. Do not create a long-lived Cosign private
-key: OCI signatures use the short-lived GitHub Actions OIDC workflow identity.
-The Core workflow pairs it with `MIDORIVPN_RELEASE_READ_USER` for the Control
-pull, then authenticates the Core push separately with its job `GITHUB_TOKEN`.
+and attestation operations. Control needs only
+`MIDORIVPN_PRIVATE_CANDIDATE_ENABLED`.
+Core additionally requires the repository- or organization-level Actions
+secret `MIDORIVPN_RELEASE_READ_TOKEN`. Scope it only to read the other three
+private source repositories, the private Control package and its release
+evidence. Do not create a long-lived Cosign private key: OCI signatures use the
+short-lived GitHub Actions OIDC workflow identity. The Core workflow pairs the
+read token with `MIDORIVPN_RELEASE_READ_USER` for the Control pull, then
+authenticates the Core push separately with its job `GITHUB_TOKEN`.
+
+Repository Variables and Secrets are execution inputs, not a human approval
+gate. Restrict private repository write access and review the exact four-commit
+manifest before the authorized operator creates any candidate tags. A private
+candidate is never permission to deploy.
 
 ### Deployment Environment
 
@@ -157,6 +158,13 @@ Store these values as Environment Secrets:
 | `MIDORIVPN_GHCR_PULL_TOKEN` | Read-only package token, passed to Podman through standard input |
 | `MIDORIVPN_PRIVATE_RELEASE_TOKEN` | Read-only access to the private Core release workflow artifact and attestations |
 | `MIDORIVPN_DEPLOY_SECRETS` | Multiline dotenv fragment containing secret managed values |
+
+Create an enforced public tag ruleset for `v*`: restrict tag creation to the
+release operators and reject updates and deletion. Restrict
+`deploy-production` to that tag pattern, require an explicit reviewer and
+prevent self-review when a second authorized reviewer is available. The
+Environment and ruleset are the production authorization; the private
+candidate tags are not.
 
 Do not put application secrets in repository secrets shared with unrelated
 workflows. Do not put the SSH key, host inventory or registry token in either
@@ -233,16 +241,16 @@ The host patcher:
    repositories. Product metadata remains `2.0.0`; the first candidate uses
    release version `2.0.0-rc.1` and Git tag `v2.0.0-rc.1`. A
    lightweight tag is invalid.
-4. Push Control, Desktop and Extension first. Approve Control's protected
-   publication after its inputs are reviewed.
-5. Push Core last. Core is the coordinator and rejects missing, moved or
+4. Push Control, Desktop and Extension first. Wait for the private Control
+   candidate and all non-publishing evidence jobs to pass.
+5. Push Core last. Core is the candidate coordinator and rejects missing, moved or
    mismatched tags and commits.
-6. Approve Core publication only after the private Control digest exists.
-7. Review both private package visibilities, three matching build digests,
+6. Review both private package visibilities, three matching build digests,
    vulnerability reports, SPDX documents, provenance and Cosign verification.
-8. Promote the frozen Core commit to the public production repository and,
-   only under separate authorization, create the matching annotated tag there.
-9. Review the generated bundle checksum and `release.json` before approving a
+7. Promote the frozen Core commit to the public production repository and,
+   only under separate authorization, create the matching annotated tag there
+   through the enforced public `v*` ruleset.
+8. Review the generated bundle checksum and `release.json` before approving a
    deployment. The public controller downloads that exact private workflow
    artifact; it never rebuilds the images.
 

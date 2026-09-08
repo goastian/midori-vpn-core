@@ -52,8 +52,8 @@
 
 ### Operations
 
-- Added a single production deployment runbook covering protected Actions
-  inputs, coordinated private publication, principal/regional installation,
+- Added a single production deployment runbook covering private candidate
+  inputs, the protected public deployment gate, principal/regional installation,
   the rootless/rootful boundary, partial environment updates, upgrades,
   rollback, disaster recovery, credential rotation, private observability and
   the explicit single-principal availability limit of 2.0.0.
@@ -111,9 +111,10 @@
   failure isolation, observability, rollout/rollback and the regional
   production acceptance gate. The document distinguishes deployed behavior
   from cluster lifecycle, heartbeat and fleet-revocation work that remains.
-- Added approval-gated OCI publication workflows that require coordinated
-  annotated semantic tags and protected environments, then create and verify
-  GitHub attestations and a keyless Cosign signature by digest.
+- Added tag-driven private OCI candidate workflows that require coordinated
+  annotated semantic tags, keep every package private, and create and verify
+  GitHub attestations plus a keyless Cosign signature by digest. Production
+  remains gated independently in the public repository.
 - Added a non-publishing release evidence gate with immutable GitHub Actions,
   a four-repository commit manifest, reproducible OCI inputs, SPDX output and
   checksums. Registry upload and signing remain a separately approved stage.

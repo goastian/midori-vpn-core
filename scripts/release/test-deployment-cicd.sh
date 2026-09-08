@@ -218,6 +218,21 @@ for workflow in "${ROOT_DIR}/.github/workflows/publish.yml" "${ROOT_DIR}/.github
     fail "workflow contains a manual trigger, floating action or obsolete release input: ${workflow}"
   fi
 done
+for private_candidate_workflow in "${ROOT_DIR}/.github/workflows/publish.yml" "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml"; do
+  if rg -n 'release-production|^[[:space:]]*environment:' "${private_candidate_workflow}" >/dev/null; then
+    fail "private candidate workflow depends on an unavailable protected Environment: ${private_candidate_workflow}"
+  fi
+done
+rg -Fq 'name: Publish - coordinated private OCI candidate' "${ROOT_DIR}/.github/workflows/publish.yml" || fail "Core workflow is not identified as private candidate publication"
+rg -Fq 'name: Publish - tagged private Control OCI candidate' "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml" || fail "Control workflow is not identified as private candidate publication"
+[[ "$(rg -Fc 'vars.MIDORIVPN_PRIVATE_CANDIDATE_ENABLED' "${ROOT_DIR}/.github/workflows/publish.yml")" == 1 ]] || fail "Core candidate switch is missing or duplicated"
+[[ "$(rg -Fc 'vars.MIDORIVPN_PRIVATE_CANDIDATE_ENABLED' "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml")" == 1 ]] || fail "Control candidate switch is missing or duplicated"
+core_switch_line="$(rg -n -m1 'vars.MIDORIVPN_PRIVATE_CANDIDATE_ENABLED' "${ROOT_DIR}/.github/workflows/publish.yml" | cut -d: -f1)"
+core_private_checkout_line="$(rg -n -m1 'secrets.MIDORIVPN_RELEASE_READ_TOKEN' "${ROOT_DIR}/.github/workflows/publish.yml" | cut -d: -f1)"
+((core_switch_line < core_private_checkout_line)) || fail "Core reads a private token before validating the candidate switch"
+rg -Fq 'visibility=private' "${ROOT_DIR}/.github/workflows/publish.yml" || fail "Core candidate workflow does not enforce private package visibility"
+rg -Fq 'visibility=private' "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml" || fail "Control candidate workflow does not enforce private package visibility"
+rg -Fq 'name: deploy-production' "${ROOT_DIR}/.github/workflows/deploy.yml" || fail "public production deployment lacks its Environment gate"
 rg -Fq "github.repository == 'goastian/midori-vpn-core-dev'" "${ROOT_DIR}/.github/workflows/publish.yml" || fail "private Core publisher lacks a repository guard"
 rg -Fq "github.repository == 'goastian/midori-vpn-control-dev'" "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml" || fail "private Control publisher lacks a repository guard"
 rg -Fq "github.repository == 'goastian/midori-vpn-core'" "${ROOT_DIR}/.github/workflows/deploy.yml" || fail "public deploy controller lacks a repository guard"

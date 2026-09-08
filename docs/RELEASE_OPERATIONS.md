@@ -8,27 +8,39 @@ For host preparation, installation, upgrade, rollback, recovery, rotation,
 observability and the 2.0.0 availability boundary, continue with
 [`PRODUCTION_DEPLOYMENT.md`](PRODUCTION_DEPLOYMENT.md).
 
-## Required protected environments
+## Required Actions credentials and production environment
 
-Before any release attempt, repository administrators create these GitHub
-environments and enable required reviewers, prevent self-review where the plan
-supports it, and restrict deployment refs to the approved annotated `v*` tag:
+The private repositories create candidate artifacts only. Their repository
+credentials do not authorize production. The public production repository owns
+the only GitHub Environment approval gate supported by the current GitHub Free
+topology:
 
-| Repository | Environment | Required variable or secret |
+| Repository | Scope | Required variable or secret |
 |---|---|---|
-| Private Core `midori-vpn-core-dev` | `release-production` | variables `RELEASE_SIGNING_ENABLED=true` and `MIDORIVPN_RELEASE_READ_USER`; repository/org Actions secret `MIDORIVPN_RELEASE_READ_TOKEN` may read the other private source repositories, the Control package and its evidence |
-| Private Control `midori-vpn-control-dev` | `release-production` | variable `RELEASE_SIGNING_ENABLED=true` |
+| Private Core `midori-vpn-core-dev` | repository Actions | variables `MIDORIVPN_PRIVATE_CANDIDATE_ENABLED=true` and `MIDORIVPN_RELEASE_READ_USER`; repository/org Actions secret `MIDORIVPN_RELEASE_READ_TOKEN` may read the other private source repositories, the Control package and its evidence |
+| Private Control `midori-vpn-control-dev` | repository Actions | variable `MIDORIVPN_PRIVATE_CANDIDATE_ENABLED=true` |
 | Public production Core `midori-vpn-core` | `deploy-production` | protected deployment variables/secrets below; required reviewers; only protected `v*` tags |
-| Desktop | `release-signing` | variable `RELEASE_SIGNING_ENABLED=true`; secret `RPM_SIGNING_PRIVATE_KEY` |
+| Desktop | operator-controlled local signing | established OpenPGP identity; never copy `RPM_SIGNING_PRIVATE_KEY` into an unprotected repository Secret |
 
-The environment switch is deliberately absent by default. Do not create the
-RPM secret from a new identity. It must import the established primary
+On GitHub Free, private repository Variables and Secrets are available but
+private Environments, deployment branches and tag rulesets are not. A private
+tag therefore starts candidate publication without a GitHub approval prompt.
+Limit write access, review all four exact commits and tags out of band, and
+treat the resulting private images as non-production until the protected public
+tag and `deploy-production` approval both pass.
+`MIDORIVPN_PRIVATE_CANDIDATE_ENABLED` is a fail-closed switch, not an approval
+control.
+
+The private candidate switch is deliberately absent by default. Any future
+protected RPM secret must import the established primary
 fingerprint `BE000EFBCD8F4CDA53FC1A9F13FC1FEEE3315359` and signing subkey
 `84218F95A58E644EDB6947336CF4082EE316F221`.
 
 Acceptable recovery paths are the original encrypted offline backup or the
 original hardware token. Import or attach it only in an operator-controlled
-GnuPG home or the protected GitHub environment. Never place private key
+GnuPG home. A private `release-signing` Environment may be used only after
+moving to a GitHub plan that supports the required protection; a repository
+Secret is not an acceptable substitute. Never place private key
 material in the repository, an artifact, a command argument or a log. The
 Desktop repository's
 [`scripts/check-rpm-signing-identity.sh`](https://github.com/goastian/midori-vpn-desktop/blob/main/scripts/check-rpm-signing-identity.sh)
@@ -49,30 +61,31 @@ The output records canonical component names and full commits. Review it before
 tagging; `ALLOW_DIRTY_RELEASE_BUILD=true` is only for local diagnostics and is
 not an acceptable release input.
 
-Protect `v*` with repository rulesets in all four repositories: only release
-operators may create it, deletion and force-update are forbidden, and the tag
-must be annotated. Create the same tag locally at each frozen commit, then push
-Control, Desktop and Extension first. Approve Control's `release-production`
-job and push Core last. The Core tag is the coordinator: it checks out all four
-tags, rejects a lightweight, missing or mismatched tag and emits the
+GitHub Free cannot protect `v*` in private repositories. Only the authorized
+release operator may create the same annotated tag locally at each reviewed
+frozen commit. Push Control, Desktop and Extension first, wait for the private
+Control candidate to pass, and push Core last. The Core tag is the coordinator:
+it checks out all four tags, rejects a lightweight, missing or mismatched tag
+and emits the
 authoritative schema-3 source manifest with separate product version, release
 version and Git tag. Product metadata stays `2.0.0`; the first candidate is
 release `2.0.0-rc.1` under `v2.0.0-rc.1`. Never repair failure by moving a tag;
 use a new version.
 
-After the private publication is complete, promote the exact frozen Core
-commit to the public production repository. Creating the matching annotated
-tag there is a separate authorized action; it starts only `deploy.yml`. The
-public controller retrieves the successful private Core workflow artifact,
-requires its Core commit to equal the public tag commit and never rebuilds or
-re-signs either image.
+After private candidate publication is complete, promote the exact frozen Core
+commit to the public production repository. Its enforced `v*` tag ruleset must
+forbid deletion and force-update and restrict creation to release operators.
+Creating the matching annotated public tag is a separate authorized action; it
+starts only `deploy.yml`. The public controller retrieves the successful
+private Core workflow artifact, requires its Core commit to equal the public
+tag commit and never rebuilds or re-signs either image.
 
-## OCI publication gate
+## Private OCI candidate publication
 
 Control and Core `publish.yml` run only from pushed semantic tags in their
-private `*-dev` repositories. Each enters
-the protected `release-production` environment, refuses an existing version,
-builds cleanly twice, requires equal digests, pushes a third identical build,
+private `*-dev` repositories. Each validates its repository-level enable
+switch, refuses an existing version, builds cleanly twice, requires equal
+digests, pushes a third identical build,
 scans the exact digest, creates independent SPDX plus GitHub provenance/SBOM
 attestations and signs with Cosign 3.1.3 keyless OIDC. The job explicitly sets
 and re-reads GHCR package visibility as `private`.
@@ -85,17 +98,17 @@ two OCI digests, database schema compatibility and checksums. It contains no
 deployment values, pull token, SSH key or application secret.
 
 `MIDORIVPN_RELEASE_READ_TOKEN` must be available as a repository- or
-organization-level Actions secret, not only as an Environment secret: the
-Core tag-validation job uses it before `release-production`. The workflow uses
+organization-level Actions secret. The Core tag-validation job uses it before
+any production gate. The workflow uses
 it for read-only checkouts, the Control package pull and Control evidence; it
-pairs the token with the protected `MIDORIVPN_RELEASE_READ_USER` variable for
+pairs the token with the repository `MIDORIVPN_RELEASE_READ_USER` variable for
 GHCR, then logs in again with the job-scoped `GITHUB_TOKEN` before publishing
 Core.
 
 The bundle stores the exact pull tags and their expected digests separately.
 The workflow file, Actions and scanner are pinned to full commits or image
 digests. It has `packages`, `id-token`, `attestations` and artifact metadata
-write access only inside the protected publication job. Neither workflow
+write access only inside the candidate publication job. Neither workflow
 creates a GitHub Release or changes package visibility to public.
 
 ## Protected deployment environment
@@ -143,12 +156,13 @@ retains the database backup and never restores production data automatically.
 
 ## Desktop signing gate
 
-Desktop signing runs manually from the annotated `v2.0.0` tag, requires the
-exact confirmation `sign-v2.0.0`, a full Core license commit and approval of
-the `release-signing` environment. The imported key is checked against both
-established fingerprints before the rootless RPM builder starts. The result is
-retained privately for review; this job does not create a GitHub Release or
-publish a package repository.
+On the current GitHub Free plan, Desktop signing runs locally from the
+annotated `v2.0.0` tag in an operator-controlled GnuPG home. It requires the
+exact Core license commit and checks both established fingerprints before the
+rootless RPM builder starts. The checked-in `release-signing` workflow is a
+fail-closed optional path for a future plan with protected private
+Environments; do not populate its key as a repository Secret. Neither path
+creates a GitHub Release or publishes a package repository implicitly.
 
 After obtaining an approved RPM, verify from its artifact directory:
 
@@ -178,6 +192,7 @@ exact private `publish.yml@refs/tags/<git_tag>` certificate identity, GitHub's
 OIDC issuer, coordinated commit/version labels, SLSA provenance and SPDX 2.3
 SBOM attestations.
 
-Stop the release if an expected environment, reviewer, fingerprint, annotated
-tag, digest, signature or attestation is absent. Never repair a failed gate by
-weakening it or replacing the established signing identity.
+Stop production if the public Environment, reviewer, public tag ruleset,
+fingerprint, annotated tag, digest, signature or attestation is absent. Never
+repair a failed gate by weakening it or replacing the established signing
+identity.

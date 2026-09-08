@@ -1,4 +1,4 @@
-name: Deploy - verified private release
+name: Deploy - verified private candidate
 
 on:
   push:
@@ -57,7 +57,7 @@ jobs:
           test -n "$SSH_PRIVATE_KEY" && test -n "$SSH_KNOWN_HOSTS"
           test -n "$GHCR_PULL_TOKEN" && test -n "$PRIVATE_RELEASE_TOKEN"
 
-      - name: Download the matching private release bundle
+      - name: Download the matching private candidate bundle
         env:
           GH_TOKEN: ${{ secrets.MIDORIVPN_PRIVATE_RELEASE_TOKEN }}
         run: |

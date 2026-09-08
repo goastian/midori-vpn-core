@@ -1,4 +1,4 @@
-name: Publish - coordinated private OCI release
+name: Publish - coordinated private OCI candidate
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: midorivpn-${{ github.ref_name }}-private-release
+  group: midorivpn-${{ github.ref_name }}-private-candidate
   cancel-in-progress: false
 
 env:
@@ -19,10 +19,15 @@ env:
 
 jobs:
   validate-release-set:
-    name: Validate all four private annotated tags and commits
+    name: Validate all four private annotated candidate tags and commits
     if: github.repository == 'goastian/midori-vpn-core-dev'
     runs-on: ubuntu-24.04
     steps:
+      - name: Require the private candidate switch
+        env:
+          CANDIDATE_PUBLISH_ENABLED: ${{ vars.MIDORIVPN_PRIVATE_CANDIDATE_ENABLED }}
+        run: test "$CANDIDATE_PUBLISH_ENABLED" = true
+
       - name: Checkout Core tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -71,11 +76,9 @@ jobs:
           retention-days: 30
 
   publish:
-    name: Publish private Core and coordinate the release bundle
+    name: Publish private Core candidate and coordinate the release bundle
     needs: validate-release-set
     runs-on: ubuntu-24.04
-    environment:
-      name: release-production
     permissions:
       artifact-metadata: write
       attestations: write
@@ -100,11 +103,9 @@ jobs:
 
       - name: Define and revalidate release inputs
         env:
-          RELEASE_SIGNING_ENABLED: ${{ vars.RELEASE_SIGNING_ENABLED }}
           RELEASE_READ_USER: ${{ vars.MIDORIVPN_RELEASE_READ_USER }}
         run: |
           set -Eeuo pipefail
-          test "$RELEASE_SIGNING_ENABLED" = true
           [[ "$RELEASE_READ_USER" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,78}$ ]]
           product_version="$(cat VERSION)"
           release_version="${GITHUB_REF_NAME#v}"

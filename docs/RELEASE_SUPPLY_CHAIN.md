@@ -53,9 +53,11 @@ a new key.
    Do not create a long-lived Cosign private key. Both signature and
    attestations must be verified against the exact repository workflow
    identity and `https://token.actions.githubusercontent.com` issuer.
-8. External release jobs require a protected release environment and explicit
-   operator approval. A build-only job must remain available without registry,
-   GitHub Release, AMO or CWS write access.
+8. Production deployment and store submission require a protected public
+   Environment or an operator-controlled external signing path plus explicit
+   approval. Private OCI candidate publication may run from authorized tags,
+   but it never authorizes production. A build-only job must remain available
+   without registry, GitHub Release, AMO or CWS write access.
 
 ## Browser-store packages
 
@@ -73,8 +75,10 @@ inputs; they are not inferred or committed. Upload and publish are separate
 operations so review can occur without automatically making a version public.
 
 AMO JWT credentials and Chrome Web Store OAuth/service-account credentials are
-stored only in a protected release environment. Local and pull-request builds
-must not receive them.
+stored only in a protected Environment that supports private secret isolation,
+or used from an operator-controlled local submission environment. They must not
+be copied into unprotected repository Secrets. Local development and
+pull-request builds must not receive them.
 
 ## Required verification
 
@@ -109,8 +113,8 @@ the permanent-install gate.
 
 ## Implementation status and remaining operator inputs
 
-Core and Control separate read-only build evidence from protected tagged
-publication, pin workflow dependencies, produce SBOM/provenance and verify
+Core and Control separate read-only build evidence from tagged private
+candidate publication, pin workflow dependencies, produce SBOM/provenance and verify
 GitHub attestations plus keyless Cosign signatures by digest. Core also verifies
 the four annotated tag commits and the signed private Control digest before
 producing a secret-free deployment bundle. Desktop uses a pinned RPM builder,
@@ -120,11 +124,12 @@ produces separate deterministic browser packages, AMO reviewer source,
 store metadata, SPDX, provenance and checksums, and validates Firefox with the
 locked `web-ext` version.
 
-The remaining release gates are deliberately external to source control:
+The remaining production gates are deliberately external to source control:
 
 - final approval and creation of the coordinated annotated release tags;
-- protected GitHub environments, reviewers and enable switches;
-- the established RPM private identity in the protected signing environment;
+- public GitHub Environment, reviewer, enforced `v*` ruleset and enable switch;
+- the established RPM private identity in an operator-controlled signing home,
+  or a future protected private Environment on a compatible GitHub plan;
 - AMO credentials and Chrome Web Store publisher/item IDs, OAuth credentials,
   public privacy-policy URL and completed dashboard listing declarations;
 - store-signed packages and post-signing installation verification.
@@ -144,20 +149,23 @@ SPDX documents and local provenance. Every set carries `SHA256SUMS` and is kept
 only as a short-lived CI artifact for human review.
 
 These build jobs have read-only repository permissions and no registry login,
-GitHub Release, store upload or public deployment step. Publication, GitHub
-attestation and keyless OCI signing remain a separate approval-gated stage.
+GitHub Release, store upload or public deployment step. Private candidate
+publication, GitHub attestation and keyless OCI signing remain a separate
+tag-gated stage; production remains approval-gated in the public repository.
 
-## Approval-gated signing stage
+## Private candidates and production approval
 
 Core and Control provide tag-driven `publish.yml` workflows in the private
-development repositories, bound to an annotated semantic tag and the protected
-`release-production` environment.
-Each refuses to replace an existing version, proves three matching builds,
+development repositories and bound to an annotated semantic tag. On GitHub
+Free these create private candidates without an Environment approval.
+Each validates a repository enable switch, refuses to replace an existing version, proves three matching builds,
 keeps its GHCR package private, creates GitHub SLSA and SPDX attestations, signs
 with the short-lived workflow OIDC identity through Cosign 3.1.3, and verifies
-all three records immediately. Desktop uses
-the protected `release-signing` environment and rejects any OpenPGP identity
-other than the established primary and signing-subkey fingerprints.
+all three records immediately. Production requires the matching protected
+public Core tag and `deploy-production` reviewer approval. Desktop signing uses
+the established identity locally on the current plan; its optional
+`release-signing` workflow remains fail-closed unless a future plan supplies a
+protected private Environment.
 
 Environment configuration and the operator sequence are documented in
 [`RELEASE_OPERATIONS.md`](RELEASE_OPERATIONS.md). Merely committing these
