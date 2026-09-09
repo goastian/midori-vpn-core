@@ -8,14 +8,15 @@ trees whose exact commits are recorded; working branches are not release refs.
 ## Release set
 
 All components use product version `2.0.0`. Release candidates add a separate
-release suffix; the first is `2.0.0-rc.1` under the annotated Git tag
-`v2.0.0-rc.1`. A release is incomplete unless every
+release suffix. `v2.0.0-rc.1` is retained as a failed, unpublished Control
+candidate; the next coordinated attempt is `v2.0.0-rc.2`. A release is
+incomplete unless every
 applicable evidence file is produced from the same source revision.
 
 | Component | Primary artifact | Required evidence | Signing authority |
 |---|---|---|---|
-| Core | `ghcr.io/goastian/midori-vpn-core:<release_version>` plus its resolved immutable digest | SPDX JSON SBOM, BuildKit provenance, GitHub build and SBOM attestations, SHA-256 digest | private `midori-vpn-core-dev` GitHub Actions OIDC identity and Cosign |
-| Control | `ghcr.io/goastian/midori-vpn-control:<release_version>` plus its resolved immutable digest | SPDX JSON SBOM, BuildKit provenance, GitHub build and SBOM attestations, SHA-256 digest | private `midori-vpn-control-dev` GitHub Actions OIDC identity and Cosign |
+| Core | `ghcr.io/goastian/midori-vpn-core:<release_version>` plus its resolved immutable digest | independent SPDX JSON SBOM, GitHub SLSA provenance and SBOM attestations, SHA-256 digest | private `midori-vpn-core-dev` GitHub Actions OIDC identity and Cosign |
+| Control | `ghcr.io/goastian/midori-vpn-control:<release_version>` plus its resolved immutable digest | independent SPDX JSON SBOM, GitHub SLSA provenance and SBOM attestations, SHA-256 digest | private `midori-vpn-control-dev` GitHub Actions OIDC identity and Cosign |
 | Linux Desktop | `midori-vpn-2.0.0-1.x86_64.rpm` | exported RPM public key, `SHA256SUMS`, SPDX JSON SBOM, build provenance and dependency report | existing OpenPGP Ed25519 release identity |
 | Firefox/Midori | AMO upload ZIP, matching reviewer source ZIP and AMO-signed XPI | `SHA256SUMS`, SPDX JSON SBOM, exact public build inputs and reviewer build instructions | Mozilla Add-ons signing service |
 | Chromium | Chrome Web Store upload ZIP and store-delivered package | `SHA256SUMS`, SPDX JSON SBOM, exact public build inputs and manifest validation | Chrome Web Store signing service |
@@ -46,6 +47,9 @@ a new key.
    workflow, commit, tag, builder and declared public build inputs. GitHub
    artifact attestations complement but do not replace local hash and package
    signature verification.
+   BuildKit provenance and SBOM must be disabled while comparing or publishing
+   the reproducible OCI digest; the independently signed GitHub attestations
+   are attached afterwards as OCI referrers and do not alter that digest.
 6. Public extension endpoints and OAuth public-client identifiers are build
    inputs, not secrets. They must be recorded without placing AMO, CWS, GitHub
    or OpenPGP credentials in artifacts, logs or source archives.
@@ -158,7 +162,8 @@ tag-gated stage; production remains approval-gated in the public repository.
 Core and Control provide tag-driven `publish.yml` workflows in the private
 development repositories and bound to an annotated semantic tag. On GitHub
 Free these create private candidates without an Environment approval.
-Each validates a repository enable switch, refuses to replace an existing version, proves three matching builds,
+Each validates a repository enable switch, refuses to replace an existing
+version, proves three matching builds without embedded BuildKit attestations,
 keeps its GHCR package private, creates GitHub SLSA and SPDX attestations, signs
 with the short-lived workflow OIDC identity through Cosign 3.1.3, and verifies
 all three records immediately. Production requires the matching protected

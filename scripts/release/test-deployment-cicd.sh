@@ -222,6 +222,21 @@ for private_candidate_workflow in "${ROOT_DIR}/.github/workflows/publish.yml" "$
   if rg -n 'release-production|^[[:space:]]*environment:' "${private_candidate_workflow}" >/dev/null; then
     fail "private candidate workflow depends on an unavailable protected Environment: ${private_candidate_workflow}"
   fi
+  [[ "$(rg -Fc 'BUILDX_NO_DEFAULT_ATTESTATIONS: 1' "${private_candidate_workflow}")" == 1 ]] || fail "candidate workflow does not disable default BuildKit attestations: ${private_candidate_workflow}"
+  [[ "$(rg -Fc 'provenance: false' "${private_candidate_workflow}")" == 3 ]] || fail "candidate workflow does not disable embedded provenance on all three builds: ${private_candidate_workflow}"
+  [[ "$(rg -Fc 'sbom: false' "${private_candidate_workflow}")" == 3 ]] || fail "candidate workflow does not disable embedded SBOM on all three builds: ${private_candidate_workflow}"
+  [[ "$(rg -Fc 'uses: actions/attest@' "${private_candidate_workflow}")" == 2 ]] || fail "candidate workflow lost independent GitHub provenance or SBOM attestation: ${private_candidate_workflow}"
+  if rg -n 'provenance: mode=max|sbom: true' "${private_candidate_workflow}" >/dev/null; then
+    fail "candidate workflow still mixes embedded attestations into its reproducible digest: ${private_candidate_workflow}"
+  fi
+done
+for build_evidence_workflow in "${ROOT_DIR}/.github/workflows/release.yml" "${ROOT_DIR}/midori-vpn-control/.github/workflows/release.yml"; do
+  [[ "$(rg -Fc 'BUILDX_NO_DEFAULT_ATTESTATIONS: 1' "${build_evidence_workflow}")" == 1 ]] || fail "build-evidence workflow does not disable default BuildKit attestations: ${build_evidence_workflow}"
+  [[ "$(rg -Fc 'provenance: false' "${build_evidence_workflow}")" == 2 ]] || fail "build-evidence workflow does not disable embedded provenance on both builds: ${build_evidence_workflow}"
+  [[ "$(rg -Fc 'sbom: false' "${build_evidence_workflow}")" == 2 ]] || fail "build-evidence workflow does not disable embedded SBOM on both builds: ${build_evidence_workflow}"
+  if rg -n 'embedded provenance|provenance: mode=max|sbom: true' "${build_evidence_workflow}" >/dev/null; then
+    fail "build-evidence workflow retains the non-reproducible attestation contract: ${build_evidence_workflow}"
+  fi
 done
 rg -Fq 'name: Publish - coordinated private OCI candidate' "${ROOT_DIR}/.github/workflows/publish.yml" || fail "Core workflow is not identified as private candidate publication"
 rg -Fq 'name: Publish - tagged private Control OCI candidate' "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml" || fail "Control workflow is not identified as private candidate publication"
@@ -244,6 +259,7 @@ fi
 [[ "$(rg -Fc 'username: ${{ vars.MIDORIVPN_RELEASE_READ_USER }}' "${ROOT_DIR}/.github/workflows/publish.yml")" == 1 ]] || fail "private Control pull does not use the dedicated read identity"
 [[ "$(rg -Fc 'password: ${{ secrets.GITHUB_TOKEN }}' "${ROOT_DIR}/.github/workflows/publish.yml")" == 1 ]] || fail "Core publication does not restore its job-scoped registry credential"
 [[ "$(rg -Fc -- '--bundle-from-oci' "${ROOT_DIR}/.github/workflows/publish.yml")" == 4 ]] || fail "candidate attestations are not verified from the authenticated OCI registry"
+[[ "$(rg -Fc -- '--bundle-from-oci' "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml")" == 2 ]] || fail "Control attestations are not verified from the authenticated OCI registry"
 [[ "$(rg -Fc -- '--bundle-from-oci' "${ROOT_DIR}/scripts/release/verify-oci-release.sh")" == 2 ]] || fail "host attestations are not verified from the authenticated OCI registry"
 rg -Fq 'resolve-runtime-images.sh' "${ROOT_DIR}/.github/workflows/deploy.yml" || fail "deploy controller does not lock pulled tags"
 rg -Fq -- '--image-lock' "${ROOT_DIR}/.github/workflows/deploy.yml" || fail "deploy controller does not transfer the runtime lock"

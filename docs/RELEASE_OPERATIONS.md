@@ -68,9 +68,10 @@ Control candidate to pass, and push Core last. The Core tag is the coordinator:
 it checks out all four tags, rejects a lightweight, missing or mismatched tag
 and emits the
 authoritative schema-3 source manifest with separate product version, release
-version and Git tag. Product metadata stays `2.0.0`; the first candidate is
-release `2.0.0-rc.1` under `v2.0.0-rc.1`. Never repair failure by moving a tag;
-use a new version.
+version and Git tag. Product metadata stays `2.0.0`; `v2.0.0-rc.1` remains the
+failed Control reproducibility attempt and the next coordinated candidate is
+release `2.0.0-rc.2` under `v2.0.0-rc.2`. Never repair failure by moving a
+tag; use a new version.
 
 After private candidate publication is complete, promote the exact frozen Core
 commit to the public production repository. Its enforced `v*` tag ruleset must
@@ -85,8 +86,10 @@ tag commit and never rebuilds or re-signs either image.
 Control and Core `publish.yml` run only from pushed semantic tags in their
 private `*-dev` repositories. Each validates its repository-level enable
 switch, refuses an existing version, builds cleanly twice, requires equal
-digests, pushes a third identical build,
-scans the exact digest, creates independent SPDX plus GitHub provenance/SBOM
+digests and pushes a third identical build. All three explicitly disable
+BuildKit's default/embedded attestations so execution-specific manifests do
+not contaminate the reproducibility comparison. The workflow then scans the
+exact digest and creates independent SPDX plus GitHub provenance/SBOM
 attestations and signs with Cosign 3.1.3 keyless OIDC. The job explicitly sets
 and re-reads GHCR package visibility as `private`.
 

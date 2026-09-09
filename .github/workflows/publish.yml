@@ -16,6 +16,7 @@ concurrency:
 env:
   CORE_IMAGE: ghcr.io/goastian/midori-vpn-core
   CONTROL_IMAGE: ghcr.io/goastian/midori-vpn-control
+  BUILDX_NO_DEFAULT_ATTESTATIONS: 1
 
 jobs:
   validate-release-set:
@@ -207,8 +208,8 @@ jobs:
             org.opencontainers.image.source=https://github.com/goastian/midori-vpn-core-dev
           build-args: SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
           outputs: type=oci,dest=${{ runner.temp }}/core-first.oci.tar,rewrite-timestamp=true
-          provenance: mode=max
-          sbom: true
+          provenance: false
+          sbom: false
 
       - name: Second clean Core OCI build
         id: second
@@ -226,8 +227,8 @@ jobs:
             org.opencontainers.image.source=https://github.com/goastian/midori-vpn-core-dev
           build-args: SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
           outputs: type=oci,dest=${{ runner.temp }}/core-second.oci.tar,rewrite-timestamp=true
-          provenance: mode=max
-          sbom: true
+          provenance: false
+          sbom: false
 
       - name: Require reproducible Core image digests
         env:
@@ -251,8 +252,8 @@ jobs:
             org.opencontainers.image.source=https://github.com/goastian/midori-vpn-core-dev
           build-args: SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
           outputs: type=registry
-          provenance: mode=max
-          sbom: true
+          provenance: false
+          sbom: false
 
       - name: Require the pushed digest to match both clean builds
         env:
