@@ -145,12 +145,14 @@ published.
 ## Build-only evidence gate
 
 The first release stage is intentionally non-publishing. Core and Control
-produce OCI archives with embedded BuildKit SBOM/provenance plus an independent
-Syft SPDX document. Desktop verifies its existing OpenPGP identity in an
-isolated RPM database before producing SPDX and local provenance. The extension
-creates distinct, normalized Firefox and Chromium ZIPs, a reviewer source ZIP,
-SPDX documents and local provenance. Every set carries `SHA256SUMS` and is kept
-only as a short-lived CI artifact for human review.
+produce OCI archives without embedded BuildKit attestations, compare their
+image digests, validate and extract each OCI layout for the pinned Trivy gate,
+and generate an independent Syft SPDX document plus local build metadata.
+Desktop verifies its existing OpenPGP identity in an isolated RPM database
+before producing SPDX and local provenance. The extension creates distinct,
+normalized Firefox and Chromium ZIPs, a reviewer source ZIP, SPDX documents and
+local provenance. Every set carries `SHA256SUMS` and is kept only as a
+short-lived CI artifact for human review.
 
 These build jobs have read-only repository permissions and no registry login,
 GitHub Release, store upload or public deployment step. Private candidate

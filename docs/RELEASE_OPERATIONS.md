@@ -93,6 +93,11 @@ exact digest and creates independent SPDX plus GitHub provenance/SBOM
 attestations and signs with Cosign 3.1.3 keyless OIDC. The job explicitly sets
 and re-reads GHCR package visibility as `private`.
 
+The non-publishing build-evidence workflows scan their OCI archives by
+extracting each one to a private temporary layout, validating `oci-layout` and
+`index.json`, and mounting that directory read-only into the pinned Trivy
+container. Temporary layouts are removed on success and failure.
+
 Core waits up to twenty minutes for the same-version Control digest and verifies
 its private visibility, Control workflow certificate identity and both
 attestations before publishing Core. It then creates a deterministic bundle
