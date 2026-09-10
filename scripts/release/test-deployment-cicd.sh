@@ -247,6 +247,13 @@ core_private_checkout_line="$(rg -n -m1 'secrets.MIDORIVPN_RELEASE_SOURCE_TOKEN'
 ((core_switch_line < core_private_checkout_line)) || fail "Core reads a private token before validating the candidate switch"
 rg -Fq 'visibility=private' "${ROOT_DIR}/.github/workflows/publish.yml" || fail "Core candidate workflow does not enforce private package visibility"
 rg -Fq 'visibility=private' "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml" || fail "Control candidate workflow does not enforce private package visibility"
+[[ "$(rg -Fc 'outputs: type=registry,rewrite-timestamp=true' "${ROOT_DIR}/.github/workflows/publish.yml")" == 1 ]] || fail "Core published exporter does not apply the reproducible timestamp contract exactly once"
+[[ "$(rg -Fc 'outputs: type=registry,rewrite-timestamp=true' "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml")" == 1 ]] || fail "Control published exporter does not apply the reproducible timestamp contract exactly once"
+[[ "$(rg -Fc 'rewrite-timestamp=true' "${ROOT_DIR}/.github/workflows/publish.yml")" == 3 ]] || fail "Core candidate does not normalize all three image exporters"
+[[ "$(rg -Fc 'rewrite-timestamp=true' "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml")" == 3 ]] || fail "Control candidate does not normalize all three image exporters"
+if rg -Fq 'push: true' "${ROOT_DIR}/.github/workflows/publish.yml" "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml"; then
+  fail "candidate workflow bypasses the explicit normalized registry exporter with the push shorthand"
+fi
 rg -Fq 'name: deploy-production' "${ROOT_DIR}/.github/workflows/deploy.yml" || fail "public production deployment lacks its Environment gate"
 rg -Fq "github.repository == 'goastian/midori-vpn-core-dev'" "${ROOT_DIR}/.github/workflows/publish.yml" || fail "private Core publisher lacks a repository guard"
 rg -Fq "github.repository == 'goastian/midori-vpn-control-dev'" "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml" || fail "private Control publisher lacks a repository guard"

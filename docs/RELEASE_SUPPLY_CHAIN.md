@@ -50,6 +50,9 @@ a new key.
    BuildKit provenance and SBOM must be disabled while comparing or publishing
    the reproducible OCI digest; the independently signed GitHub attestations
    are attached afterwards as OCI referrers and do not alter that digest.
+   Every compared and registry exporter must also use the same
+   `SOURCE_DATE_EPOCH` with `rewrite-timestamp=true`; a registry push assembled
+   without that option is a different artifact and must fail closed.
 6. Public extension endpoints and OAuth public-client identifiers are build
    inputs, not secrets. They must be recorded without placing AMO, CWS, GitHub
    or OpenPGP credentials in artifacts, logs or source archives.

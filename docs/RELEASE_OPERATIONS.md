@@ -86,12 +86,14 @@ tag commit and never rebuilds or re-signs either image.
 Control and Core `publish.yml` run only from pushed semantic tags in their
 private `*-dev` repositories. Each validates its repository-level enable
 switch, refuses an existing version, builds cleanly twice, requires equal
-digests and pushes a third identical build. All three explicitly disable
-BuildKit's default/embedded attestations so execution-specific manifests do
-not contaminate the reproducibility comparison. The workflow then scans the
-exact digest and creates independent SPDX plus GitHub provenance/SBOM
-attestations and signs with Cosign 3.1.3 keyless OIDC. The job explicitly sets
-and re-reads GHCR package visibility as `private`.
+digests and pushes a third identical build. All three use the same
+`SOURCE_DATE_EPOCH` and `rewrite-timestamp=true` exporter contract and
+explicitly disable BuildKit's default/embedded attestations so execution-
+specific manifests or unnormalized layer timestamps do not contaminate the
+digest comparison. The workflow then scans the exact digest and creates
+independent SPDX plus GitHub provenance/SBOM attestations and signs with Cosign
+3.1.3 keyless OIDC. The job explicitly sets and re-reads GHCR package
+visibility as `private`.
 
 The non-publishing build-evidence workflows scan their OCI archives by
 extracting each one to a private temporary layout, validating `oci-layout` and

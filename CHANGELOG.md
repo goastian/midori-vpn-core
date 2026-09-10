@@ -65,6 +65,9 @@
   are scanned/attested/signed by digest, and feed a checksum-closed secret-free
   host bundle into a separately approved deployment gate that patches only
   classified `.env` keys and performs backup/isolated-restore plus rollback.
+- Applied the same `rewrite-timestamp` exporter contract to the registry push
+  as both clean OCI builds, so the published manifest must be byte-identical
+  before privacy, scanning, attestations and signing can proceed.
 - Added the canonical openSUSE deployment toolkit: allowlisted atomic `.env`
   updates, immutable digest-only principal/regional Quadlets, isolated service
   credentials, rootless MASQUE port translation, exact firewalld/Nginx ingress,
