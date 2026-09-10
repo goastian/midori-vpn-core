@@ -245,8 +245,11 @@ rg -Fq 'name: Publish - tagged private Control OCI candidate' "${ROOT_DIR}/midor
 core_switch_line="$(rg -n -m1 'vars.MIDORIVPN_PRIVATE_CANDIDATE_ENABLED' "${ROOT_DIR}/.github/workflows/publish.yml" | cut -d: -f1)"
 core_private_checkout_line="$(rg -n -m1 'secrets.MIDORIVPN_RELEASE_SOURCE_TOKEN' "${ROOT_DIR}/.github/workflows/publish.yml" | cut -d: -f1)"
 ((core_switch_line < core_private_checkout_line)) || fail "Core reads a private token before validating the candidate switch"
-rg -Fq 'visibility=private' "${ROOT_DIR}/.github/workflows/publish.yml" || fail "Core candidate workflow does not enforce private package visibility"
-rg -Fq 'visibility=private' "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml" || fail "Control candidate workflow does not enforce private package visibility"
+rg -Fq 'gh api /orgs/goastian/packages/container/midori-vpn-core --jq .visibility' "${ROOT_DIR}/.github/workflows/publish.yml" || fail "Core candidate workflow does not verify private package visibility"
+rg -Fq 'gh api /orgs/goastian/packages/container/midori-vpn-control --jq .visibility' "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml" || fail "Control candidate workflow does not verify private package visibility"
+if rg -n 'gh api --method PATCH .*/packages/' "${ROOT_DIR}/.github/workflows/publish.yml" "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml" >/dev/null; then
+  fail "candidate workflow attempts an unsupported package visibility PATCH"
+fi
 [[ "$(rg -Fc 'outputs: type=registry,rewrite-timestamp=true' "${ROOT_DIR}/.github/workflows/publish.yml")" == 1 ]] || fail "Core published exporter does not apply the reproducible timestamp contract exactly once"
 [[ "$(rg -Fc 'outputs: type=registry,rewrite-timestamp=true' "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml")" == 1 ]] || fail "Control published exporter does not apply the reproducible timestamp contract exactly once"
 [[ "$(rg -Fc 'rewrite-timestamp=true' "${ROOT_DIR}/.github/workflows/publish.yml")" == 3 ]] || fail "Core candidate does not normalize all three image exporters"

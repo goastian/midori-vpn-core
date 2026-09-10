@@ -260,12 +260,11 @@ jobs:
           PUSHED_DIGEST: ${{ steps.push.outputs.digest }}
         run: test -n "$PUSHED_DIGEST" && test "$FIRST_DIGEST" = "$PUSHED_DIGEST"
 
-      - name: Force and verify private Core package visibility
+      - name: Verify private Core package visibility
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
-          gh api --method PATCH /orgs/goastian/packages/container/midori-vpn-core -f visibility=private >/dev/null
           test "$(gh api /orgs/goastian/packages/container/midori-vpn-core --jq .visibility)" = private
 
       - name: Scan the exact Core digest and generate independent SPDX

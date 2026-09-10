@@ -92,8 +92,10 @@ explicitly disable BuildKit's default/embedded attestations so execution-
 specific manifests or unnormalized layer timestamps do not contaminate the
 digest comparison. The workflow then scans the exact digest and creates
 independent SPDX plus GitHub provenance/SBOM attestations and signs with Cosign
-3.1.3 keyless OIDC. The job explicitly sets and re-reads GHCR package
-visibility as `private`.
+3.1.3 keyless OIDC. GitHub creates a new package as private; the job queries
+the package after publication and fails unless its effective visibility is
+exactly `private`. The GitHub Packages REST API has no visibility-update
+endpoint, so the workflow does not attempt an unsupported mutation.
 
 The non-publishing build-evidence workflows scan their OCI archives by
 extracting each one to a private temporary layout, validating `oci-layout` and

@@ -11,6 +11,8 @@
 
 ### Security
 
+- Private OCI publishers now verify GHCR's effective package visibility with
+  the supported read endpoint and reject the nonexistent visibility PATCH.
 - Removed metrics from the public Core router and added a dedicated TLS
   1.3/mTLS observability listener. Core verifies both the private client CA and
   an exact Prometheus SPIFFE URI SAN; regional deployment rejects client keys
