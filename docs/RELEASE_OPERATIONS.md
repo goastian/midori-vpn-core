@@ -90,9 +90,11 @@ digests and pushes a third identical build. All three use the same
 `SOURCE_DATE_EPOCH` and `rewrite-timestamp=true` exporter contract and
 explicitly disable BuildKit's default/embedded attestations so execution-
 specific manifests or unnormalized layer timestamps do not contaminate the
-digest comparison. The workflow then scans the exact digest and creates
-independent SPDX plus GitHub provenance/SBOM attestations and signs with Cosign
-3.1.3 keyless OIDC. GitHub creates a new package as private; the job queries
+digest comparison. The workflow then scans the exact digest and uses Cosign
+3.1.3 keyless OIDC to sign it and attach independently generated SLSA v1
+provenance plus SPDX attestations as private OCI referrers. It immediately
+verifies all three records against the exact tag-bound workflow identity.
+GitHub creates a new package as private; the job queries
 the package after publication and fails unless its effective visibility is
 exactly `private`. The GitHub Packages REST API has no visibility-update
 endpoint, so the workflow does not attempt an unsupported mutation.
@@ -125,8 +127,10 @@ with the job-scoped `GITHUB_TOKEN` before publishing Core.
 
 The bundle stores the exact pull tags and their expected digests separately.
 The workflow file, Actions and scanner are pinned to full commits or image
-digests. It has `packages`, `id-token`, `attestations` and artifact metadata
-write access only inside the candidate publication job. Neither workflow
+digests. Candidate jobs use only `packages: write`, `id-token: write` and
+`contents: read`; they do not request GitHub artifact-attestation permissions,
+which are unavailable for private repositories on the current organization
+plan. Neither workflow
 creates a GitHub Release or changes package visibility to public.
 
 ## Protected deployment environment
@@ -149,7 +153,7 @@ Configure these Secrets:
 - `MIDORIVPN_DEPLOY_SSH_KNOWN_HOSTS`
 - `MIDORIVPN_GHCR_PULL_TOKEN`, scoped only to read the two private packages
 - `MIDORIVPN_PRIVATE_RELEASE_TOKEN`, scoped to read the private Core workflow
-  artifact and the two private repositories' attestations
+  artifact; OCI attestations are read with the separate GHCR pull credential
 - `MIDORIVPN_DEPLOY_SECRETS`, a newline-delimited dotenv fragment containing
   only keys classified as `secret`
 
@@ -205,7 +209,7 @@ bash scripts/release/verify-oci-release.sh control \
   release.json workspace-manifest.json
 ```
 
-The verifier requires Cosign 3.1.3 and a current GitHub CLI. It checks the
+The verifier requires Cosign 3.1.3. It checks the
 exact private `publish.yml@refs/tags/<git_tag>` certificate identity, GitHub's
 OIDC issuer, coordinated commit/version labels, SLSA provenance and SPDX 2.3
 SBOM attestations.

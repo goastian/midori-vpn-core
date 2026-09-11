@@ -110,8 +110,6 @@ jobs:
           cosign-release: v3.1.3
 
       - name: Resolve tags and verify signatures, provenance and SBOM
-        env:
-          GH_TOKEN: ${{ secrets.MIDORIVPN_PRIVATE_RELEASE_TOKEN }}
         run: |
           set -Eeuo pipefail
           CONTAINER_ENGINE=docker bash "$BUNDLE_DIR/scripts/release/resolve-runtime-images.sh" \

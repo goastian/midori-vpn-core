@@ -225,7 +225,13 @@ for private_candidate_workflow in "${ROOT_DIR}/.github/workflows/publish.yml" "$
   [[ "$(rg -Fc 'BUILDX_NO_DEFAULT_ATTESTATIONS: 1' "${private_candidate_workflow}")" == 1 ]] || fail "candidate workflow does not disable default BuildKit attestations: ${private_candidate_workflow}"
   [[ "$(rg -Fc 'provenance: false' "${private_candidate_workflow}")" == 3 ]] || fail "candidate workflow does not disable embedded provenance on all three builds: ${private_candidate_workflow}"
   [[ "$(rg -Fc 'sbom: false' "${private_candidate_workflow}")" == 3 ]] || fail "candidate workflow does not disable embedded SBOM on all three builds: ${private_candidate_workflow}"
-  [[ "$(rg -Fc 'uses: actions/attest@' "${private_candidate_workflow}")" == 2 ]] || fail "candidate workflow lost independent GitHub provenance or SBOM attestation: ${private_candidate_workflow}"
+  [[ "$(rg -Fc 'cosign attest --yes' "${private_candidate_workflow}")" == 2 ]] || fail "candidate workflow lost independent Cosign provenance or SBOM attestation: ${private_candidate_workflow}"
+  [[ "$(rg -Fc 'cosign verify-attestation' "${private_candidate_workflow}")" -ge 2 ]] || fail "candidate workflow does not immediately verify both Cosign attestations: ${private_candidate_workflow}"
+  [[ "$(rg -Fc -- '--type slsaprovenance1' "${private_candidate_workflow}")" -ge 2 ]] || fail "candidate workflow does not type SLSA v1 attestation and verification explicitly: ${private_candidate_workflow}"
+  [[ "$(rg -Fc -- '--type spdxjson' "${private_candidate_workflow}")" -ge 2 ]] || fail "candidate workflow does not type SPDX attestation and verification explicitly: ${private_candidate_workflow}"
+  if rg -n 'uses: actions/attest@|gh attestation verify|artifact-metadata:|attestations:' "${private_candidate_workflow}" >/dev/null; then
+    fail "private candidate workflow depends on GitHub artifact attestations unavailable on the organization plan: ${private_candidate_workflow}"
+  fi
   [[ "$(rg -Fc -- '-e DOCKER_CONFIG=/auth' "${private_candidate_workflow}")" == 1 ]] || fail "candidate Syft scan does not declare its private registry credential directory: ${private_candidate_workflow}"
   [[ "$(rg -Fc '${HOME}/.docker/config.json:/auth/config.json:ro' "${private_candidate_workflow}")" == 1 ]] || fail "candidate Syft scan does not mount private registry credentials at the declared path: ${private_candidate_workflow}"
   if rg -n 'provenance: mode=max|sbom: true' "${private_candidate_workflow}" >/dev/null; then
@@ -270,9 +276,14 @@ fi
 [[ "$(rg -Fc 'password: ${{ secrets.MIDORIVPN_RELEASE_READ_TOKEN }}' "${ROOT_DIR}/.github/workflows/publish.yml")" == 1 ]] || fail "private Control pull does not use the dedicated package read token"
 [[ "$(rg -Fc 'username: ${{ vars.MIDORIVPN_RELEASE_READ_USER }}' "${ROOT_DIR}/.github/workflows/publish.yml")" == 1 ]] || fail "private Control pull does not use the dedicated read identity"
 [[ "$(rg -Fc 'password: ${{ secrets.GITHUB_TOKEN }}' "${ROOT_DIR}/.github/workflows/publish.yml")" == 1 ]] || fail "Core publication does not restore its job-scoped registry credential"
-[[ "$(rg -Fc -- '--bundle-from-oci' "${ROOT_DIR}/.github/workflows/publish.yml")" == 4 ]] || fail "candidate attestations are not verified from the authenticated OCI registry"
-[[ "$(rg -Fc -- '--bundle-from-oci' "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml")" == 2 ]] || fail "Control attestations are not verified from the authenticated OCI registry"
-[[ "$(rg -Fc -- '--bundle-from-oci' "${ROOT_DIR}/scripts/release/verify-oci-release.sh")" == 2 ]] || fail "host attestations are not verified from the authenticated OCI registry"
+[[ "$(rg -Fc 'cosign verify-attestation' "${ROOT_DIR}/.github/workflows/publish.yml")" == 4 ]] || fail "Core candidate does not verify both Control and Core OCI attestations"
+[[ "$(rg -Fc 'cosign verify-attestation' "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml")" == 2 ]] || fail "Control candidate does not verify both OCI attestations"
+[[ "$(rg -Fc 'cosign verify-attestation' "${ROOT_DIR}/scripts/release/verify-oci-release.sh")" == 2 ]] || fail "host verifier does not verify both OCI attestations"
+[[ "$(rg -Fc -- '--type slsaprovenance1' "${ROOT_DIR}/scripts/release/verify-oci-release.sh")" == 1 ]] || fail "host verifier does not require the SLSA v1 predicate type"
+[[ "$(rg -Fc -- '--type spdxjson' "${ROOT_DIR}/scripts/release/verify-oci-release.sh")" == 1 ]] || fail "host verifier does not require the SPDX JSON predicate type"
+if rg -n 'gh attestation verify' "${ROOT_DIR}/.github/workflows/publish.yml" "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml" "${ROOT_DIR}/scripts/release/verify-oci-release.sh" >/dev/null; then
+  fail "release verification still depends on GitHub artifact attestation storage"
+fi
 rg -Fq 'resolve-runtime-images.sh' "${ROOT_DIR}/.github/workflows/deploy.yml" || fail "deploy controller does not lock pulled tags"
 rg -Fq -- '--image-lock' "${ROOT_DIR}/.github/workflows/deploy.yml" || fail "deploy controller does not transfer the runtime lock"
 rg -Fq 'DEPLOY_SERVICE_USER: ${{ vars.MIDORIVPN_DEPLOY_SERVICE_USER }}' "${ROOT_DIR}/.github/workflows/deploy.yml" || fail "deploy controller does not expose the rootless service user"

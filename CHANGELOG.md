@@ -11,6 +11,9 @@
 
 ### Security
 
+- Private Core and Control candidates now use keyless Cosign OCI attestations
+  for SLSA v1 provenance and SPDX, with immediate identity-bound verification,
+  instead of GitHub's plan-restricted private artifact-attestation API.
 - Pinned Syft scans now consume the temporary GHCR login through an explicit
   read-only `DOCKER_CONFIG` mount when generating SPDX for private images.
 - Private OCI publishers now verify GHCR's effective package visibility with
@@ -120,7 +123,7 @@
   from cluster lifecycle, heartbeat and fleet-revocation work that remains.
 - Added tag-driven private OCI candidate workflows that require coordinated
   annotated semantic tags, keep every package private, and create and verify
-  GitHub attestations plus a keyless Cosign signature by digest. Production
+  keyless Cosign SLSA/SPDX attestations plus a signature by digest. Production
   remains gated independently in the public repository.
 - Added a non-publishing release evidence gate with immutable GitHub Actions,
   a four-repository commit manifest, reproducible OCI inputs, SPDX output and
