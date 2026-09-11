@@ -11,6 +11,8 @@
 
 ### Security
 
+- Pinned Syft scans now consume the temporary GHCR login through an explicit
+  read-only `DOCKER_CONFIG` mount when generating SPDX for private images.
 - Private OCI publishers now verify GHCR's effective package visibility with
   the supported read endpoint and reject the nonexistent visibility PATCH.
 - Removed metrics from the public Core router and added a dedicated TLS

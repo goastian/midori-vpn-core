@@ -274,8 +274,8 @@ jobs:
           set -Eeuo pipefail
           CONTAINER_ENGINE=docker bash scripts/scan-oci.sh image \
             "${CORE_IMAGE}@${IMAGE_DIGEST}" "dist-release/core-${RELEASE_VERSION}.trivy.json"
-          docker run --rm -e SYFT_CACHE_DIR=/tmp/syft-cache \
-            -v "${HOME}/.docker/config.json:/root/.docker/config.json:ro" \
+          docker run --rm -e SYFT_CACHE_DIR=/tmp/syft-cache -e DOCKER_CONFIG=/auth \
+            -v "${HOME}/.docker/config.json:/auth/config.json:ro" \
             -v "${PWD}/dist-release:/artifacts" \
             ghcr.io/anchore/syft@sha256:41f8289664101d6ebab30a97ac8df6b6f86b92d8343285ca90f428e2bc353106 \
             scan "registry:${CORE_IMAGE}@${IMAGE_DIGEST}" \

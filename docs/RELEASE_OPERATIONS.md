@@ -96,6 +96,9 @@ independent SPDX plus GitHub provenance/SBOM attestations and signs with Cosign
 the package after publication and fails unless its effective visibility is
 exactly `private`. The GitHub Packages REST API has no visibility-update
 endpoint, so the workflow does not attempt an unsupported mutation.
+The pinned Syft container receives the job's temporary Docker credential file
+through a read-only `/auth/config.json` mount and `DOCKER_CONFIG=/auth`; this is
+required for direct digest scans of private GHCR images.
 
 The non-publishing build-evidence workflows scan their OCI archives by
 extracting each one to a private temporary layout, validating `oci-layout` and

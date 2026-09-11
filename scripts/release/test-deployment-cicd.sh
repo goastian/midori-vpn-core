@@ -226,6 +226,8 @@ for private_candidate_workflow in "${ROOT_DIR}/.github/workflows/publish.yml" "$
   [[ "$(rg -Fc 'provenance: false' "${private_candidate_workflow}")" == 3 ]] || fail "candidate workflow does not disable embedded provenance on all three builds: ${private_candidate_workflow}"
   [[ "$(rg -Fc 'sbom: false' "${private_candidate_workflow}")" == 3 ]] || fail "candidate workflow does not disable embedded SBOM on all three builds: ${private_candidate_workflow}"
   [[ "$(rg -Fc 'uses: actions/attest@' "${private_candidate_workflow}")" == 2 ]] || fail "candidate workflow lost independent GitHub provenance or SBOM attestation: ${private_candidate_workflow}"
+  [[ "$(rg -Fc -- '-e DOCKER_CONFIG=/auth' "${private_candidate_workflow}")" == 1 ]] || fail "candidate Syft scan does not declare its private registry credential directory: ${private_candidate_workflow}"
+  [[ "$(rg -Fc '${HOME}/.docker/config.json:/auth/config.json:ro' "${private_candidate_workflow}")" == 1 ]] || fail "candidate Syft scan does not mount private registry credentials at the declared path: ${private_candidate_workflow}"
   if rg -n 'provenance: mode=max|sbom: true' "${private_candidate_workflow}" >/dev/null; then
     fail "candidate workflow still mixes embedded attestations into its reproducible digest: ${private_candidate_workflow}"
   fi

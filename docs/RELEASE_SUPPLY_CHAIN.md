@@ -9,9 +9,9 @@ trees whose exact commits are recorded; working branches are not release refs.
 
 All components use product version `2.0.0`. Release candidates add a separate
 release suffix. `v2.0.0-rc.1` is retained as a failed, unpublished Control
-candidate; `v2.0.0-rc.2` and `v2.0.0-rc.3` are failed partial Control
-candidates and are never reused. The next coordinated attempt is
-`v2.0.0-rc.4`. A release is incomplete unless every
+candidate; `v2.0.0-rc.2`, `v2.0.0-rc.3` and `v2.0.0-rc.4` are failed partial
+Control candidates and are never reused. The next coordinated attempt is
+`v2.0.0-rc.5`. A release is incomplete unless every
 applicable evidence file is produced from the same source revision.
 
 | Component | Primary artifact | Required evidence | Signing authority |
