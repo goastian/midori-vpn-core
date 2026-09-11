@@ -126,6 +126,9 @@ the source token needs no Attestations permission. The workflow logs in again
 with the job-scoped `GITHUB_TOKEN` before publishing Core.
 
 The bundle stores the exact pull tags and their expected digests separately.
+Its adjacent `.tar.gz.sha256` names the archive by basename, allowing the pair
+to be downloaded into any private staging directory and verified there without
+retaining the workflow's original `dist-release/` path.
 The workflow file, Actions and scanner are pinned to full commits or image
 digests. Candidate jobs use only `packages: write`, `id-token: write` and
 `contents: read`; they do not request GitHub artifact-attestation permissions,

@@ -124,7 +124,11 @@ archive="${output_dir}.tar.gz"
 tar --sort=name --format=posix --mtime="@${epoch}" --owner=0 --group=0 --numeric-owner \
   --pax-option=delete=atime,delete=ctime -C "${parent}" -cf - "$(basename -- "${output_dir}")" |
   gzip -n -9 > "${archive}"
-sha256sum "${archive}" > "${archive}.sha256"
+archive_name="$(basename -- "${archive}")"
+(
+  cd -- "${parent}"
+  sha256sum "${archive_name}" > "${archive_name}.sha256"
+)
 chmod 0600 "${archive}" "${archive}.sha256"
 trap - EXIT
 rm -rf -- "${staging}"

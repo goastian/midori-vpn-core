@@ -59,6 +59,9 @@
 
 ### Operations
 
+- Deployment bundles now write their external checksum against the archive
+  basename, so verification survives GitHub Actions' flat artifact-download
+  layout before any SSH or host mutation.
 - Added a single production deployment runbook covering private candidate
   inputs, the protected public deployment gate, principal/regional installation,
   the rootless/rootful boundary, partial environment updates, upgrades,

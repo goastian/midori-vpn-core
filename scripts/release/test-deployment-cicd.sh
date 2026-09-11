@@ -139,6 +139,12 @@ bash "${ROOT_DIR}/scripts/release/create-deployment-bundle.sh" \
   --output-dir "${tmp}/two/midorivpn-${release_version}" >/dev/null
 cmp --silent "${tmp}/one/midorivpn-${release_version}.tar.gz" "${tmp}/two/midorivpn-${release_version}.tar.gz" || fail "deployment bundle is not reproducible"
 (cd "${tmp}/one" && sha256sum --check "midorivpn-${release_version}.tar.gz.sha256" >/dev/null) || fail "bundle checksum is invalid"
+checksum_target="$(awk 'NR == 1 {print $2}' "${tmp}/one/midorivpn-${release_version}.tar.gz.sha256")"
+[[ "${checksum_target}" == "midorivpn-${release_version}.tar.gz" ]] || fail "bundle checksum is not portable by basename"
+mkdir -p "${tmp}/flat-download"
+install -m 0600 "${tmp}/one/midorivpn-${release_version}.tar.gz" \
+  "${tmp}/one/midorivpn-${release_version}.tar.gz.sha256" "${tmp}/flat-download/"
+(cd "${tmp}/flat-download" && sha256sum --check "midorivpn-${release_version}.tar.gz.sha256" >/dev/null) || fail "bundle checksum fails after a flat artifact download"
 if rg -n 'a-secret-value|another-secret-value|-----BEGIN (OPENSSH|PRIVATE) KEY-----' "${tmp}/one/midorivpn-${release_version}" >/dev/null; then
   fail "deployment bundle contains secret material"
 fi
