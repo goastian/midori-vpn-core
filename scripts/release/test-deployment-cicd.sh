@@ -131,6 +131,16 @@ if MIDORIVPN_WORKSPACE_ROOT="${workspace}" bash "${ROOT_DIR}/scripts/release/ver
 fi
 
 mkdir -p "${tmp}/one" "${tmp}/two"
+mkdir -p "${tmp}/without-grep"
+for command_name in dirname jq tar gzip sha256sum; do
+  ln -s "$(command -v "${command_name}")" "${tmp}/without-grep/${command_name}"
+done
+if PATH="${tmp}/without-grep" /bin/bash "${ROOT_DIR}/scripts/release/create-deployment-bundle.sh" \
+  --manifest "${tmp}/workspace-manifest.json" --core-digest "${digest_a}" --control-digest "${digest_b}" \
+  --output-dir "${tmp}/missing-grep/midorivpn-${release_version}" >"${tmp}/missing-grep.log" 2>&1; then
+  fail "deployment bundle generation accepted a missing secret scanner"
+fi
+grep -Fq 'grep is required' "${tmp}/missing-grep.log" || fail "missing secret scanner did not fail closed"
 bash "${ROOT_DIR}/scripts/release/create-deployment-bundle.sh" \
   --manifest "${tmp}/workspace-manifest.json" --core-digest "${digest_a}" --control-digest "${digest_b}" \
   --output-dir "${tmp}/one/midorivpn-${release_version}" >/dev/null
@@ -148,6 +158,7 @@ install -m 0600 "${tmp}/one/midorivpn-${release_version}.tar.gz" \
 if rg -n 'a-secret-value|another-secret-value|-----BEGIN (OPENSSH|PRIVATE) KEY-----' "${tmp}/one/midorivpn-${release_version}" >/dev/null; then
   fail "deployment bundle contains secret material"
 fi
+rg -Fq 'grep -RIn --exclude=SHA256SUMS' "${ROOT_DIR}/scripts/release/create-deployment-bundle.sh" || fail "bundle secret scan is not runner-portable"
 jq -e '.schema_version == 2 and .product_version == "2.0.0" and .release_version == "2.0.0-rc.1" and .git_tag == "v2.0.0-rc.1" and .images.core.pull_ref == "ghcr.io/goastian/midori-vpn-core:2.0.0-rc.1" and .images.core.digest == "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
   "${tmp}/one/midorivpn-${release_version}/release.json" >/dev/null || fail "bundle release metadata is incomplete"
 [[ -f "${tmp}/one/midorivpn-${release_version}/docs/PRODUCTION_DEPLOYMENT.md" ]] || fail "bundle lacks the production runbook"

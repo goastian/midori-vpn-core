@@ -113,6 +113,9 @@ attestations before publishing Core. It then creates a deterministic bundle
 containing host scripts/templates, public operator documentation, four commits,
 two OCI digests, database schema compatibility and checksums. It contains no
 deployment values, pull token, SSH key or application secret.
+Bundle generation requires the runner's standard `grep` command and treats a
+missing scanner or any scan error as fatal; a successful publication therefore
+cannot silently skip the private-key/token check.
 
 Both read-only credentials must be available as repository- or
 organization-level Actions secrets because Core validates tags before any
