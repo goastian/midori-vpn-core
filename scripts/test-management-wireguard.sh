@@ -30,7 +30,7 @@ printf '%s\n' "\$*" >> '${test_root}/firewall.log'
 case "\$*" in
   *--get-zones*)
     printf 'public'
-    [[ ! -f '${test_root}/zone-created' ]] || printf ' midorivpn-management'
+    [[ ! -f '${test_root}/zone-created' ]] || printf ' midorivpn-mgmt'
     printf '\n'
     ;;
   *--new-zone=*) touch '${test_root}/zone-created' ;;
@@ -82,6 +82,7 @@ PATH="${stub_dir}:${PATH}" bash "${ROOT}/deploy/host/rollback-management-wiregua
 [[ ! -e /etc/wireguard/mvpn-mgmt.conf ]] || fail 'rollback retained active configuration'
 [[ -f /etc/wireguard/mvpn-mgmt/private.key ]] || fail 'rollback destroyed retained identity'
 grep -Fq -- '--add-interface=mvpn-mgmt' "${test_root}/firewall.log" || fail 'management firewalld binding missing'
+grep -Fq -- '--new-zone=midorivpn-mgmt' "${test_root}/firewall.log" || fail 'management firewalld zone name is not portable'
 grep -Fq -- '--add-port=8443/tcp' "${test_root}/firewall.log" || fail 'management TLS rule missing'
 
 printf 'Management WireGuard tests passed.\n'

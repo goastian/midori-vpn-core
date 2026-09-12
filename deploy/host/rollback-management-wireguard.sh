@@ -9,6 +9,7 @@ role="${1:-}"
 listen_port="${2:-}"
 public_zone="${3:-public}"
 interface=mvpn-mgmt
+management_zone=midorivpn-mgmt
 ownership_record=/etc/wireguard/mvpn-mgmt/installed.env
 
 [[ "${role}" == principal || "${role}" == regional ]] || host_die "usage: $0 principal|regional LISTEN_PORT [PUBLIC_ZONE]"
@@ -24,9 +25,9 @@ grep -Fqx "public_zone=${public_zone}" "${ownership_record}" || host_die "rollba
 
 systemctl disable --now "wg-quick@${interface}.service" >/dev/null 2>&1 || true
 rm -f -- "/etc/wireguard/${interface}.conf"
-if firewall-cmd --permanent --get-zones | tr ' ' '\n' | grep -Fxq midorivpn-management; then
-  firewall-cmd --permanent --zone=midorivpn-management --remove-interface="${interface}" >/dev/null 2>&1 || true
-  firewall-cmd --permanent --delete-zone=midorivpn-management >/dev/null
+if firewall-cmd --permanent --get-zones | tr ' ' '\n' | grep -Fxq "${management_zone}"; then
+  firewall-cmd --permanent --zone="${management_zone}" --remove-interface="${interface}" >/dev/null 2>&1 || true
+  firewall-cmd --permanent --delete-zone="${management_zone}" >/dev/null
 fi
 if [[ "${role}" == regional ]]; then
   firewall-cmd --permanent --zone="${public_zone}" --remove-port="${listen_port}/udp" >/dev/null 2>&1 || true

@@ -13,6 +13,7 @@ endpoint=""
 peer_public_key_file=""
 preshared_key_file=""
 public_zone=public
+management_zone=midorivpn-mgmt
 interface=mvpn-mgmt
 state_dir=/etc/wireguard/mvpn-mgmt
 config_path=/etc/wireguard/mvpn-mgmt.conf
@@ -133,7 +134,7 @@ if [[ -e "${config_path}" || -e "${ownership_record}" ]]; then
   fresh_install=false
 fi
 if [[ "${fresh_install}" == true ]]; then
-  firewall-cmd --permanent --get-zones | tr ' ' '\n' | grep -Fxq midorivpn-management && host_die "firewalld zone midorivpn-management already exists"
+  firewall-cmd --permanent --get-zones | tr ' ' '\n' | grep -Fxq "${management_zone}" && host_die "firewalld zone ${management_zone} already exists"
   if [[ "${role}" == regional ]]; then
     firewall-cmd --permanent --zone="${public_zone}" --query-port="${listen_port}/udp" >/dev/null && host_die "management UDP port already exists in ${public_zone}"
   fi
@@ -144,8 +145,8 @@ rollback_failed_apply() {
   if [[ "${fresh_install}" == true ]]; then
     systemctl disable --now "wg-quick@${interface}.service" >/dev/null 2>&1
     rm -f -- "${config_path}" "${ownership_record}"
-    firewall-cmd --permanent --zone=midorivpn-management --remove-interface="${interface}" >/dev/null 2>&1
-    firewall-cmd --permanent --delete-zone=midorivpn-management >/dev/null 2>&1
+    firewall-cmd --permanent --zone="${management_zone}" --remove-interface="${interface}" >/dev/null 2>&1
+    firewall-cmd --permanent --delete-zone="${management_zone}" >/dev/null 2>&1
     if [[ "${role}" == regional ]]; then
       firewall-cmd --permanent --zone="${public_zone}" --remove-port="${listen_port}/udp" >/dev/null 2>&1
     fi
@@ -159,12 +160,12 @@ if [[ "${fresh_install}" == true ]]; then
   install -m 0600 "${temporary_config}" "${config_path}"
   printf 'role=%s\nlisten_port=%s\npublic_zone=%s\n' "${role}" "${listen_port}" "${public_zone}" > "${ownership_record}"
   chmod 0600 "${ownership_record}"
-  firewall-cmd --permanent --new-zone=midorivpn-management >/dev/null
+  firewall-cmd --permanent --new-zone="${management_zone}" >/dev/null
 fi
-firewall-cmd --permanent --zone=midorivpn-management --add-interface="${interface}" >/dev/null
-firewall-cmd --permanent --zone=midorivpn-management --add-port="${management_port}/tcp" >/dev/null
+firewall-cmd --permanent --zone="${management_zone}" --add-interface="${interface}" >/dev/null
+firewall-cmd --permanent --zone="${management_zone}" --add-port="${management_port}/tcp" >/dev/null
 if [[ "${role}" == regional ]]; then
-  firewall-cmd --permanent --zone=midorivpn-management --add-port="${observability_port}/tcp" >/dev/null
+  firewall-cmd --permanent --zone="${management_zone}" --add-port="${observability_port}/tcp" >/dev/null
   firewall-cmd --permanent --zone="${public_zone}" --add-port="${listen_port}/udp" >/dev/null
 fi
 firewall-cmd --reload >/dev/null
