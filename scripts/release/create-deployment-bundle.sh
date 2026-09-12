@@ -32,7 +32,7 @@ done
 for digest in "${core_digest}" "${control_digest}"; do
   [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "image digests must be immutable sha256 values"
 done
-for command_name in jq tar gzip sha256sum; do
+for command_name in jq tar gzip sha256sum grep; do
   command -v "${command_name}" >/dev/null || die "${command_name} is required"
 done
 
@@ -105,10 +105,15 @@ jq -n \
 if find "${payload}" -type l -print -quit | grep -q .; then
   die "deployment bundle may not contain symlinks"
 fi
-if rg -n --hidden --glob '!SHA256SUMS' --glob '!*.template' \
-  -- '-----BEGIN (OPENSSH|PRIVATE) KEY-----|ghp_[A-Za-z0-9]{20,}|github_pat_' "${payload}" >/dev/null; then
-  die "deployment bundle contains private-key or token material"
-fi
+secret_scan_status=0
+grep -RIn --exclude=SHA256SUMS --exclude='*.template' \
+  -- '-----BEGIN \(OPENSSH\|PRIVATE\) KEY-----\|ghp_[A-Za-z0-9]\{20,\}\|github_pat_' \
+  "${payload}" >/dev/null || secret_scan_status=$?
+case "${secret_scan_status}" in
+  0) die "deployment bundle contains private-key or token material" ;;
+  1) ;;
+  *) die "deployment bundle secret scan failed" ;;
+esac
 find "${payload}" -type d -exec chmod 0700 {} +
 find "${payload}" -type f -exec chmod 0600 {} +
 (
@@ -124,7 +129,11 @@ archive="${output_dir}.tar.gz"
 tar --sort=name --format=posix --mtime="@${epoch}" --owner=0 --group=0 --numeric-owner \
   --pax-option=delete=atime,delete=ctime -C "${parent}" -cf - "$(basename -- "${output_dir}")" |
   gzip -n -9 > "${archive}"
-sha256sum "${archive}" > "${archive}.sha256"
+archive_name="$(basename -- "${archive}")"
+(
+  cd -- "${parent}"
+  sha256sum "${archive_name}" > "${archive_name}.sha256"
+)
 chmod 0600 "${archive}" "${archive}.sha256"
 trap - EXIT
 rm -rf -- "${staging}"

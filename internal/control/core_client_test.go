@@ -36,7 +36,9 @@ func useTestCoreServer(t *testing.T, handler http.Handler) (*models.VPNServer, f
 		server.Close()
 		t.Fatal(err)
 	}
-	InitCoreClient(false, true, "")
+	if err := InitCoreClient(false, true, "", ""); err != nil {
+		t.Fatal(err)
+	}
 	coreHTTP = server.Client()
 
 	cleanup := func() {
@@ -50,7 +52,9 @@ func useTestCoreServer(t *testing.T, handler http.Handler) (*models.VPNServer, f
 }
 
 func TestCoreURLAllowedHostsAcceptsOrigins(t *testing.T) {
-	InitCoreClient(false, false, "https://vpn.astian.org,https://de.vpn.astian.org")
+	if err := InitCoreClient(false, false, "https://vpn.astian.org,https://de.vpn.astian.org", ""); err != nil {
+		t.Fatal(err)
+	}
 
 	got, _, err := coreURL(&models.VPNServer{
 		Host: "de.vpn.astian.org",
@@ -109,7 +113,9 @@ func TestCoreDoWithRetrySignsRequest(t *testing.T) {
 }
 
 func TestCoreURLAllowedHostsRejectsUnknownHost(t *testing.T) {
-	InitCoreClient(false, false, "vpn.astian.org,de.vpn.astian.org")
+	if err := InitCoreClient(false, false, "vpn.astian.org,de.vpn.astian.org", ""); err != nil {
+		t.Fatal(err)
+	}
 
 	_, _, err := coreURL(&models.VPNServer{
 		Host: "evil.example",

@@ -219,6 +219,7 @@ func newRouter(cfg *config.Config, mgr *wg.Manager, pool *pgxpool.Pool, jwks *au
 			r.Post("/clusters", ch.AdminCreateCluster)
 			r.Get("/clusters/{clusterID}/nodes", ch.AdminListCoreNodes)
 			r.Post("/clusters/{clusterID}/nodes", ch.AdminCreateCoreNode)
+			r.Patch("/nodes/{nodeID}", ch.AdminUpdateCoreNode)
 			r.Post("/nodes/{nodeID}/enrollment-token", ch.AdminIssueNodeEnrollmentToken)
 			r.Post("/nodes/{nodeID}/revoke", ch.AdminRevokeCoreNode)
 			r.Post("/nodes/{nodeID}/desired-state", ch.AdminCreateDesiredState)

@@ -29,7 +29,7 @@ sudo bash deploy/host/prepare-opensuse.sh --apply --service-user midorivpn
 ```
 
 The apply operation installs Podman, Nginx, firewalld, SELinux utilities and
-rootless networking helpers. It preserves an existing `certbot` installation
+rootless networking helpers plus `wireguard-tools`. It preserves an existing `certbot` installation
 when its Nginx plugin is functional; otherwise it selects the native Certbot
 packages for Leap or Tumbleweed. It verifies a subordinate UID/GID range of at
 least 65,536 IDs, Podman Quadlet, user linger and private directories. It
@@ -44,6 +44,74 @@ sudo bash deploy/host/configure-firewall.sh \
   --env-file /home/midorivpn/.config/midorivpn/midorivpn.env \
   --apply
 ```
+
+### Dedicated management overlay
+
+Create the management link before enrollment or application activation. It is
+a host-level WireGuard interface named `mvpn-mgmt`; it is not the customer VPN.
+Main owns `10.254.240.1/32`, the regional owns `10.254.240.2/32`, and each peer
+accepts only the other `/32`. There is no forwarding, NAT, default route or LAN
+route. The regional listens on one random high UDP port and Main initiates with
+`PersistentKeepalive=25`.
+
+On the regional, generate the two unrelated public transport values once:
+
+```bash
+sudo bash deploy/host/generate-network-values.sh
+```
+
+Store the resulting management UDP port, customer UDP port and opaque
+32-hexadecimal customer endpoint label in the protected inventory. Confirm both
+ports are unused on the regional. The customer endpoint DNS record is DNS-only;
+Cloudflare cannot proxy raw WireGuard UDP.
+
+Prepare host identities without printing private material:
+
+```bash
+sudo bash deploy/host/configure-management-wireguard.sh --prepare --role principal
+sudo bash deploy/host/configure-management-wireguard.sh --prepare --role regional
+```
+
+Exchange only `public.key`. Transfer the principal's `preshared.key` once over
+an authenticated encrypted channel into the regional's private state directory;
+never put it in Git, Actions variables or logs. After recording an independent
+approval for each host, apply the regional first and Main second:
+
+```bash
+sudo bash deploy/host/configure-management-wireguard.sh \
+  --apply --role regional --listen-port PORT \
+  --peer-public-key-file /root/main-public.key \
+  --preshared-key-file /etc/wireguard/mvpn-mgmt/preshared.key
+
+sudo bash deploy/host/configure-management-wireguard.sh \
+  --apply --role principal --listen-port PORT \
+  --endpoint REGIONAL_PUBLIC_IP:PORT \
+  --peer-public-key-file /root/regional-public.key \
+  --preshared-key-file /etc/wireguard/mvpn-mgmt/preshared.key
+```
+
+The installer creates a dedicated firewalld zone: TCP/8443 is management TLS,
+regional TCP/9443 is observability mTLS, and only the regional exposes the
+management UDP port publicly. Validate an authenticated handshake and peer ping
+on each host with `--check`. Rollback removes only the service, generated
+configuration and firewall rules; it deliberately retains cryptographic keys:
+
+```bash
+sudo bash deploy/host/configure-management-wireguard.sh --check --role principal
+sudo bash deploy/host/rollback-management-wireguard.sh regional PORT public
+```
+
+Generate the private management CA on an offline administrative machine:
+
+```bash
+bash deploy/host/generate-management-pki.sh /absolute/new/private-directory
+```
+
+Keep `ca.key` offline. Each host receives `ca.crt` and only its matching
+certificate/key. `configure-nginx.sh` adds a TLS-1.3-only listener bound to the
+host's overlay address. On Main it exposes only `/api/v1/node/`; on the regional
+it exposes only Core health, peer and stats routes. The application trusts this
+CA only through `MANAGEMENT_TLS_CA`; it never modifies system-wide trust.
 
 For rootless MASQUE, `MASQUE_PORT=443` remains the public and container port,
 while `MASQUE_HOST_PORT=8443` is the non-privileged host bind. Firewalld owns
@@ -125,7 +193,8 @@ sudo bash deploy/host/configure-nginx.sh \
   --issue-certificate
 ```
 
-The script renders `deploy/nginx/core-vhost.conf.template`, creates a private
+The script renders the public vhost plus the profile-specific private management
+vhost, creates a private
 snapshot, runs `nginx -t` and restores the former files on failure. Its exact
 `/.well-known/midorivpn/edge-health` location prevents the Control SPA from
 returning HTML for Desktop probes. Validate both local readiness and the public

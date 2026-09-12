@@ -11,6 +11,13 @@
 
 ### Security
 
+- Private Core and Control candidates now use keyless Cosign OCI attestations
+  for SLSA v1 provenance and SPDX, with immediate identity-bound verification,
+  instead of GitHub's plan-restricted private artifact-attestation API.
+- Pinned Syft scans now consume the temporary GHCR login through an explicit
+  read-only `DOCKER_CONFIG` mount when generating SPDX for private images.
+- Private OCI publishers now verify GHCR's effective package visibility with
+  the supported read endpoint and reject the nonexistent visibility PATCH.
 - Removed metrics from the public Core router and added a dedicated TLS
   1.3/mTLS observability listener. Core verifies both the private client CA and
   an exact Prometheus SPIFFE URI SAN; regional deployment rejects client keys
@@ -52,6 +59,12 @@
 
 ### Operations
 
+- Deployment bundles now write their external checksum against the archive
+  basename, so verification survives GitHub Actions' flat artifact-download
+  layout before any SSH or host mutation.
+- Deployment bundle generation now requires its secret scanner explicitly and
+  fails closed on scan errors, including minimal GitHub-hosted runners without
+  Ripgrep.
 - Added a single production deployment runbook covering private candidate
   inputs, the protected public deployment gate, principal/regional installation,
   the rootless/rootful boundary, partial environment updates, upgrades,
@@ -65,6 +78,9 @@
   are scanned/attested/signed by digest, and feed a checksum-closed secret-free
   host bundle into a separately approved deployment gate that patches only
   classified `.env` keys and performs backup/isolated-restore plus rollback.
+- Applied the same `rewrite-timestamp` exporter contract to the registry push
+  as both clean OCI builds, so the published manifest must be byte-identical
+  before privacy, scanning, attestations and signing can proceed.
 - Added the canonical openSUSE deployment toolkit: allowlisted atomic `.env`
   updates, immutable digest-only principal/regional Quadlets, isolated service
   credentials, rootless MASQUE port translation, exact firewalld/Nginx ingress,
@@ -113,7 +129,7 @@
   from cluster lifecycle, heartbeat and fleet-revocation work that remains.
 - Added tag-driven private OCI candidate workflows that require coordinated
   annotated semantic tags, keep every package private, and create and verify
-  GitHub attestations plus a keyless Cosign signature by digest. Production
+  keyless Cosign SLSA/SPDX attestations plus a signature by digest. Production
   remains gated independently in the public repository.
 - Added a non-publishing release evidence gate with immutable GitHub Actions,
   a four-repository commit manifest, reproducible OCI inputs, SPDX output and

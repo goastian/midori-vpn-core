@@ -34,6 +34,8 @@ var (
 	ErrNodeNotEnrolling        = errors.New("core node is not accepting enrollment")
 	ErrNodeIdentityUnavailable = errors.New("core node identity is unavailable")
 	ErrNodeIdentityConflict    = errors.New("core node identity is already assigned")
+	ErrNodeNotFound            = errors.New("core node not found")
+	ErrNodeManagementImmutable = errors.New("core node management host is immutable after enrollment")
 	ErrNodeRevoked             = errors.New("core node or cluster is revoked")
 	ErrClusterUnavailable      = errors.New("cluster cannot accept Core nodes")
 	ErrDesiredRevisionConflict = errors.New("desired state revision conflicts with the current sequence")
@@ -296,6 +298,48 @@ func (r *MulticlusterRepo) CreateNode(ctx context.Context, node *models.CoreNode
 		return ErrClusterUnavailable
 	}
 	return err
+}
+
+// UpdateUnenrolledNodeManagementHost permits correcting bootstrap inventory
+// without mutating the network identity of an enrolled node.
+func (r *MulticlusterRepo) UpdateUnenrolledNodeManagementHost(ctx context.Context, nodeID uuid.UUID, managementHost string) (*models.CoreNode, error) {
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("begin Core node management update: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var node models.CoreNode
+	var enrolled bool
+	if err := tx.QueryRow(ctx, `
+		SELECT id, cluster_id, name, management_host, state, core_version,
+		       identity_public_key IS NOT NULL, enrolled_at, last_seen_at,
+		       created_at, updated_at
+		FROM core_nodes WHERE id = $1 FOR UPDATE`, nodeID).Scan(
+		&node.ID, &node.ClusterID, &node.Name, &node.ManagementHost, &node.State,
+		&node.CoreVersion, &enrolled, &node.EnrolledAt, &node.LastSeenAt,
+		&node.CreatedAt, &node.UpdatedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNodeNotFound
+		}
+		return nil, fmt.Errorf("lock Core node management host: %w", err)
+	}
+	if enrolled || node.State != models.ClusterStateEnrolling {
+		return nil, ErrNodeManagementImmutable
+	}
+	if err := tx.QueryRow(ctx, `
+		UPDATE core_nodes
+		SET management_host = $2, updated_at = NOW()
+		WHERE id = $1
+		RETURNING management_host, updated_at`, nodeID, managementHost).Scan(
+		&node.ManagementHost, &node.UpdatedAt,
+	); err != nil {
+		return nil, fmt.Errorf("update Core node management host: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit Core node management update: %w", err)
+	}
+	return &node, nil
 }
 
 // IssueEnrollmentToken returns the only plaintext copy of a bounded one-use

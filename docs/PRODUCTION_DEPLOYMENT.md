@@ -70,6 +70,15 @@ metrics must never be public. Nginx is the public TCP/TLS boundary. Grafana and
 Prometheus bind only to loopback; regional TCP/9443 is restricted to the
 private management path from the principal.
 
+All principal-to-regional management uses the dedicated host interface
+`mvpn-mgmt` (`10.254.240.1/32` to `10.254.240.2/32`). Enrollment, heartbeat,
+desired state, Core peer operations and Prometheus traffic must not use the
+regional's public hostname. TLS on private TCP/8443 uses the offline management
+CA and remains verified; observability keeps its independent client-authenticated
+TLS policy on TCP/9443. The customer WireGuard endpoint uses an unrelated
+DNS-only 128-bit random label and UDP port. That opaque name reduces automated
+noise but is not an authentication or confidentiality control.
+
 ## Release and deployment flow
 
 The immutable release flow is:

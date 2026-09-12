@@ -157,6 +157,12 @@ OBSERVABILITY_TLS_CERT=/etc/midorivpn/observability/server.crt
 OBSERVABILITY_TLS_KEY=/etc/midorivpn/observability/server.key
 OBSERVABILITY_CLIENT_CA=/etc/midorivpn/observability/ca.crt
 OBSERVABILITY_ALLOWED_CLIENT_URI=spiffe://midorivpn/observability/prometheus
+MANAGEMENT_HOST_BIND=10.254.240.1
+MANAGEMENT_PEER_ADDRESS=10.254.240.2
+MANAGEMENT_HTTPS_PORT=8443
+MANAGEMENT_TLS_CERT=/etc/midorivpn/management/server.crt
+MANAGEMENT_TLS_KEY=/etc/midorivpn/management/server.key
+MANAGEMENT_TLS_CA=/etc/midorivpn/management/ca.crt
 WS_MAX_GLOBAL=1000
 WS_MAX_FREE=2
 WS_MAX_BASIC=5
@@ -185,6 +191,8 @@ fi
 assert_contains "${rendered}/rootless/env/grafana.env" 'GF_SECURITY_ADMIN_USER=admin'
 assert_contains "${rendered}/rootless/env/grafana.env" 'GF_SECURITY_ADMIN_PASSWORD=grafana-secret-strong'
 grep -Fq "Image=registry.example.test/midori/core:${tag_a}" "${rendered}/rootless/midorivpn-core.container" || fail "Core version tag missing"
+assert_contains "${rendered}/rootless/env/core.env" 'MANAGEMENT_TLS_CA=/etc/midorivpn/management/ca.crt'
+grep -Fq 'Volume=/etc/midorivpn/management/ca.crt:/etc/midorivpn/management/ca.crt:ro,z' "${rendered}/rootless/midorivpn-core.container" || fail "management CA is not mounted read-only"
 quadlet_bin=''
 for candidate in /usr/libexec/podman/quadlet /usr/lib/podman/quadlet; do
   if [[ -x "${candidate}" ]]; then
@@ -292,6 +300,12 @@ OBSERVABILITY_TLS_CERT=/etc/midorivpn/observability/server.crt
 OBSERVABILITY_TLS_KEY=/etc/midorivpn/observability/server.key
 OBSERVABILITY_CLIENT_CA=/etc/midorivpn/observability/ca.crt
 OBSERVABILITY_ALLOWED_CLIENT_URI=spiffe://midorivpn/observability/prometheus
+MANAGEMENT_HOST_BIND=10.254.240.2
+MANAGEMENT_PEER_ADDRESS=10.254.240.1
+MANAGEMENT_HTTPS_PORT=8443
+MANAGEMENT_TLS_CERT=/etc/midorivpn/management/server.crt
+MANAGEMENT_TLS_KEY=/etc/midorivpn/management/server.key
+MANAGEMENT_TLS_CA=/etc/midorivpn/management/ca.crt
 OPENVPN_ENABLED=false
 IKEV2_ENABLED=false
 EOF

@@ -1004,6 +1004,20 @@ paths:
         '401': {$ref: '#/components/responses/Unauthorized'}
         '403': {$ref: '#/components/responses/Forbidden'}
         '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/admin/nodes/{nodeID}:
+    parameters:
+      - {$ref: '#/components/parameters/NodeID'}
+    patch:
+      operationId: updateAdminCoreNode
+      tags: [Administration, Node plane]
+      requestBody: {$ref: '#/components/requestBodies/CoreNodeUpdate'}
+      responses:
+        '200': {$ref: '#/components/responses/OK'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
   /api/v1/admin/nodes/{nodeID}/revoke:
     parameters:
       - {$ref: '#/components/parameters/NodeID'}
@@ -2253,6 +2267,12 @@ components:
       properties:
         name: {type: string, pattern: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'}
         management_host: {type: string, minLength: 1, maxLength: 253}
+    CoreNodeUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [management_host]
+      properties:
+        management_host: {type: string, minLength: 1, maxLength: 253, pattern: '^[^[:space:]/?#@]+$'}
     NodeEnrollmentTokenIssueRequest:
       type: object
       additionalProperties: false
@@ -2308,6 +2328,7 @@ components:
     NodeHeartbeat: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/NodeHeartbeatRequest'}}}}
     ClusterCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ClusterCreateRequest'}}}}
     CoreNodeCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CoreNodeCreateRequest'}}}}
+    CoreNodeUpdate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/CoreNodeUpdateRequest'}}}}
     NodeEnrollmentTokenIssue: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/NodeEnrollmentTokenIssueRequest'}}}}
     DesiredStateCreate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/DesiredStateCreateRequest'}}}}
     ExtensionOriginUpdate: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/ExtensionOriginUpdateRequest'}}}}

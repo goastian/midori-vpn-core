@@ -9,14 +9,15 @@ trees whose exact commits are recorded; working branches are not release refs.
 
 All components use product version `2.0.0`. Release candidates add a separate
 release suffix. `v2.0.0-rc.1` is retained as a failed, unpublished Control
-candidate; the next coordinated attempt is `v2.0.0-rc.2`. A release is
-incomplete unless every
+candidate; `v2.0.0-rc.2` through `v2.0.0-rc.5` are failed partial Control
+candidates and are never reused. The next coordinated attempt is
+`v2.0.0-rc.6`. A release is incomplete unless every
 applicable evidence file is produced from the same source revision.
 
 | Component | Primary artifact | Required evidence | Signing authority |
 |---|---|---|---|
-| Core | `ghcr.io/goastian/midori-vpn-core:<release_version>` plus its resolved immutable digest | independent SPDX JSON SBOM, GitHub SLSA provenance and SBOM attestations, SHA-256 digest | private `midori-vpn-core-dev` GitHub Actions OIDC identity and Cosign |
-| Control | `ghcr.io/goastian/midori-vpn-control:<release_version>` plus its resolved immutable digest | independent SPDX JSON SBOM, GitHub SLSA provenance and SBOM attestations, SHA-256 digest | private `midori-vpn-control-dev` GitHub Actions OIDC identity and Cosign |
+| Core | `ghcr.io/goastian/midori-vpn-core:<release_version>` plus its resolved immutable digest | independent SPDX JSON SBOM, Cosign SLSA v1 and SPDX OCI attestations, SHA-256 digest | private `midori-vpn-core-dev` GitHub Actions OIDC identity and Cosign |
+| Control | `ghcr.io/goastian/midori-vpn-control:<release_version>` plus its resolved immutable digest | independent SPDX JSON SBOM, Cosign SLSA v1 and SPDX OCI attestations, SHA-256 digest | private `midori-vpn-control-dev` GitHub Actions OIDC identity and Cosign |
 | Linux Desktop | `midori-vpn-2.0.0-1.x86_64.rpm` | exported RPM public key, `SHA256SUMS`, SPDX JSON SBOM, build provenance and dependency report | existing OpenPGP Ed25519 release identity |
 | Firefox/Midori | AMO upload ZIP, matching reviewer source ZIP and AMO-signed XPI | `SHA256SUMS`, SPDX JSON SBOM, exact public build inputs and reviewer build instructions | Mozilla Add-ons signing service |
 | Chromium | Chrome Web Store upload ZIP and store-delivered package | `SHA256SUMS`, SPDX JSON SBOM, exact public build inputs and manifest validation | Chrome Web Store signing service |
@@ -44,12 +45,15 @@ a new key.
    images. The SBOM describes the final artifact, not only the source
    repository, and is itself hashed in `SHA256SUMS`.
 5. Provenance binds the artifact SHA-256 or OCI digest to the repository,
-   workflow, commit, tag, builder and declared public build inputs. GitHub
-   artifact attestations complement but do not replace local hash and package
+   workflow, commit, tag, builder and declared public build inputs. Keyless
+   Cosign attestations complement but do not replace local hash and package
    signature verification.
    BuildKit provenance and SBOM must be disabled while comparing or publishing
-   the reproducible OCI digest; the independently signed GitHub attestations
+   the reproducible OCI digest; the independently signed Cosign attestations
    are attached afterwards as OCI referrers and do not alter that digest.
+   Every compared and registry exporter must also use the same
+   `SOURCE_DATE_EPOCH` with `rewrite-timestamp=true`; a registry push assembled
+   without that option is a different artifact and must fail closed.
 6. Public extension endpoints and OAuth public-client identifiers are build
    inputs, not secrets. They must be recorded without placing AMO, CWS, GitHub
    or OpenPGP credentials in artifacts, logs or source archives.
@@ -97,14 +101,20 @@ rpmkeys --dbpath /tmp/midorivpn-rpmdb --checksig --verbose \
   midori-vpn-2.0.0-1.x86_64.rpm
 sha256sum --check SHA256SUMS
 
-# GitHub build/SBOM attestations.
-gh attestation verify oci://ghcr.io/goastian/midori-vpn-core@sha256:<digest> \
-  --repo goastian/midori-vpn-core-dev
-
-# Public Sigstore signature. Keep the workflow identity exact.
+# Public Sigstore signature and private OCI attestations. Keep the workflow identity exact.
 cosign verify \
   --certificate-identity \
-  'https://github.com/goastian/midori-vpn-core-dev/.github/workflows/publish.yml@refs/tags/v2.0.0-rc.1' \
+  'https://github.com/goastian/midori-vpn-core-dev/.github/workflows/publish.yml@refs/tags/v2.0.0-rc.6' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  ghcr.io/goastian/midori-vpn-core@sha256:<digest>
+cosign verify-attestation --type slsaprovenance1 \
+  --certificate-identity \
+  'https://github.com/goastian/midori-vpn-core-dev/.github/workflows/publish.yml@refs/tags/v2.0.0-rc.6' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  ghcr.io/goastian/midori-vpn-core@sha256:<digest>
+cosign verify-attestation --type spdxjson \
+  --certificate-identity \
+  'https://github.com/goastian/midori-vpn-core-dev/.github/workflows/publish.yml@refs/tags/v2.0.0-rc.6' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   ghcr.io/goastian/midori-vpn-core@sha256:<digest>
 ```
@@ -118,8 +128,8 @@ the permanent-install gate.
 ## Implementation status and remaining operator inputs
 
 Core and Control separate read-only build evidence from tagged private
-candidate publication, pin workflow dependencies, produce SBOM/provenance and verify
-GitHub attestations plus keyless Cosign signatures by digest. Core also verifies
+candidate publication, pin workflow dependencies, produce SBOM/provenance and
+verify keyless Cosign attestations plus signatures by digest. Core also verifies
 the four annotated tag commits and the signed private Control digest before
 producing a secret-free deployment bundle. Desktop uses a pinned RPM builder,
 the established OpenPGP identity, an
@@ -156,7 +166,7 @@ short-lived CI artifact for human review.
 
 These build jobs have read-only repository permissions and no registry login,
 GitHub Release, store upload or public deployment step. Private candidate
-publication, GitHub attestation and keyless OCI signing remain a separate
+publication, keyless Cosign OCI attestation and signing remain a separate
 tag-gated stage; production remains approval-gated in the public repository.
 
 ## Private candidates and production approval
@@ -166,8 +176,8 @@ development repositories and bound to an annotated semantic tag. On GitHub
 Free these create private candidates without an Environment approval.
 Each validates a repository enable switch, refuses to replace an existing
 version, proves three matching builds without embedded BuildKit attestations,
-keeps its GHCR package private, creates GitHub SLSA and SPDX attestations, signs
-with the short-lived workflow OIDC identity through Cosign 3.1.3, and verifies
+keeps its GHCR package private, creates Cosign SLSA v1 and SPDX attestations,
+signs with the short-lived workflow OIDC identity through Cosign 3.1.3, and verifies
 all three records immediately. Production requires the matching protected
 public Core tag and `deploy-production` reviewer approval. Desktop signing uses
 the established identity locally on the current plan; its optional
@@ -180,7 +190,8 @@ workflows does not authorize running them.
 
 ## External references
 
-- [GitHub artifact attestations](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations)
+- [GitHub plan availability for artifact attestations](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations)
+- [Sigstore in-toto attestations](https://docs.sigstore.dev/cosign/verifying/attestation/)
 - [Sigstore container signing](https://docs.sigstore.dev/cosign/signing/signing_with_containers/)
 - [Mozilla source-code submission](https://extensionworkshop.com/documentation/publish/source-code-submission/)
 - [Mozilla `web-ext` signing](https://extensionworkshop.com/documentation/develop/web-ext-command-reference/)

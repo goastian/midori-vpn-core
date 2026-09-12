@@ -96,6 +96,7 @@ type Config struct {
 	CoreTLSSkipVerify bool   // skip TLS cert verification for self-signed certs
 	CoreAllowHTTP     bool   // allow plain HTTP for local/testing inter-core calls
 	CoreAllowedHosts  string // comma-separated whitelist of allowed core server hosts (empty = allow all)
+	ManagementTLSCA   string // optional additional private CA for management-plane clients
 
 	// Rate limiting
 	RateLimitRPS   int // requests per second per IP (0 = disabled)
@@ -229,6 +230,7 @@ func Load() *Config {
 		CoreTLSSkipVerify: requireEnvBool("CORE_TLS_SKIP_VERIFY"),
 		CoreAllowHTTP:     requireEnvBool("CORE_ALLOW_INSECURE_HTTP"),
 		CoreAllowedHosts:  env("CORE_ALLOWED_HOSTS"),
+		ManagementTLSCA:   env("MANAGEMENT_TLS_CA"),
 
 		RateLimitRPS:   requireEnvInt("RATE_LIMIT_RPS"),
 		RateLimitBurst: requireEnvInt("RATE_LIMIT_BURST"),
@@ -288,6 +290,9 @@ func Load() *Config {
 	}
 	if cfg.DeploymentProfile != "" && cfg.DeploymentProfile != "principal" && cfg.DeploymentProfile != "core-node" {
 		log.Fatal("FATAL: DEPLOYMENT_PROFILE must be principal or core-node")
+	}
+	if cfg.ManagementTLSCA != "" && !filepath.IsAbs(cfg.ManagementTLSCA) {
+		log.Fatal("FATAL: MANAGEMENT_TLS_CA must be an absolute path")
 	}
 	nodeIdentityConfigured := cfg.NodeControlURL != "" || cfg.CoreNodeID != "" || cfg.CoreNodeStateDir != "" ||
 		cfg.CoreNodeEnrollmentTokenFile != "" || cfg.CoreNodeMaxPeers != 0 || cfg.NodeSecretFingerprints != ""

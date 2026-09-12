@@ -131,6 +131,16 @@ if MIDORIVPN_WORKSPACE_ROOT="${workspace}" bash "${ROOT_DIR}/scripts/release/ver
 fi
 
 mkdir -p "${tmp}/one" "${tmp}/two"
+mkdir -p "${tmp}/without-grep"
+for command_name in dirname jq tar gzip sha256sum; do
+  ln -s "$(command -v "${command_name}")" "${tmp}/without-grep/${command_name}"
+done
+if PATH="${tmp}/without-grep" /bin/bash "${ROOT_DIR}/scripts/release/create-deployment-bundle.sh" \
+  --manifest "${tmp}/workspace-manifest.json" --core-digest "${digest_a}" --control-digest "${digest_b}" \
+  --output-dir "${tmp}/missing-grep/midorivpn-${release_version}" >"${tmp}/missing-grep.log" 2>&1; then
+  fail "deployment bundle generation accepted a missing secret scanner"
+fi
+grep -Fq 'grep is required' "${tmp}/missing-grep.log" || fail "missing secret scanner did not fail closed"
 bash "${ROOT_DIR}/scripts/release/create-deployment-bundle.sh" \
   --manifest "${tmp}/workspace-manifest.json" --core-digest "${digest_a}" --control-digest "${digest_b}" \
   --output-dir "${tmp}/one/midorivpn-${release_version}" >/dev/null
@@ -139,9 +149,16 @@ bash "${ROOT_DIR}/scripts/release/create-deployment-bundle.sh" \
   --output-dir "${tmp}/two/midorivpn-${release_version}" >/dev/null
 cmp --silent "${tmp}/one/midorivpn-${release_version}.tar.gz" "${tmp}/two/midorivpn-${release_version}.tar.gz" || fail "deployment bundle is not reproducible"
 (cd "${tmp}/one" && sha256sum --check "midorivpn-${release_version}.tar.gz.sha256" >/dev/null) || fail "bundle checksum is invalid"
+checksum_target="$(awk 'NR == 1 {print $2}' "${tmp}/one/midorivpn-${release_version}.tar.gz.sha256")"
+[[ "${checksum_target}" == "midorivpn-${release_version}.tar.gz" ]] || fail "bundle checksum is not portable by basename"
+mkdir -p "${tmp}/flat-download"
+install -m 0600 "${tmp}/one/midorivpn-${release_version}.tar.gz" \
+  "${tmp}/one/midorivpn-${release_version}.tar.gz.sha256" "${tmp}/flat-download/"
+(cd "${tmp}/flat-download" && sha256sum --check "midorivpn-${release_version}.tar.gz.sha256" >/dev/null) || fail "bundle checksum fails after a flat artifact download"
 if rg -n 'a-secret-value|another-secret-value|-----BEGIN (OPENSSH|PRIVATE) KEY-----' "${tmp}/one/midorivpn-${release_version}" >/dev/null; then
   fail "deployment bundle contains secret material"
 fi
+rg -Fq 'grep -RIn --exclude=SHA256SUMS' "${ROOT_DIR}/scripts/release/create-deployment-bundle.sh" || fail "bundle secret scan is not runner-portable"
 jq -e '.schema_version == 2 and .product_version == "2.0.0" and .release_version == "2.0.0-rc.1" and .git_tag == "v2.0.0-rc.1" and .images.core.pull_ref == "ghcr.io/goastian/midori-vpn-core:2.0.0-rc.1" and .images.core.digest == "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' \
   "${tmp}/one/midorivpn-${release_version}/release.json" >/dev/null || fail "bundle release metadata is incomplete"
 [[ -f "${tmp}/one/midorivpn-${release_version}/docs/PRODUCTION_DEPLOYMENT.md" ]] || fail "bundle lacks the production runbook"
@@ -225,7 +242,15 @@ for private_candidate_workflow in "${ROOT_DIR}/.github/workflows/publish.yml" "$
   [[ "$(rg -Fc 'BUILDX_NO_DEFAULT_ATTESTATIONS: 1' "${private_candidate_workflow}")" == 1 ]] || fail "candidate workflow does not disable default BuildKit attestations: ${private_candidate_workflow}"
   [[ "$(rg -Fc 'provenance: false' "${private_candidate_workflow}")" == 3 ]] || fail "candidate workflow does not disable embedded provenance on all three builds: ${private_candidate_workflow}"
   [[ "$(rg -Fc 'sbom: false' "${private_candidate_workflow}")" == 3 ]] || fail "candidate workflow does not disable embedded SBOM on all three builds: ${private_candidate_workflow}"
-  [[ "$(rg -Fc 'uses: actions/attest@' "${private_candidate_workflow}")" == 2 ]] || fail "candidate workflow lost independent GitHub provenance or SBOM attestation: ${private_candidate_workflow}"
+  [[ "$(rg -Fc 'cosign attest --yes' "${private_candidate_workflow}")" == 2 ]] || fail "candidate workflow lost independent Cosign provenance or SBOM attestation: ${private_candidate_workflow}"
+  [[ "$(rg -Fc 'cosign verify-attestation' "${private_candidate_workflow}")" -ge 2 ]] || fail "candidate workflow does not immediately verify both Cosign attestations: ${private_candidate_workflow}"
+  [[ "$(rg -Fc -- '--type slsaprovenance1' "${private_candidate_workflow}")" -ge 2 ]] || fail "candidate workflow does not type SLSA v1 attestation and verification explicitly: ${private_candidate_workflow}"
+  [[ "$(rg -Fc -- '--type spdxjson' "${private_candidate_workflow}")" -ge 2 ]] || fail "candidate workflow does not type SPDX attestation and verification explicitly: ${private_candidate_workflow}"
+  if rg -n 'uses: actions/attest@|gh attestation verify|artifact-metadata:|attestations:' "${private_candidate_workflow}" >/dev/null; then
+    fail "private candidate workflow depends on GitHub artifact attestations unavailable on the organization plan: ${private_candidate_workflow}"
+  fi
+  [[ "$(rg -Fc -- '-e DOCKER_CONFIG=/auth' "${private_candidate_workflow}")" == 1 ]] || fail "candidate Syft scan does not declare its private registry credential directory: ${private_candidate_workflow}"
+  [[ "$(rg -Fc '${HOME}/.docker/config.json:/auth/config.json:ro' "${private_candidate_workflow}")" == 1 ]] || fail "candidate Syft scan does not mount private registry credentials at the declared path: ${private_candidate_workflow}"
   if rg -n 'provenance: mode=max|sbom: true' "${private_candidate_workflow}" >/dev/null; then
     fail "candidate workflow still mixes embedded attestations into its reproducible digest: ${private_candidate_workflow}"
   fi
@@ -245,8 +270,18 @@ rg -Fq 'name: Publish - tagged private Control OCI candidate' "${ROOT_DIR}/midor
 core_switch_line="$(rg -n -m1 'vars.MIDORIVPN_PRIVATE_CANDIDATE_ENABLED' "${ROOT_DIR}/.github/workflows/publish.yml" | cut -d: -f1)"
 core_private_checkout_line="$(rg -n -m1 'secrets.MIDORIVPN_RELEASE_SOURCE_TOKEN' "${ROOT_DIR}/.github/workflows/publish.yml" | cut -d: -f1)"
 ((core_switch_line < core_private_checkout_line)) || fail "Core reads a private token before validating the candidate switch"
-rg -Fq 'visibility=private' "${ROOT_DIR}/.github/workflows/publish.yml" || fail "Core candidate workflow does not enforce private package visibility"
-rg -Fq 'visibility=private' "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml" || fail "Control candidate workflow does not enforce private package visibility"
+rg -Fq 'gh api /orgs/goastian/packages/container/midori-vpn-core --jq .visibility' "${ROOT_DIR}/.github/workflows/publish.yml" || fail "Core candidate workflow does not verify private package visibility"
+rg -Fq 'gh api /orgs/goastian/packages/container/midori-vpn-control --jq .visibility' "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml" || fail "Control candidate workflow does not verify private package visibility"
+if rg -n 'gh api --method PATCH .*/packages/' "${ROOT_DIR}/.github/workflows/publish.yml" "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml" >/dev/null; then
+  fail "candidate workflow attempts an unsupported package visibility PATCH"
+fi
+[[ "$(rg -Fc 'outputs: type=registry,rewrite-timestamp=true' "${ROOT_DIR}/.github/workflows/publish.yml")" == 1 ]] || fail "Core published exporter does not apply the reproducible timestamp contract exactly once"
+[[ "$(rg -Fc 'outputs: type=registry,rewrite-timestamp=true' "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml")" == 1 ]] || fail "Control published exporter does not apply the reproducible timestamp contract exactly once"
+[[ "$(rg -Fc 'rewrite-timestamp=true' "${ROOT_DIR}/.github/workflows/publish.yml")" == 3 ]] || fail "Core candidate does not normalize all three image exporters"
+[[ "$(rg -Fc 'rewrite-timestamp=true' "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml")" == 3 ]] || fail "Control candidate does not normalize all three image exporters"
+if rg -Fq 'push: true' "${ROOT_DIR}/.github/workflows/publish.yml" "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml"; then
+  fail "candidate workflow bypasses the explicit normalized registry exporter with the push shorthand"
+fi
 rg -Fq 'name: deploy-production' "${ROOT_DIR}/.github/workflows/deploy.yml" || fail "public production deployment lacks its Environment gate"
 rg -Fq "github.repository == 'goastian/midori-vpn-core-dev'" "${ROOT_DIR}/.github/workflows/publish.yml" || fail "private Core publisher lacks a repository guard"
 rg -Fq "github.repository == 'goastian/midori-vpn-control-dev'" "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml" || fail "private Control publisher lacks a repository guard"
@@ -258,9 +293,14 @@ fi
 [[ "$(rg -Fc 'password: ${{ secrets.MIDORIVPN_RELEASE_READ_TOKEN }}' "${ROOT_DIR}/.github/workflows/publish.yml")" == 1 ]] || fail "private Control pull does not use the dedicated package read token"
 [[ "$(rg -Fc 'username: ${{ vars.MIDORIVPN_RELEASE_READ_USER }}' "${ROOT_DIR}/.github/workflows/publish.yml")" == 1 ]] || fail "private Control pull does not use the dedicated read identity"
 [[ "$(rg -Fc 'password: ${{ secrets.GITHUB_TOKEN }}' "${ROOT_DIR}/.github/workflows/publish.yml")" == 1 ]] || fail "Core publication does not restore its job-scoped registry credential"
-[[ "$(rg -Fc -- '--bundle-from-oci' "${ROOT_DIR}/.github/workflows/publish.yml")" == 4 ]] || fail "candidate attestations are not verified from the authenticated OCI registry"
-[[ "$(rg -Fc -- '--bundle-from-oci' "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml")" == 2 ]] || fail "Control attestations are not verified from the authenticated OCI registry"
-[[ "$(rg -Fc -- '--bundle-from-oci' "${ROOT_DIR}/scripts/release/verify-oci-release.sh")" == 2 ]] || fail "host attestations are not verified from the authenticated OCI registry"
+[[ "$(rg -Fc 'cosign verify-attestation' "${ROOT_DIR}/.github/workflows/publish.yml")" == 4 ]] || fail "Core candidate does not verify both Control and Core OCI attestations"
+[[ "$(rg -Fc 'cosign verify-attestation' "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml")" == 2 ]] || fail "Control candidate does not verify both OCI attestations"
+[[ "$(rg -Fc 'cosign verify-attestation' "${ROOT_DIR}/scripts/release/verify-oci-release.sh")" == 2 ]] || fail "host verifier does not verify both OCI attestations"
+[[ "$(rg -Fc -- '--type slsaprovenance1' "${ROOT_DIR}/scripts/release/verify-oci-release.sh")" == 1 ]] || fail "host verifier does not require the SLSA v1 predicate type"
+[[ "$(rg -Fc -- '--type spdxjson' "${ROOT_DIR}/scripts/release/verify-oci-release.sh")" == 1 ]] || fail "host verifier does not require the SPDX JSON predicate type"
+if rg -n 'gh attestation verify' "${ROOT_DIR}/.github/workflows/publish.yml" "${ROOT_DIR}/midori-vpn-control/.github/workflows/publish.yml" "${ROOT_DIR}/scripts/release/verify-oci-release.sh" >/dev/null; then
+  fail "release verification still depends on GitHub artifact attestation storage"
+fi
 rg -Fq 'resolve-runtime-images.sh' "${ROOT_DIR}/.github/workflows/deploy.yml" || fail "deploy controller does not lock pulled tags"
 rg -Fq -- '--image-lock' "${ROOT_DIR}/.github/workflows/deploy.yml" || fail "deploy controller does not transfer the runtime lock"
 rg -Fq 'DEPLOY_SERVICE_USER: ${{ vars.MIDORIVPN_DEPLOY_SERVICE_USER }}' "${ROOT_DIR}/.github/workflows/deploy.yml" || fail "deploy controller does not expose the rootless service user"

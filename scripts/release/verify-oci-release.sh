@@ -30,7 +30,7 @@ case "${container_engine}" in
   docker|podman) ;;
   *) host_die "CONTAINER_ENGINE must be docker or podman" ;;
 esac
-for command_name in "${container_engine}" cosign gh jq; do
+for command_name in "${container_engine}" cosign jq; do
   host_require_command "${command_name}"
 done
 
@@ -66,14 +66,16 @@ cosign verify \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   "${verification_ref}"
 
-gh attestation verify "oci://${verification_ref}" \
-  --bundle-from-oci \
-  --repo "${repository}" \
-  --predicate-type https://slsa.dev/provenance/v1
+cosign verify-attestation \
+  --type slsaprovenance1 \
+  --certificate-identity "${identity}" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  "${verification_ref}" >/dev/null
 
-gh attestation verify "oci://${verification_ref}" \
-  --bundle-from-oci \
-  --repo "${repository}" \
-  --predicate-type https://spdx.dev/Document/v2.3
+cosign verify-attestation \
+  --type spdxjson \
+  --certificate-identity "${identity}" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  "${verification_ref}" >/dev/null
 
 printf 'Verified %s tag %s at %s\n' "${component}" "${pull_ref}" "${digest}"

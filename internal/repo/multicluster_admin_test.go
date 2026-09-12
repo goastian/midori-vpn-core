@@ -2,6 +2,8 @@ package repo_test
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -85,5 +87,53 @@ func TestMulticlusterAdminPagesExposeOnlySafeOperationalState(t *testing.T) {
 	}
 	if err := fleet.CreateNode(ctx, blockedNode); !errors.Is(err, repo.ErrClusterUnavailable) {
 		t.Fatalf("CreateNode on revoked cluster error = %v, want ErrClusterUnavailable", err)
+	}
+}
+
+func TestUpdateUnenrolledNodeManagementHostLocksAfterEnrollment(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	fleet := repo.NewMulticlusterRepo(pool)
+	cluster := &models.Cluster{
+		Name: "host-update-" + uuid.NewString(), Region: "test-region", State: models.ClusterStateInactive,
+	}
+	if err := fleet.CreateCluster(ctx, cluster); err != nil {
+		t.Fatal(err)
+	}
+	node := &models.CoreNode{
+		ClusterID: cluster.ID, Name: "node-" + uuid.NewString()[:8],
+		ManagementHost: uuid.NewString() + ".nodes.test.invalid", State: models.ClusterStateEnrolling,
+	}
+	if err := fleet.CreateNode(ctx, node); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM node_enrollment_tokens WHERE node_id = $1`, node.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM core_nodes WHERE id = $1`, node.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM clusters WHERE id = $1`, cluster.ID)
+	})
+	updated, err := fleet.UpdateUnenrolledNodeManagementHost(ctx, node.ID, "10.254.240.2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ManagementHost != "10.254.240.2" || updated.State != models.ClusterStateEnrolling {
+		t.Fatalf("updated node = %#v", updated)
+	}
+	token, err := fleet.IssueEnrollmentToken(ctx, node.ID, 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fleet.EnrollNode(ctx, node.ID, token.Token, publicKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fleet.UpdateUnenrolledNodeManagementHost(ctx, node.ID, "10.254.240.3"); !errors.Is(err, repo.ErrNodeManagementImmutable) {
+		t.Fatalf("enrolled update error = %v, want immutable", err)
+	}
+	if _, err := fleet.UpdateUnenrolledNodeManagementHost(ctx, uuid.New(), "10.254.240.3"); !errors.Is(err, repo.ErrNodeNotFound) {
+		t.Fatalf("missing node update error = %v, want not found", err)
 	}
 }

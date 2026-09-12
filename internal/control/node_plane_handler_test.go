@@ -118,6 +118,67 @@ func TestNodePlaneEnrollmentHeartbeatReplayAndRevocation(t *testing.T) {
 	}
 }
 
+func TestAdminUpdateCoreNodeOnlyBeforeEnrollment(t *testing.T) {
+	pool := handlerTestPool(t)
+	fleet := repo.NewMulticlusterRepo(pool)
+	cluster := &models.Cluster{Name: "update-" + uuid.NewString(), Region: "test", State: models.ClusterStateInactive}
+	if err := fleet.CreateCluster(context.Background(), cluster); err != nil {
+		t.Fatal(err)
+	}
+	node := &models.CoreNode{
+		ClusterID: cluster.ID, Name: "update-" + uuid.NewString()[:8],
+		ManagementHost: uuid.NewString() + ".nodes.test.invalid", State: models.ClusterStateEnrolling,
+	}
+	if err := fleet.CreateNode(context.Background(), node); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM node_enrollment_tokens WHERE node_id = $1`, node.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM core_nodes WHERE id = $1`, node.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM clusters WHERE id = $1`, cluster.ID)
+	})
+	handler := control.NewHandler(pool, &config.Config{AppEnv: "development"})
+	requestFor := func(host string) *http.Request {
+		body := marshalNodeRequest(t, map[string]string{"management_host": host})
+		request := httptest.NewRequest(http.MethodPatch, "https://control.test/api/v1/admin/nodes/"+node.ID.String(), bytes.NewReader(body))
+		routeContext := chi.NewRouteContext()
+		routeContext.URLParams.Add("nodeID", node.ID.String())
+		ctx := context.WithValue(request.Context(), chi.RouteCtxKey, routeContext)
+		ctx = context.WithValue(ctx, auth.UserCtxKey, &models.User{ID: uuid.New(), Groups: []string{"vpn-admins"}})
+		return request.WithContext(ctx)
+	}
+	recorder := httptest.NewRecorder()
+	handler.AdminUpdateCoreNode(recorder, requestFor("10.254.240.2"))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("management update status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Data models.CoreNode `json:"data"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Data.ManagementHost != "10.254.240.2" {
+		t.Fatalf("management host = %q", response.Data.ManagementHost)
+	}
+	token, err := fleet.IssueEnrollmentToken(context.Background(), node.ID, 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fleet.EnrollNode(context.Background(), node.ID, token.Token, publicKey); err != nil {
+		t.Fatal(err)
+	}
+	recorder = httptest.NewRecorder()
+	handler.AdminUpdateCoreNode(recorder, requestFor("10.254.240.3"))
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), "node_management_host_immutable") {
+		t.Fatalf("enrolled management update = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestDesiredStateIssuanceAndNodeScopedFetch(t *testing.T) {
 	pool := handlerTestPool(t)
 	multicluster := repo.NewMulticlusterRepo(pool)

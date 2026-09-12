@@ -130,8 +130,20 @@ for key in OBSERVABILITY_TLS_CERT OBSERVABILITY_TLS_KEY OBSERVABILITY_CLIENT_CA;
   host_validate_absolute_path "${cfg[${key}]}" "${key}"
 done
 if [[ "${cfg[APP_ENV]}" == production ]]; then
+  for key in MANAGEMENT_HOST_BIND MANAGEMENT_PEER_ADDRESS MANAGEMENT_HTTPS_PORT MANAGEMENT_TLS_CERT MANAGEMENT_TLS_KEY MANAGEMENT_TLS_CA; do
+    host_require_env cfg "${key}"
+  done
+  host_validate_rfc1918_ipv4 "${cfg[MANAGEMENT_HOST_BIND]}" MANAGEMENT_HOST_BIND
+  host_validate_rfc1918_ipv4 "${cfg[MANAGEMENT_PEER_ADDRESS]}" MANAGEMENT_PEER_ADDRESS
+  [[ "${cfg[MANAGEMENT_HOST_BIND]}" != "${cfg[MANAGEMENT_PEER_ADDRESS]}" ]] || host_die "management bind and peer addresses must differ"
+  host_validate_port "${cfg[MANAGEMENT_HTTPS_PORT]}" MANAGEMENT_HTTPS_PORT 1024
+  for key in MANAGEMENT_TLS_CERT MANAGEMENT_TLS_KEY MANAGEMENT_TLS_CA; do
+    host_validate_absolute_path "${cfg[${key}]}" "${key}"
+  done
   [[ "${cfg[ALLOW_LEGACY_HMAC_TRANSPORT_TOKENS]}" == false ]] || host_die "production forbids legacy HMAC transport credentials"
   [[ -z "${cfg[CREDENTIAL_SIGNING_SECRET]:-}" ]] || host_die "production forbids CREDENTIAL_SIGNING_SECRET"
+  [[ "${cfg[CORE_TLS_SKIP_VERIFY]}" == false ]] || host_die "production management TLS verification cannot be disabled"
+  [[ "${cfg[CORE_ALLOW_INSECURE_HTTP]}" == false ]] || host_die "production management traffic requires HTTPS"
 fi
 
 for optional_gateway in OPENVPN IKEV2; do
@@ -201,7 +213,7 @@ core_keys=(
   PROXY_TLS_KEY PROXY_SERVER_ID WSS_TUNNEL_ENABLED WSS_TUNNEL_SERVER_ID WSS_TUNNEL_MAX_CLIENTS
   MASQUE_ENABLED MASQUE_PORT MASQUE_HOST_PORT MASQUE_TLS_CERT MASQUE_TLS_KEY MASQUE_URI_TEMPLATE MASQUE_SERVER_ID
   MASQUE_MAX_CLIENTS WS_MAX_GLOBAL WS_MAX_FREE WS_MAX_BASIC WS_MAX_MEDIUM WS_MAX_PRO WS_MAX_ADMIN
-  ASTIAN_PAYMENT_URL ASTIAN_PAYMENT_INTERNAL_TOKEN
+  ASTIAN_PAYMENT_URL ASTIAN_PAYMENT_INTERNAL_TOKEN MANAGEMENT_TLS_CA
 )
 if [[ "${profile}" == principal ]]; then
   core_keys+=(POSTGRES_RUNTIME_USER POSTGRES_RUNTIME_PASSWORD POSTGRES_DB REDIS_PASSWORD REDIS_DB)
@@ -479,6 +491,9 @@ EOF
       printf 'Volume=%s:%s:ro,z\n' "${cfg[${tls_key}]}" "${cfg[${tls_key}]}"
     fi
   done
+  if [[ -n "${cfg[MANAGEMENT_TLS_CA]:-}" ]]; then
+    printf 'Volume=%s:%s:ro,z\n' "${cfg[MANAGEMENT_TLS_CA]}" "${cfg[MANAGEMENT_TLS_CA]}"
+  fi
   if [[ -n "${cfg[NODE_EXTERNAL_TRANSPORTS]:-}" ]]; then
     printf 'Volume=/run/midorivpn-health:/run/midorivpn-health:ro\n'
   fi

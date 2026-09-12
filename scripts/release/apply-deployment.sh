@@ -53,6 +53,19 @@ deployment_id="${deployment_id:-${release_version}-$(date -u +%Y%m%dT%H%M%SZ)}"
 [[ "${deployment_id}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,80}$ ]] || die "invalid deployment id"
 
 bash "${bundle_dir}/deploy/host/prepare-opensuse.sh" --apply --service-user "${service_user}"
+# The host-level management overlay is provisioned separately and must already
+# be authenticated before this release may touch application configuration.
+declare -A requested_cfg=()
+# shellcheck source=deploy/host/lib/common.sh
+source "${bundle_dir}/deploy/host/lib/common.sh"
+host_load_env "${values_file}" requested_cfg
+host_require_env requested_cfg DEPLOYMENT_PROFILE
+case "${requested_cfg[DEPLOYMENT_PROFILE]}" in
+  principal) management_role=principal ;;
+  core-node) management_role=regional ;;
+  *) host_die "DEPLOYMENT_PROFILE must be principal or core-node" ;;
+esac
+bash "${bundle_dir}/deploy/host/configure-management-wireguard.sh" --check --role "${management_role}"
 service_entry="$(getent passwd "${service_user}")"
 service_uid="$(cut -d: -f3 <<< "${service_entry}")"
 service_gid="$(cut -d: -f4 <<< "${service_entry}")"

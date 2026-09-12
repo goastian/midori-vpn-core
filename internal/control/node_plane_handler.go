@@ -340,6 +340,41 @@ func (h *Handler) AdminCreateCoreNode(w http.ResponseWriter, r *http.Request) {
 	respond.JsonOK(w, node, http.StatusCreated)
 }
 
+func (h *Handler) AdminUpdateCoreNode(w http.ResponseWriter, r *http.Request) {
+	nodeID, err := uuid.Parse(chi.URLParam(r, "nodeID"))
+	if err != nil {
+		respond.JsonError(w, "invalid node ID", http.StatusBadRequest)
+		return
+	}
+	var request struct {
+		ManagementHost string `json:"management_host"`
+	}
+	if err := decodeRequestJSON(r, &request); err != nil {
+		respond.JsonError(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	request.ManagementHost = strings.TrimSpace(request.ManagementHost)
+	if len(request.ManagementHost) < 1 || len(request.ManagementHost) > 253 || strings.ContainsAny(request.ManagementHost, " \t\r\n/?#@") {
+		respond.JsonError(w, "invalid management host", http.StatusBadRequest)
+		return
+	}
+	node, err := h.multiclusterRepo.UpdateUnenrolledNodeManagementHost(r.Context(), nodeID, request.ManagementHost)
+	if err != nil {
+		switch {
+		case errors.Is(err, repo.ErrNodeNotFound):
+			respond.JsonError(w, "Core node not found", http.StatusNotFound)
+		case errors.Is(err, repo.ErrNodeManagementImmutable):
+			respond.JsonErrorCode(w, "enrolled Core node management host is immutable", "node_management_host_immutable", http.StatusConflict)
+		default:
+			respond.JsonError(w, "failed to update Core node", http.StatusBadRequest)
+		}
+		return
+	}
+	admin := auth.GetUser(r)
+	h.auditRepo.Log(r.Context(), &admin.ID, "admin.core-node.management-host.update", map[string]any{"node_id": node.ID}, r.RemoteAddr)
+	respond.JsonOK(w, node, http.StatusOK)
+}
+
 func (h *Handler) AdminIssueNodeEnrollmentToken(w http.ResponseWriter, r *http.Request) {
 	nodeID, err := uuid.Parse(chi.URLParam(r, "nodeID"))
 	if err != nil {

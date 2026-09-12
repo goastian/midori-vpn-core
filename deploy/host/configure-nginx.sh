@@ -33,12 +33,13 @@ host_require_command nginx
 host_require_command systemctl
 declare -A cfg=()
 host_load_env "${env_file}" cfg
-for key in DEPLOYMENT_PROFILE DOMAIN VPN_CORE_HOST_PORT ACME_WEBROOT NGINX_VHOST_PATH PROXY_ENABLED; do
+for key in DEPLOYMENT_PROFILE DOMAIN VPN_CORE_HOST_PORT ACME_WEBROOT NGINX_VHOST_PATH PROXY_ENABLED MANAGEMENT_HOST_BIND MANAGEMENT_HTTPS_PORT MANAGEMENT_TLS_CERT MANAGEMENT_TLS_KEY MANAGEMENT_TLS_CA; do
   host_require_env cfg "${key}"
 done
 [[ "${cfg[DEPLOYMENT_PROFILE]}" == principal || "${cfg[DEPLOYMENT_PROFILE]}" == core-node ]] || host_die "DEPLOYMENT_PROFILE must be principal or core-node"
 [[ "${cfg[DOMAIN]}" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$ ]] || host_die "DOMAIN is not a valid hostname"
 port_keys=(VPN_CORE_HOST_PORT)
+port_keys+=(MANAGEMENT_HTTPS_PORT)
 if [[ "${cfg[DEPLOYMENT_PROFILE]}" == principal ]]; then
   host_require_env cfg CONTROL_HOST_PORT
   port_keys+=(CONTROL_HOST_PORT)
@@ -51,13 +52,24 @@ done
 [[ "${cfg[ACME_WEBROOT]}" == /* ]] || host_die "ACME_WEBROOT must be absolute"
 [[ "${cfg[NGINX_VHOST_PATH]}" == /etc/nginx/* ]] || host_die "NGINX_VHOST_PATH must remain below /etc/nginx"
 host_validate_absolute_path "${cfg[NGINX_VHOST_PATH]}" NGINX_VHOST_PATH
+host_validate_rfc1918_ipv4 "${cfg[MANAGEMENT_HOST_BIND]}" MANAGEMENT_HOST_BIND
+for key in MANAGEMENT_TLS_CERT MANAGEMENT_TLS_KEY MANAGEMENT_TLS_CA; do
+  host_validate_absolute_path "${cfg[${key}]}" "${key}"
+  host_require_regular_file "${cfg[${key}]}"
+done
+[[ "$(stat -c '%a' -- "${cfg[MANAGEMENT_TLS_KEY]}")" == 600 ]] || host_die "MANAGEMENT_TLS_KEY must have mode 0600"
 [[ "${cfg[PROXY_ENABLED]}" == true || "${cfg[PROXY_ENABLED]}" == false ]] || host_die "PROXY_ENABLED must be true or false"
 
-destinations=("${cfg[NGINX_VHOST_PATH]}")
+management_destination="$(dirname -- "${cfg[NGINX_VHOST_PATH]}")/midorivpn-management.conf"
+[[ "${management_destination}" != "${cfg[NGINX_VHOST_PATH]}" ]] || host_die "management and public Nginx destinations must differ"
+destinations=("${cfg[NGINX_VHOST_PATH]}" "${management_destination}")
+rendered_names=(vhost management)
 if [[ "${cfg[DEPLOYMENT_PROFILE]}" == principal ]]; then
-  templates=("${SOURCE_ROOT}/deploy/nginx/core-vhost.conf.template")
+  public_template="${SOURCE_ROOT}/deploy/nginx/core-vhost.conf.template"
+  management_template="${SOURCE_ROOT}/deploy/nginx/principal-management.conf.template"
 else
-  templates=("${SOURCE_ROOT}/deploy/nginx/core-node-vhost.conf.template")
+  public_template="${SOURCE_ROOT}/deploy/nginx/core-node-vhost.conf.template"
+  management_template="${SOURCE_ROOT}/deploy/nginx/core-node-management.conf.template"
 fi
 if [[ "${cfg[PROXY_ENABLED]}" == true ]]; then
   for key in NGINX_STREAM_VHOST_PATH PROXY_HOST_PORT PROXY_PORT; do
@@ -71,7 +83,7 @@ if [[ "${cfg[PROXY_ENABLED]}" == true ]]; then
     fi
   done
   destinations+=("${cfg[NGINX_STREAM_VHOST_PATH]}")
-  templates+=("${SOURCE_ROOT}/deploy/nginx/core-stream.conf.template")
+  rendered_names+=(stream)
 fi
 
 temporary_dir="$(mktemp -d "${TMPDIR:-/tmp}/midorivpn-nginx.XXXXXX")"
@@ -83,10 +95,21 @@ sed \
   -e "s|__DOMAIN__|$(escape_sed "${cfg[DOMAIN]}")|g" \
   -e "s|__VPN_CORE_HOST_PORT__|$(escape_sed "${cfg[VPN_CORE_HOST_PORT]}")|g" \
   -e "s|__CONTROL_WEB_PORT__|$(escape_sed "${cfg[CONTROL_HOST_PORT]:-}")|g" \
-  "${templates[0]}" > "${temporary_dir}/vhost.conf"
+  "${public_template}" > "${temporary_dir}/vhost.conf"
 grep -Fq 'location = /.well-known/midorivpn/edge-health' "${temporary_dir}/vhost.conf" || host_die "rendered Nginx vhost lacks the exact edge-health route"
 if grep -Eq '__[A-Z0-9_]+__' "${temporary_dir}/vhost.conf"; then
   host_die "rendered Nginx vhost contains unresolved placeholders"
+fi
+
+sed \
+  -e "s|__MANAGEMENT_HOST_BIND__|$(escape_sed "${cfg[MANAGEMENT_HOST_BIND]}")|g" \
+  -e "s|__MANAGEMENT_HTTPS_PORT__|$(escape_sed "${cfg[MANAGEMENT_HTTPS_PORT]}")|g" \
+  -e "s|__MANAGEMENT_TLS_CERT__|$(escape_sed "${cfg[MANAGEMENT_TLS_CERT]}")|g" \
+  -e "s|__MANAGEMENT_TLS_KEY__|$(escape_sed "${cfg[MANAGEMENT_TLS_KEY]}")|g" \
+  -e "s|__VPN_CORE_HOST_PORT__|$(escape_sed "${cfg[VPN_CORE_HOST_PORT]}")|g" \
+  "${management_template}" > "${temporary_dir}/management.conf"
+if grep -Eq '__[A-Z0-9_]+__' "${temporary_dir}/management.conf"; then
+  host_die "rendered Nginx management config contains unresolved placeholders"
 fi
 
 if [[ "${cfg[PROXY_ENABLED]}" == true ]]; then
@@ -94,7 +117,7 @@ if [[ "${cfg[PROXY_ENABLED]}" == true ]]; then
     -e "s|__DOMAIN__|$(escape_sed "${cfg[DOMAIN]}")|g" \
     -e "s|__PROXY_HOST_PORT__|$(escape_sed "${cfg[PROXY_HOST_PORT]}")|g" \
     -e "s|__PROXY_PUBLIC_PORT__|$(escape_sed "${cfg[PROXY_PORT]}")|g" \
-    "${templates[1]}" > "${temporary_dir}/stream.conf"
+    "${SOURCE_ROOT}/deploy/nginx/core-stream.conf.template" > "${temporary_dir}/stream.conf"
   if grep -Eq '__[A-Z0-9_]+__' "${temporary_dir}/stream.conf"; then
     host_die "rendered Nginx stream config contains unresolved placeholders"
   fi
@@ -130,11 +153,7 @@ for index in "${!destinations[@]}"; do
     chmod 0600 "${backup_dir}/${index}.absent"
     printf '%s\tabsent\t%s.absent\n' "${nginx_destination}" "${index}" >> "${backup_dir}/targets.tsv"
   fi
-  if [[ "${index}" == 0 ]]; then
-    rendered_name=vhost
-  else
-    rendered_name=stream
-  fi
+  rendered_name="${rendered_names[${index}]}"
   atomic_nginx_install "${temporary_dir}/${rendered_name}.conf" "${nginx_destination}"
 done
 

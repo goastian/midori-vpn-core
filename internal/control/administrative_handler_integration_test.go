@@ -99,10 +99,14 @@ func TestDisconnectCompletesAfterCallerCancellation(t *testing.T) {
 	if err := control.InitCoreSigningIdentity("disconnect-context-test", base64.RawURLEncoding.EncodeToString(privateKey)); err != nil {
 		t.Fatalf("initialize Control signing identity: %v", err)
 	}
-	control.InitCoreClient(false, true, "")
+	if err := control.InitCoreClient(false, true, "", ""); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		control.CloseCoreClient()
-		control.InitCoreClient(false, false, "")
+		if err := control.InitCoreClient(false, false, "", ""); err != nil {
+			t.Error(err)
+		}
 	})
 
 	var serverID uuid.UUID

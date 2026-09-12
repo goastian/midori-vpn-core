@@ -77,6 +77,31 @@ host_validate_absolute_path() {
   [[ "${value}" =~ ^/[A-Za-z0-9._@/+~-]+$ ]] || host_die "${key} must be an absolute path without whitespace or volume delimiters"
 }
 
+host_validate_ipv4() {
+  local value="$1" key="$2" a b c d
+  IFS=. read -r a b c d <<< "${value}"
+  for octet in "${a:-}" "${b:-}" "${c:-}" "${d:-}"; do
+    [[ "${octet}" =~ ^(0|[1-9][0-9]{0,2})$ ]] || host_die "${key} must be an IPv4 address"
+    ((10#${octet} <= 255)) || host_die "${key} must be an IPv4 address"
+  done
+}
+
+host_validate_rfc1918_ipv4() {
+  local value="$1" key="$2" a b c d
+  host_validate_ipv4 "${value}" "${key}"
+  IFS=. read -r a b c d <<< "${value}"
+  if ((10#${a} == 10)); then
+    return
+  fi
+  if ((10#${a} == 172 && 10#${b} >= 16 && 10#${b} <= 31)); then
+    return
+  fi
+  if ((10#${a} == 192 && 10#${b} == 168)); then
+    return
+  fi
+  host_die "${key} must be an RFC1918 IPv4 address"
+}
+
 host_timestamp() {
   date -u +%Y%m%dT%H%M%SZ
 }

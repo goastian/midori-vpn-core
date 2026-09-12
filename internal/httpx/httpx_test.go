@@ -2,8 +2,12 @@ package httpx
 
 import (
 	"bytes"
+	"crypto/tls"
+	"encoding/pem"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +21,45 @@ func TestReadBodyRejectsOversizedResponse(t *testing.T) {
 	body, err = ReadBody(bytes.NewBufferString("1234"), 4)
 	if err != nil || string(body) != "1234" {
 		t.Fatalf("ReadBody() exact limit = %q, %v", body, err)
+	}
+}
+
+func TestClientWithAdditionalCAPreservesPrivateTrust(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	caPath := t.TempDir() + "/management-ca.pem"
+	certificate := server.Certificate()
+	pemData := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw})
+	if err := os.WriteFile(caPath, pemData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClientWithAdditionalCA(5*time.Second, caPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Get(server.URL)
+	if err != nil {
+		t.Fatalf("private CA request failed: %v", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", response.StatusCode)
+	}
+	transport := client.Transport.(*http.Transport)
+	if transport.TLSClientConfig.MinVersion != tls.VersionTLS13 {
+		t.Fatalf("minimum TLS version = %#x, want TLS 1.3", transport.TLSClientConfig.MinVersion)
+	}
+}
+
+func TestClientWithAdditionalCARejectsInvalidInput(t *testing.T) {
+	caPath := t.TempDir() + "/invalid.pem"
+	if err := os.WriteFile(caPath, []byte("not a certificate\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewClientWithAdditionalCA(time.Second, caPath); err == nil {
+		t.Fatal("invalid management CA was accepted")
 	}
 }
 

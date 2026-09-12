@@ -4,11 +4,13 @@ package httpx
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -68,6 +70,38 @@ func NewClient(timeout time.Duration) *http.Client {
 			ExpectContinueTimeout:  time.Second,
 		},
 	}
+}
+
+// NewClientWithAdditionalCA returns a bounded client whose TLS trust adds one
+// operator-managed PEM bundle to the host roots. The private management CA is
+// scoped to this client and never changes process-wide trust.
+func NewClientWithAdditionalCA(timeout time.Duration, caPath string) (*http.Client, error) {
+	client := NewClient(timeout)
+	if caPath == "" {
+		return client, nil
+	}
+	info, err := os.Lstat(caPath)
+	if err != nil {
+		return nil, fmt.Errorf("inspect additional CA: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > MaxResponseBytes {
+		return nil, errors.New("additional CA must be a non-empty regular file no larger than 1 MiB")
+	}
+	pemData, err := os.ReadFile(caPath)
+	if err != nil {
+		return nil, fmt.Errorf("read additional CA: %w", err)
+	}
+	roots, err := x509.SystemCertPool()
+	if err != nil || roots == nil {
+		roots = x509.NewCertPool()
+	}
+	if !roots.AppendCertsFromPEM(pemData) {
+		return nil, errors.New("additional CA contains no valid certificates")
+	}
+	transport := client.Transport.(*http.Transport)
+	transport.TLSClientConfig.RootCAs = roots
+	transport.TLSClientConfig.MinVersion = tls.VersionTLS13
+	return client, nil
 }
 
 // NewAPIServer returns a server suitable for bounded request/response APIs.

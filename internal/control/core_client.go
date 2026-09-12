@@ -3,7 +3,6 @@ package control
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,11 +50,15 @@ func InitCoreSigningIdentity(nodeID, encodedPrivateKey string) error {
 }
 
 // InitCoreClient configures the core HTTP client with TLS settings.
-func InitCoreClient(skipVerify bool, allowInsecureHTTP bool, allowedHosts string) {
+func InitCoreClient(skipVerify bool, allowInsecureHTTP bool, allowedHosts, managementCA string) error {
 	coreAllowInsecureHTTP = allowInsecureHTTP
-	coreHTTP = httpx.NewClient(coreRequestTimeout)
+	client, err := httpx.NewClientWithAdditionalCA(coreRequestTimeout, managementCA)
+	if err != nil {
+		return fmt.Errorf("initialize Core management TLS: %w", err)
+	}
+	coreHTTP = client
 	transport := coreHTTP.Transport.(*http.Transport)
-	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, InsecureSkipVerify: skipVerify}
+	transport.TLSClientConfig.InsecureSkipVerify = skipVerify
 	transport.MaxIdleConns = 100
 	transport.MaxIdleConnsPerHost = 10
 	transport.MaxConnsPerHost = 20
@@ -68,6 +71,7 @@ func InitCoreClient(skipVerify bool, allowInsecureHTTP bool, allowedHosts string
 			coreAllowedHosts[h] = true
 		}
 	}
+	return nil
 }
 
 // CloseCoreClient releases idle connections owned by the dedicated Core

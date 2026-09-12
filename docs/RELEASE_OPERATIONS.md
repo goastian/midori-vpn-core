@@ -86,12 +86,21 @@ tag commit and never rebuilds or re-signs either image.
 Control and Core `publish.yml` run only from pushed semantic tags in their
 private `*-dev` repositories. Each validates its repository-level enable
 switch, refuses an existing version, builds cleanly twice, requires equal
-digests and pushes a third identical build. All three explicitly disable
-BuildKit's default/embedded attestations so execution-specific manifests do
-not contaminate the reproducibility comparison. The workflow then scans the
-exact digest and creates independent SPDX plus GitHub provenance/SBOM
-attestations and signs with Cosign 3.1.3 keyless OIDC. The job explicitly sets
-and re-reads GHCR package visibility as `private`.
+digests and pushes a third identical build. All three use the same
+`SOURCE_DATE_EPOCH` and `rewrite-timestamp=true` exporter contract and
+explicitly disable BuildKit's default/embedded attestations so execution-
+specific manifests or unnormalized layer timestamps do not contaminate the
+digest comparison. The workflow then scans the exact digest and uses Cosign
+3.1.3 keyless OIDC to sign it and attach independently generated SLSA v1
+provenance plus SPDX attestations as private OCI referrers. It immediately
+verifies all three records against the exact tag-bound workflow identity.
+GitHub creates a new package as private; the job queries
+the package after publication and fails unless its effective visibility is
+exactly `private`. The GitHub Packages REST API has no visibility-update
+endpoint, so the workflow does not attempt an unsupported mutation.
+The pinned Syft container receives the job's temporary Docker credential file
+through a read-only `/auth/config.json` mount and `DOCKER_CONFIG=/auth`; this is
+required for direct digest scans of private GHCR images.
 
 The non-publishing build-evidence workflows scan their OCI archives by
 extracting each one to a private temporary layout, validating `oci-layout` and
@@ -104,6 +113,9 @@ attestations before publishing Core. It then creates a deterministic bundle
 containing host scripts/templates, public operator documentation, four commits,
 two OCI digests, database schema compatibility and checksums. It contains no
 deployment values, pull token, SSH key or application secret.
+Bundle generation requires the runner's standard `grep` command and treats a
+missing scanner or any scan error as fatal; a successful publication therefore
+cannot silently skip the private-key/token check.
 
 Both read-only credentials must be available as repository- or
 organization-level Actions secrets because Core validates tags before any
@@ -117,9 +129,14 @@ the source token needs no Attestations permission. The workflow logs in again
 with the job-scoped `GITHUB_TOKEN` before publishing Core.
 
 The bundle stores the exact pull tags and their expected digests separately.
+Its adjacent `.tar.gz.sha256` names the archive by basename, allowing the pair
+to be downloaded into any private staging directory and verified there without
+retaining the workflow's original `dist-release/` path.
 The workflow file, Actions and scanner are pinned to full commits or image
-digests. It has `packages`, `id-token`, `attestations` and artifact metadata
-write access only inside the candidate publication job. Neither workflow
+digests. Candidate jobs use only `packages: write`, `id-token: write` and
+`contents: read`; they do not request GitHub artifact-attestation permissions,
+which are unavailable for private repositories on the current organization
+plan. Neither workflow
 creates a GitHub Release or changes package visibility to public.
 
 ## Protected deployment environment
@@ -142,7 +159,7 @@ Configure these Secrets:
 - `MIDORIVPN_DEPLOY_SSH_KNOWN_HOSTS`
 - `MIDORIVPN_GHCR_PULL_TOKEN`, scoped only to read the two private packages
 - `MIDORIVPN_PRIVATE_RELEASE_TOKEN`, scoped to read the private Core workflow
-  artifact and the two private repositories' attestations
+  artifact; OCI attestations are read with the separate GHCR pull credential
 - `MIDORIVPN_DEPLOY_SECRETS`, a newline-delimited dotenv fragment containing
   only keys classified as `secret`
 
@@ -198,7 +215,7 @@ bash scripts/release/verify-oci-release.sh control \
   release.json workspace-manifest.json
 ```
 
-The verifier requires Cosign 3.1.3 and a current GitHub CLI. It checks the
+The verifier requires Cosign 3.1.3. It checks the
 exact private `publish.yml@refs/tags/<git_tag>` certificate identity, GitHub's
 OIDC issuer, coordinated commit/version labels, SLSA provenance and SPDX 2.3
 SBOM attestations.

@@ -33,7 +33,7 @@ case "${ID:-}" in
 esac
 
 packages=(
-  podman curl jq openssl nginx firewalld policycoreutils-python-utils
+  podman curl jq openssl nginx firewalld wireguard-tools policycoreutils-python-utils
   fuse-overlayfs slirp4netns
 )
 

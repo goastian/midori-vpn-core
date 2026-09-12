@@ -65,7 +65,9 @@ func main() {
 	}
 
 	// Initialize core HTTP client with TLS settings
-	control.InitCoreClient(cfg.CoreTLSSkipVerify, cfg.CoreAllowHTTP, cfg.CoreAllowedHosts)
+	if err := control.InitCoreClient(cfg.CoreTLSSkipVerify, cfg.CoreAllowHTTP, cfg.CoreAllowedHosts, cfg.ManagementTLSCA); err != nil {
+		log.Fatalf("failed to initialize Core management client: %v", err)
+	}
 	defer control.CloseCoreClient()
 	if cfg.ControlNodeID != "" {
 		if err := control.InitCoreSigningIdentity(cfg.ControlNodeID, cfg.ControlNodePrivateKey); err != nil {
@@ -106,7 +108,11 @@ func main() {
 		if err != nil {
 			log.Fatalf("failed to initialize enrolled Core node identity: %v", err)
 		}
-		nodeClient, err := nodeplane.NewClient(cfg.NodeControlURL, identity, nil, cfg.AppEnv == "development")
+		nodeHTTPClient, err := httpx.NewClientWithAdditionalCA(15*time.Second, cfg.ManagementTLSCA)
+		if err != nil {
+			log.Fatalf("failed to initialize node management TLS: %v", err)
+		}
+		nodeClient, err := nodeplane.NewClient(cfg.NodeControlURL, identity, nodeHTTPClient, cfg.AppEnv == "development")
 		if err != nil {
 			log.Fatalf("failed to initialize node-to-Control client: %v", err)
 		}

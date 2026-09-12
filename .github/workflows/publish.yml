@@ -81,8 +81,6 @@ jobs:
     needs: validate-release-set
     runs-on: ubuntu-24.04
     permissions:
-      artifact-metadata: write
-      attestations: write
       contents: read
       id-token: write
       packages: write
@@ -119,6 +117,7 @@ jobs:
             printf 'PRODUCT_VERSION=%s\n' "$product_version"
             printf 'RELEASE_VERSION=%s\n' "$release_version"
             printf 'SOURCE_DATE_EPOCH=%s\n' "$(jq -r .source_date_epoch dist-release/workspace-manifest.json)"
+            printf 'BUILD_STARTED_ON=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } >> "$GITHUB_ENV"
 
       - name: Log in to GHCR for private dependency verification
@@ -160,10 +159,12 @@ jobs:
           identity="https://github.com/goastian/midori-vpn-control-dev/.github/workflows/publish.yml@refs/tags/${GITHUB_REF_NAME}"
           cosign verify --certificate-identity "$identity" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com "$verification_ref"
-          gh attestation verify "oci://${verification_ref}" --bundle-from-oci --repo goastian/midori-vpn-control-dev \
-            --predicate-type https://slsa.dev/provenance/v1
-          gh attestation verify "oci://${verification_ref}" --bundle-from-oci --repo goastian/midori-vpn-control-dev \
-            --predicate-type https://spdx.dev/Document/v2.3
+          cosign verify-attestation --type slsaprovenance1 \
+            --certificate-identity "$identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com "$verification_ref" >/dev/null
+          cosign verify-attestation --type spdxjson \
+            --certificate-identity "$identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com "$verification_ref" >/dev/null
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR for Core publication
@@ -243,7 +244,6 @@ jobs:
           context: .
           file: Dockerfile
           platforms: linux/amd64
-          push: true
           no-cache: true
           tags: ${{ env.CORE_IMAGE }}:${{ env.RELEASE_VERSION }}
           labels: |
@@ -251,7 +251,7 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=https://github.com/goastian/midori-vpn-core-dev
           build-args: SOURCE_DATE_EPOCH=${{ env.SOURCE_DATE_EPOCH }}
-          outputs: type=registry
+          outputs: type=registry,rewrite-timestamp=true
           provenance: false
           sbom: false
 
@@ -261,12 +261,11 @@ jobs:
           PUSHED_DIGEST: ${{ steps.push.outputs.digest }}
         run: test -n "$PUSHED_DIGEST" && test "$FIRST_DIGEST" = "$PUSHED_DIGEST"
 
-      - name: Force and verify private Core package visibility
+      - name: Verify private Core package visibility
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
-          gh api --method PATCH /orgs/goastian/packages/container/midori-vpn-core -f visibility=private >/dev/null
           test "$(gh api /orgs/goastian/packages/container/midori-vpn-core --jq .visibility)" = private
 
       - name: Scan the exact Core digest and generate independent SPDX
@@ -276,33 +275,23 @@ jobs:
           set -Eeuo pipefail
           CONTAINER_ENGINE=docker bash scripts/scan-oci.sh image \
             "${CORE_IMAGE}@${IMAGE_DIGEST}" "dist-release/core-${RELEASE_VERSION}.trivy.json"
-          docker run --rm -e SYFT_CACHE_DIR=/tmp/syft-cache \
-            -v "${HOME}/.docker/config.json:/root/.docker/config.json:ro" \
+          docker run --rm -e SYFT_CACHE_DIR=/tmp/syft-cache -e DOCKER_CONFIG=/auth \
+            -v "${HOME}/.docker/config.json:/auth/config.json:ro" \
             -v "${PWD}/dist-release:/artifacts" \
             ghcr.io/anchore/syft@sha256:41f8289664101d6ebab30a97ac8df6b6f86b92d8343285ca90f428e2bc353106 \
             scan "registry:${CORE_IMAGE}@${IMAGE_DIGEST}" \
             -o "spdx-json=/artifacts/core-${RELEASE_VERSION}.spdx.json"
+          jq -n \
+            --arg server "$GITHUB_SERVER_URL" --arg repository "$GITHUB_REPOSITORY" \
+            --arg ref "$GITHUB_REF" --arg commit "$GITHUB_SHA" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg product_version "$PRODUCT_VERSION" --arg release_version "$RELEASE_VERSION" \
+            --arg started_on "$BUILD_STARTED_ON" --arg finished_on "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{buildDefinition:{buildType:"https://slsa-framework.github.io/github-actions-buildtypes/workflow/v1",externalParameters:{workflow:{ref:$ref,repository:($server+"/"+$repository),path:".github/workflows/publish.yml"},product_version:$product_version,release_version:$release_version},internalParameters:{github:{event_name:"push",runner_environment:"github-hosted"}},resolvedDependencies:[{uri:("git+"+$server+"/"+$repository+"@"+$ref),digest:{gitCommit:$commit}}]},runDetails:{builder:{id:($server+"/actions/runner/github-hosted")},metadata:{invocationId:($server+"/"+$repository+"/actions/runs/"+$run_id+"/attempts/"+$run_attempt),startedOn:$started_on,finishedOn:$finished_on},byproducts:[]}}' \
+            > "dist-release/core-${RELEASE_VERSION}.provenance.json"
 
-      - name: Attest Core provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-name: ${{ env.CORE_IMAGE }}
-          subject-digest: ${{ steps.push.outputs.digest }}
-          subject-version: ${{ env.RELEASE_VERSION }}
-          push-to-registry: true
-
-      - name: Attest Core SPDX SBOM
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-name: ${{ env.CORE_IMAGE }}
-          subject-digest: ${{ steps.push.outputs.digest }}
-          subject-version: ${{ env.RELEASE_VERSION }}
-          sbom-path: dist-release/core-${{ env.RELEASE_VERSION }}.spdx.json
-          push-to-registry: true
-
-      - name: Sign, pull by tag and verify Core
+      - name: Sign, attest, pull by tag and verify Core
         env:
-          GH_TOKEN: ${{ github.token }}
           IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           set -Eeuo pipefail
@@ -310,16 +299,35 @@ jobs:
           verification_ref="${CORE_IMAGE}@${IMAGE_DIGEST}"
           identity="https://github.com/goastian/midori-vpn-core-dev/.github/workflows/publish.yml@refs/tags/${GITHUB_REF_NAME}"
           cosign sign --yes "$verification_ref"
+          cosign attest --yes --type slsaprovenance1 \
+            --predicate "dist-release/core-${RELEASE_VERSION}.provenance.json" "$verification_ref"
+          cosign attest --yes --type spdxjson \
+            --predicate "dist-release/core-${RELEASE_VERSION}.spdx.json" "$verification_ref"
           docker pull "$tag_ref" >/dev/null
           docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$tag_ref" | grep -Fx "$verification_ref"
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$tag_ref")" = "$GITHUB_SHA"
           test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$tag_ref")" = "$RELEASE_VERSION"
           cosign verify --certificate-identity "$identity" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com "$verification_ref"
-          gh attestation verify "oci://${verification_ref}" --bundle-from-oci --repo goastian/midori-vpn-core-dev \
-            --predicate-type https://slsa.dev/provenance/v1
-          gh attestation verify "oci://${verification_ref}" --bundle-from-oci --repo goastian/midori-vpn-core-dev \
-            --predicate-type https://spdx.dev/Document/v2.3
+          cosign verify-attestation --type slsaprovenance1 \
+            --certificate-identity "$identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$verification_ref" > "dist-release/core-${RELEASE_VERSION}.provenance.verify.json"
+          cosign verify-attestation --type spdxjson \
+            --certificate-identity "$identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$verification_ref" > "dist-release/core-${RELEASE_VERSION}.spdx.verify.json"
+          jq -e --arg commit "$GITHUB_SHA" --arg ref "$GITHUB_REF" --arg version "$RELEASE_VERSION" '
+            def records: if type == "array" then .[] else . end;
+            any(records; ((.payload | @base64d | fromjson).predicate) as $p |
+              $p.buildDefinition.externalParameters.workflow.ref == $ref and
+              $p.buildDefinition.externalParameters.release_version == $version and
+              $p.buildDefinition.resolvedDependencies[0].digest.gitCommit == $commit)
+          ' "dist-release/core-${RELEASE_VERSION}.provenance.verify.json" >/dev/null
+          jq -e '
+            def records: if type == "array" then .[] else . end;
+            any(records; (.payload | @base64d | fromjson).predicate.spdxVersion == "SPDX-2.3")
+          ' "dist-release/core-${RELEASE_VERSION}.spdx.verify.json" >/dev/null
 
       - name: Create the secret-free deployment bundle
         env:
@@ -339,7 +347,10 @@ jobs:
             dist-release/midorivpn-${{ env.RELEASE_VERSION }}.tar.gz
             dist-release/midorivpn-${{ env.RELEASE_VERSION }}.tar.gz.sha256
             dist-release/workspace-manifest.json
+            dist-release/core-${{ env.RELEASE_VERSION }}.provenance.json
+            dist-release/core-${{ env.RELEASE_VERSION }}.provenance.verify.json
             dist-release/core-${{ env.RELEASE_VERSION }}.spdx.json
+            dist-release/core-${{ env.RELEASE_VERSION }}.spdx.verify.json
             dist-release/core-${{ env.RELEASE_VERSION }}.trivy.json
           if-no-files-found: error
           retention-days: 30
