@@ -13,6 +13,8 @@ fail() {
   exit 1
 }
 
+bash "${ROOT}/scripts/test-management-pki.sh" >/dev/null
+
 assert_contains() {
   local file="$1" expected="$2"
   grep -Fqx -- "${expected}" "${file}" || fail "${file} does not contain ${expected}"

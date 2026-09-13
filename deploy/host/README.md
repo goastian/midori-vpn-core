@@ -107,11 +107,14 @@ Generate the private management CA on an offline administrative machine:
 bash deploy/host/generate-management-pki.sh /absolute/new/private-directory
 ```
 
-Keep `ca.key` offline. Each host receives `ca.crt` and only its matching
-certificate/key. `configure-nginx.sh` adds a TLS-1.3-only listener bound to the
-host's overlay address. On Main it exposes only `/api/v1/node/`; on the regional
-it exposes only Core health, peer and stats routes. The application trusts this
-CA only through `MANAGEMENT_TLS_CA`; it never modifies system-wide trust.
+Run it from the machine's local console after disconnecting all network links;
+the interactive passphrase never crosses SSH. The generated `ca.key` is
+encrypted with AES-256-CBC. Keep it offline and store its passphrase separately.
+Each host receives `ca.crt` and only its matching certificate/key.
+`configure-nginx.sh` adds a TLS-1.3-only listener bound to the host's overlay
+address. On Main it exposes only `/api/v1/node/`; on the regional it exposes
+only Core health, peer and stats routes. The application trusts this CA only
+through `MANAGEMENT_TLS_CA`; it never modifies system-wide trust.
 
 For rootless MASQUE, `MASQUE_PORT=443` remains the public and container port,
 while `MASQUE_HOST_PORT=8443` is the non-privileged host bind. Firewalld owns
