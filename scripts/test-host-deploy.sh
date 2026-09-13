@@ -14,6 +14,7 @@ fail() {
 }
 
 bash "${ROOT}/scripts/test-management-pki.sh" >/dev/null
+bash "${ROOT}/scripts/test-management-nginx.sh" >/dev/null
 
 assert_contains() {
   local file="$1" expected="$2"

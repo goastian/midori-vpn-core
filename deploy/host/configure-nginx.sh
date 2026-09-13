@@ -9,16 +9,20 @@ source "${SCRIPT_DIR}/lib/common.sh"
 
 env_file=""
 issue_certificate=false
+management_only=false
+render_only=""
 backup_root="/var/lib/midorivpn-deploy/nginx-backups"
 backup_record=""
 
 usage() {
-  printf 'usage: %s --env-file PATH [--issue-certificate] [--backup-root PATH] [--backup-record FILE]\n' "$0"
+  printf 'usage: %s --env-file PATH [--management-only] [--render-only DIR] [--issue-certificate] [--backup-root PATH] [--backup-record FILE]\n' "$0"
 }
 
 while (($#)); do
   case "$1" in
     --env-file) env_file="${2:-}"; shift 2 ;;
+    --management-only) management_only=true; shift ;;
+    --render-only) render_only="${2:-}"; shift 2 ;;
     --issue-certificate) issue_certificate=true; shift ;;
     --backup-root) backup_root="${2:-}"; shift 2 ;;
     --backup-record) backup_record="${2:-}"; shift 2 ;;
@@ -27,20 +31,33 @@ while (($#)); do
   esac
 done
 
-[[ "$(id -u)" == 0 ]] || host_die "Nginx configuration requires sudo or root"
 [[ -n "${env_file}" ]] || { usage >&2; host_die "--env-file is required"; }
-host_require_command nginx
-host_require_command systemctl
+if [[ "${management_only}" == true && "${issue_certificate}" == true ]]; then
+  host_die "--issue-certificate cannot be combined with --management-only"
+fi
+if [[ -n "${render_only}" ]]; then
+  [[ "${issue_certificate}" == false ]] || host_die "--issue-certificate cannot be combined with --render-only"
+  [[ -z "${backup_record}" ]] || host_die "--backup-record cannot be combined with --render-only"
+  host_validate_absolute_path "${render_only}" --render-only
+  [[ ! -e "${render_only}" ]] || host_die "--render-only destination must not exist"
+else
+  [[ "$(id -u)" == 0 ]] || host_die "Nginx configuration requires sudo or root"
+  host_require_command nginx
+  host_require_command systemctl
+fi
 declare -A cfg=()
 host_load_env "${env_file}" cfg
-for key in DEPLOYMENT_PROFILE DOMAIN VPN_CORE_HOST_PORT ACME_WEBROOT NGINX_VHOST_PATH PROXY_ENABLED MANAGEMENT_HOST_BIND MANAGEMENT_HTTPS_PORT MANAGEMENT_TLS_CERT MANAGEMENT_TLS_KEY MANAGEMENT_TLS_CA; do
+required_keys=(DEPLOYMENT_PROFILE VPN_CORE_HOST_PORT NGINX_VHOST_PATH MANAGEMENT_HOST_BIND MANAGEMENT_HTTPS_PORT MANAGEMENT_TLS_CERT MANAGEMENT_TLS_KEY MANAGEMENT_TLS_CA)
+if [[ "${management_only}" == false ]]; then
+  required_keys+=(DOMAIN ACME_WEBROOT PROXY_ENABLED)
+fi
+for key in "${required_keys[@]}"; do
   host_require_env cfg "${key}"
 done
 [[ "${cfg[DEPLOYMENT_PROFILE]}" == principal || "${cfg[DEPLOYMENT_PROFILE]}" == core-node ]] || host_die "DEPLOYMENT_PROFILE must be principal or core-node"
-[[ "${cfg[DOMAIN]}" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$ ]] || host_die "DOMAIN is not a valid hostname"
 port_keys=(VPN_CORE_HOST_PORT)
 port_keys+=(MANAGEMENT_HTTPS_PORT)
-if [[ "${cfg[DEPLOYMENT_PROFILE]}" == principal ]]; then
+if [[ "${management_only}" == false && "${cfg[DEPLOYMENT_PROFILE]}" == principal ]]; then
   host_require_env cfg CONTROL_HOST_PORT
   port_keys+=(CONTROL_HOST_PORT)
 fi
@@ -49,7 +66,6 @@ for key in "${port_keys[@]}"; do
     host_die "${key} must be a valid port"
   fi
 done
-[[ "${cfg[ACME_WEBROOT]}" == /* ]] || host_die "ACME_WEBROOT must be absolute"
 [[ "${cfg[NGINX_VHOST_PATH]}" == /etc/nginx/* ]] || host_die "NGINX_VHOST_PATH must remain below /etc/nginx"
 host_validate_absolute_path "${cfg[NGINX_VHOST_PATH]}" NGINX_VHOST_PATH
 host_validate_rfc1918_ipv4 "${cfg[MANAGEMENT_HOST_BIND]}" MANAGEMENT_HOST_BIND
@@ -58,20 +74,33 @@ for key in MANAGEMENT_TLS_CERT MANAGEMENT_TLS_KEY MANAGEMENT_TLS_CA; do
   host_require_regular_file "${cfg[${key}]}"
 done
 [[ "$(stat -c '%a' -- "${cfg[MANAGEMENT_TLS_KEY]}")" == 600 ]] || host_die "MANAGEMENT_TLS_KEY must have mode 0600"
-[[ "${cfg[PROXY_ENABLED]}" == true || "${cfg[PROXY_ENABLED]}" == false ]] || host_die "PROXY_ENABLED must be true or false"
+proxy_enabled=false
+if [[ "${management_only}" == false ]]; then
+  [[ "${cfg[DOMAIN]}" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$ ]] || host_die "DOMAIN is not a valid hostname"
+  [[ "${cfg[ACME_WEBROOT]}" == /* ]] || host_die "ACME_WEBROOT must be absolute"
+  [[ "${cfg[PROXY_ENABLED]}" == true || "${cfg[PROXY_ENABLED]}" == false ]] || host_die "PROXY_ENABLED must be true or false"
+  proxy_enabled="${cfg[PROXY_ENABLED]}"
+fi
 
 management_destination="$(dirname -- "${cfg[NGINX_VHOST_PATH]}")/midorivpn-management.conf"
 [[ "${management_destination}" != "${cfg[NGINX_VHOST_PATH]}" ]] || host_die "management and public Nginx destinations must differ"
-destinations=("${cfg[NGINX_VHOST_PATH]}" "${management_destination}")
-rendered_names=(vhost management)
+destinations=("${management_destination}")
+rendered_names=(management)
 if [[ "${cfg[DEPLOYMENT_PROFILE]}" == principal ]]; then
-  public_template="${SOURCE_ROOT}/deploy/nginx/core-vhost.conf.template"
   management_template="${SOURCE_ROOT}/deploy/nginx/principal-management.conf.template"
 else
-  public_template="${SOURCE_ROOT}/deploy/nginx/core-node-vhost.conf.template"
   management_template="${SOURCE_ROOT}/deploy/nginx/core-node-management.conf.template"
 fi
-if [[ "${cfg[PROXY_ENABLED]}" == true ]]; then
+if [[ "${management_only}" == false ]]; then
+  destinations=("${cfg[NGINX_VHOST_PATH]}" "${management_destination}")
+  rendered_names=(vhost management)
+  if [[ "${cfg[DEPLOYMENT_PROFILE]}" == principal ]]; then
+    public_template="${SOURCE_ROOT}/deploy/nginx/core-vhost.conf.template"
+  else
+    public_template="${SOURCE_ROOT}/deploy/nginx/core-node-vhost.conf.template"
+  fi
+fi
+if [[ "${proxy_enabled}" == true ]]; then
   for key in NGINX_STREAM_VHOST_PATH PROXY_HOST_PORT PROXY_PORT; do
     host_require_env cfg "${key}"
   done
@@ -91,14 +120,16 @@ cleanup() { rm -rf -- "${temporary_dir}"; }
 trap cleanup EXIT
 
 escape_sed() { printf '%s' "$1" | sed 's/[&|\\]/\\&/g'; }
-sed \
-  -e "s|__DOMAIN__|$(escape_sed "${cfg[DOMAIN]}")|g" \
-  -e "s|__VPN_CORE_HOST_PORT__|$(escape_sed "${cfg[VPN_CORE_HOST_PORT]}")|g" \
-  -e "s|__CONTROL_WEB_PORT__|$(escape_sed "${cfg[CONTROL_HOST_PORT]:-}")|g" \
-  "${public_template}" > "${temporary_dir}/vhost.conf"
-grep -Fq 'location = /.well-known/midorivpn/edge-health' "${temporary_dir}/vhost.conf" || host_die "rendered Nginx vhost lacks the exact edge-health route"
-if grep -Eq '__[A-Z0-9_]+__' "${temporary_dir}/vhost.conf"; then
-  host_die "rendered Nginx vhost contains unresolved placeholders"
+if [[ "${management_only}" == false ]]; then
+  sed \
+    -e "s|__DOMAIN__|$(escape_sed "${cfg[DOMAIN]}")|g" \
+    -e "s|__VPN_CORE_HOST_PORT__|$(escape_sed "${cfg[VPN_CORE_HOST_PORT]}")|g" \
+    -e "s|__CONTROL_WEB_PORT__|$(escape_sed "${cfg[CONTROL_HOST_PORT]:-}")|g" \
+    "${public_template}" > "${temporary_dir}/vhost.conf"
+  grep -Fq 'location = /.well-known/midorivpn/edge-health' "${temporary_dir}/vhost.conf" || host_die "rendered Nginx vhost lacks the exact edge-health route"
+  if grep -Eq '__[A-Z0-9_]+__' "${temporary_dir}/vhost.conf"; then
+    host_die "rendered Nginx vhost contains unresolved placeholders"
+  fi
 fi
 
 sed \
@@ -112,7 +143,7 @@ if grep -Eq '__[A-Z0-9_]+__' "${temporary_dir}/management.conf"; then
   host_die "rendered Nginx management config contains unresolved placeholders"
 fi
 
-if [[ "${cfg[PROXY_ENABLED]}" == true ]]; then
+if [[ "${proxy_enabled}" == true ]]; then
   sed \
     -e "s|__DOMAIN__|$(escape_sed "${cfg[DOMAIN]}")|g" \
     -e "s|__PROXY_HOST_PORT__|$(escape_sed "${cfg[PROXY_HOST_PORT]}")|g" \
@@ -121,6 +152,15 @@ if [[ "${cfg[PROXY_ENABLED]}" == true ]]; then
   if grep -Eq '__[A-Z0-9_]+__' "${temporary_dir}/stream.conf"; then
     host_die "rendered Nginx stream config contains unresolved placeholders"
   fi
+fi
+
+if [[ -n "${render_only}" ]]; then
+  install -d -m 0700 -- "${render_only}"
+  for rendered_name in "${rendered_names[@]}"; do
+    install -m 0644 -- "${temporary_dir}/${rendered_name}.conf" "${render_only}/${rendered_name}.conf"
+  done
+  host_info "Nginx configuration rendered without host changes: ${render_only}"
+  exit 0
 fi
 
 install -d -m 0700 -- "${backup_root}"
@@ -193,5 +233,9 @@ if ! systemctl reload nginx.service; then
   systemctl reload nginx.service || host_die "Nginx reload failed after restoring previous files"
   host_die "Nginx reload failed; previous files restored and reloaded"
 fi
-host_info "Nginx configured atomically for ${cfg[DOMAIN]}"
+if [[ "${management_only}" == true ]]; then
+  host_info "Nginx management listener configured atomically on ${cfg[MANAGEMENT_HOST_BIND]}:${cfg[MANAGEMENT_HTTPS_PORT]}"
+else
+  host_info "Nginx configured atomically for ${cfg[DOMAIN]}"
+fi
 host_info "Nginx rollback snapshot: ${backup_dir}"

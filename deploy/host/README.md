@@ -116,6 +116,21 @@ address. On Main it exposes only `/api/v1/node/`; on the regional it exposes
 only Core health, peer and stats routes. The application trusts this CA only
 through `MANAGEMENT_TLS_CA`; it never modifies system-wide trust.
 
+When the public vhosts are already managed independently, render or install
+only the private listener. This mode never renders, replaces or requests a
+certificate for a public vhost:
+
+```bash
+bash deploy/host/configure-nginx.sh \
+  --env-file /path/to/midorivpn.env \
+  --management-only \
+  --render-only /absolute/new/review-directory
+
+sudo bash deploy/host/configure-nginx.sh \
+  --env-file /path/to/midorivpn.env \
+  --management-only
+```
+
 For rootless MASQUE, `MASQUE_PORT=443` remains the public and container port,
 while `MASQUE_HOST_PORT=8443` is the non-privileged host bind. Firewalld owns
 the exact UDP redirect. Database, Redis, Core HTTP, Control, Prometheus and
