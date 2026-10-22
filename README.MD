@@ -28,6 +28,9 @@ the abandoned Tauri/Rust and non-Linux client sources have been removed.
 The changelog and source describe work in the unreleased line; they are not a
 substitute for a published artifact or a deployment acceptance record.
 
+The [project status review dated 2026-10-21](docs/PROJECT_STATUS.md) records the
+remaining gates, evidence limits and expired extension tooling exceptions.
+
 ## Transport implementation
 
 | Transport | Public port | State |

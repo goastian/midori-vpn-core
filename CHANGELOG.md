@@ -4,6 +4,9 @@
 
 ### Governance
 
+- Added a dated project status review with pending regional, client and
+  database acceptance, expired extension tooling exceptions and validation
+  limits; removed obsolete next-candidate numbers from release runbooks.
 - Added repository-local security and contribution policies, reconciled the
   canonical AGPL-3.0-or-later license text and made public release status
   distinguish source implementation, deployment certification and pending

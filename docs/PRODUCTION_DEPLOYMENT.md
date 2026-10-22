@@ -253,10 +253,10 @@ The host patcher:
 2. Run `bash scripts/release/create-workspace-manifest.sh` from the coordinated
    checkout and review the four full commit IDs and version.
 3. Create the same annotated semantic tag in all four private `*-dev`
-   repositories. Product metadata remains `2.0.0`; `v2.0.0-rc.1` is retained
-   as the failed Control reproducibility attempt and the next coordinated
-   candidate uses release version `2.0.0-rc.2` with Git tag `v2.0.0-rc.2`. A
-   lightweight tag is invalid.
+   repositories. Product metadata remains `2.0.0`; inventory existing refs
+   before choosing a fresh, explicitly authorized candidate version. Existing
+   candidate tags must never be moved or reused. A lightweight tag is invalid.
+   Check the dated acceptance gates in [PROJECT_STATUS.md](PROJECT_STATUS.md).
 4. Push Control, Desktop and Extension first. Wait for the private Control
    candidate and all non-publishing evidence jobs to pass.
 5. Push Core last. Core is the candidate coordinator and rejects missing, moved or

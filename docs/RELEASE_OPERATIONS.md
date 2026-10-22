@@ -68,10 +68,11 @@ Control candidate to pass, and push Core last. The Core tag is the coordinator:
 it checks out all four tags, rejects a lightweight, missing or mismatched tag
 and emits the
 authoritative schema-3 source manifest with separate product version, release
-version and Git tag. Product metadata stays `2.0.0`; `v2.0.0-rc.1` remains the
-failed Control reproducibility attempt and the next coordinated candidate is
-release `2.0.0-rc.2` under `v2.0.0-rc.2`. Never repair failure by moving a
-tag; use a new version.
+version and Git tag. Product metadata stays `2.0.0`. Inventory existing refs
+and choose a fresh, explicitly authorized candidate version. Earlier failed,
+partial and completed candidates remain immutable; never repair failure by
+moving or reusing a tag. The dated acceptance review is in
+[PROJECT_STATUS.md](PROJECT_STATUS.md).
 
 After private candidate publication is complete, promote the exact frozen Core
 commit to the public production repository. Its enforced `v*` tag ruleset must

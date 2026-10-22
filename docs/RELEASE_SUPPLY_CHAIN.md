@@ -8,11 +8,12 @@ trees whose exact commits are recorded; working branches are not release refs.
 ## Release set
 
 All components use product version `2.0.0`. Release candidates add a separate
-release suffix. `v2.0.0-rc.1` is retained as a failed, unpublished Control
-candidate; `v2.0.0-rc.2` through `v2.0.0-rc.5` are failed partial Control
-candidates and are never reused. The next coordinated attempt is
-`v2.0.0-rc.6`. A release is incomplete unless every
-applicable evidence file is produced from the same source revision.
+release suffix. Existing candidate refs are immutable historical records,
+including failed or partially published attempts. Inventory existing refs
+before choosing a fresh authorized version; this contract does not prescribe
+the next candidate number. A release is incomplete unless every applicable
+evidence file is produced from the same source revision. See
+[PROJECT_STATUS.md](PROJECT_STATUS.md) for the dated release gate review.
 
 | Component | Primary artifact | Required evidence | Signing authority |
 |---|---|---|---|
@@ -104,17 +105,17 @@ sha256sum --check SHA256SUMS
 # Public Sigstore signature and private OCI attestations. Keep the workflow identity exact.
 cosign verify \
   --certificate-identity \
-  'https://github.com/goastian/midori-vpn-core-dev/.github/workflows/publish.yml@refs/tags/v2.0.0-rc.6' \
+  'https://github.com/goastian/midori-vpn-core-dev/.github/workflows/publish.yml@refs/tags/<approved-tag>' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   ghcr.io/goastian/midori-vpn-core@sha256:<digest>
 cosign verify-attestation --type slsaprovenance1 \
   --certificate-identity \
-  'https://github.com/goastian/midori-vpn-core-dev/.github/workflows/publish.yml@refs/tags/v2.0.0-rc.6' \
+  'https://github.com/goastian/midori-vpn-core-dev/.github/workflows/publish.yml@refs/tags/<approved-tag>' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   ghcr.io/goastian/midori-vpn-core@sha256:<digest>
 cosign verify-attestation --type spdxjson \
   --certificate-identity \
-  'https://github.com/goastian/midori-vpn-core-dev/.github/workflows/publish.yml@refs/tags/v2.0.0-rc.6' \
+  'https://github.com/goastian/midori-vpn-core-dev/.github/workflows/publish.yml@refs/tags/<approved-tag>' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   ghcr.io/goastian/midori-vpn-core@sha256:<digest>
 ```
@@ -138,7 +139,10 @@ produces separate deterministic browser packages, AMO reviewer source,
 store metadata, SPDX, provenance and checksums, and validates Firefox with the
 locked `web-ext` version.
 
-The remaining production gates are deliberately external to source control:
+Source-side completion still requires regional, client/performance, database
+and current security acceptance, as recorded in
+[PROJECT_STATUS.md](PROJECT_STATUS.md). Beyond those checks, the following
+production inputs are external to source control:
 
 - final approval and creation of the coordinated annotated release tags;
 - public GitHub Environment, reviewer, enforced `v*` ruleset and enable switch;
