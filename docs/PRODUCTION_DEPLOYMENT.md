@@ -79,6 +79,35 @@ TLS policy on TCP/9443. The customer WireGuard endpoint uses an unrelated
 DNS-only 128-bit random label and UDP port. That opaque name reduces automated
 noise but is not an authentication or confidentiality control.
 
+### WireGuard namespace isolation
+
+Core installs mandatory, interface-scoped INPUT and FORWARD chains before
+bringing WireGuard up, including restoration and restart of an existing
+interface. The `MVPN-IN-<interface>` and `MVPN-FW-<interface>` chains and tagged
+jumps are MidoriVPN-owned. Filter updates are one `iptables-restore --noflush`
+transaction; unrelated rules and base policies are preserved, and managed
+protection is placed before historical permissive rules.
+
+Rootless Core cannot load host kernel modules. Provision the approved host's
+netfilter backend and its TCP/UDP, comment and conntrack extensions before
+activation. Missing kernel support is a failed deployment gate, not permission
+to ignore `iptables-restore` errors or revert to unrestricted forwarding.
+
+VPN peers cannot access namespace-local services. TCP/UDP DNS is allowed only
+to the pool gateway when that exact IP is configured in `VPN_DNS`. Peer-to-peer
+forwarding, including mesh, is blocked in this MVP. Internet egress and its
+established replies remain allowed. Failure to install protection aborts
+startup and attempts to bring the interface down; a failure to disable it is
+reported as well and requires immediate operator intervention. A NAT warning
+never counts as evidence of working internet egress.
+
+The kernel integration test is opt-in and must run in a disposable Podman
+container with `NET_ADMIN` and `--network=none`, never in the host namespace.
+It checks real backend parsing and idempotent rule reconciliation, not tunnel
+traffic. Before accepting any deployment, connect real clients and verify
+internet/DNS, isolation from other clients and refusal of PostgreSQL,
+PgBouncer, Redis, Core HTTP and observability from the VPN interface.
+
 ## Release and deployment flow
 
 The immutable release flow is:
@@ -247,6 +276,26 @@ The host patcher:
 - records a mode-0600 backup when an environment already exists; and
 - never writes secret values to command arguments or normal output.
 
+### Authentication and device quota checks
+
+Access tokens must have an `aud` containing `AUTHENTIK_CLIENT_ID`. A matching
+issuer or `azp` alone is not sufficient. The same audience requirement applies
+to HTTP, WebSocket and introspected tokens, including cached results. Public
+PKCE clients should use asymmetrically signed access tokens verifiable through
+JWKS; opaque/encrypted tokens still require server-side introspection
+credentials. Never embed a client secret in Desktop or the extension.
+
+Before rollout, validate a real token from each supported client and confirm
+that a token from another application of the same issuer returns 401. Local
+synthetic-token tests are not certification of the production Authentik setup.
+
+When `ASTIAN_PAYMENT_URL` is empty, billing and its entitlement cache are not
+consulted: `MAX_DEVICES_PER_USER` determines the concurrent-device quota. Zero
+uses the existing default of five; it does not mean unlimited. With billing
+configured, the current subscription limit remains authoritative. Provider
+outage policy is a separate billing acceptance task, not changed by the
+free-beta fallback correction.
+
 ## Coordinate and publish the release
 
 1. Freeze clean, reviewed commits for Core, Control, Desktop and Extension.
@@ -366,6 +415,95 @@ to create the initial cluster, node and one-use enrollment token through the
 administrator API. It is ineligible for placement in that state. Install all
 node identity settings together and restart immediately; partial settings fail
 startup.
+
+### First modeled Core activation (MVP-CORE-01)
+
+After the empty database has been migrated and role policy applied, use the
+administrator API to create the inventory, not ad-hoc bootstrap inserts:
+
+1. `POST /api/v1/admin/clusters` creates the inactive cluster.
+2. `POST /api/v1/admin/clusters/{clusterID}/nodes` creates the enrolling node.
+3. Issue its one-use token with
+   `POST /api/v1/admin/nodes/{nodeID}/enrollment-token`, install the node identity
+   settings and complete enrollment. Enrollment leaves the node **inactive**.
+4. Publish signed intent with `POST /api/v1/admin/nodes/{nodeID}/desired-state`.
+   Wait for a healthy, compatible heartbeat reporting that latest revision and
+   a still-valid desired lease. Do not insert an observation or extend a lease
+   manually to manufacture eligibility.
+5. `POST /api/v1/admin/servers` creates the unbound server with explicit
+   transport inventory and its verified HTTPS `probe_url`. Wait for central
+   transport health to be fresh and healthy; certificate transports additionally
+   require centrally recorded certification from their real acceptance gate.
+
+Review the three returned UUIDs and select the protocol that must be eligible.
+Under the principal's dedicated rootless service account, load the existing
+protected migrator credentials into the environment without printing them or
+putting passwords on a command line. Then run:
+
+```bash
+export POSTGRES_CONTAINER=midori-postgres
+export POSTGRES_DB=midori_vpn
+export POSTGRES_MIGRATOR_USER=midori_migrator
+# POSTGRES_MIGRATOR_PASSWORD is injected from the protected operator environment.
+bash scripts/activate-core.sh "$CLUSTER_ID" "$NODE_ID" "$SERVER_ID" wireguard
+```
+
+This operator-only command uses `psql` **inside the existing PostgreSQL
+container**, directly over private loopback TCP/5432 with the migrator identity;
+it needs no host Go/PostgreSQL runtime, extra image, published database port or
+regional database credentials. It does not use PgBouncer. The runtime role is
+not accepted: the session must be the configured migrator and have schema
+creation privilege under the existing database policy. This check is a guard
+against operator mistakes, not a new privilege boundary against a compromised
+runtime role that already has table DML permissions.
+
+`deploy/postgres/activate-core.sql` locks the inventory and performs cluster
+activation, node activation and server binding in **one serializable
+transaction**. Before commit it calls the existing
+`vpn_server_placement_eligible(server, protocol, '90 seconds', TRUE)` gate with
+the legacy exception disabled. It does not change transport health,
+certification, capacity, desired state, node identity or the server's active
+flag. Failure, including failure of that final gate, rolls back every write.
+
+The command refuses draining/revoked/retired authority, unenrolled nodes,
+inactive/draining servers, inconsistent observations, legacy-exempt servers,
+cross-cluster identity, occupied nodes and **every cross-node reassignment**.
+An initial binding also refuses existing peers, valid device certificates,
+live operations or nonzero server/node peer counts. Activating an inactive
+cluster is refused if that would also enable another already-active node.
+Use the separate reviewed lifecycle procedure for those cases; do not clear a
+drain, session, binding or legacy flag merely to make this command pass.
+
+A repeat with the same inventory and still-eligible state succeeds without
+changing timestamps. A later unhealthy/full/expired state is not excused by a
+previous success: the repeat fails closed and leaves existing state unchanged.
+Concurrent execution can return a serialization or bounded lock error; inspect
+inventory and retry the whole command, never just one of its updates. A lost
+connection after commit can likewise be resolved by rerunning the command.
+Record the successful UUID/protocol output with the operator's private gate
+evidence. Failure has a nonzero exit status and no partial activation. After a
+successful commit, use the normal administrative drain/revoke workflow if
+activation must be withdrawn; there is no automatic unbind or SQL rollback of
+an already accepted node.
+
+The PostgreSQL integration suite creates cluster/node/server inventory through
+the real admin handlers, exercises enrollment and signed desired-state
+issuance, checks the production SQL transaction and asserts idempotency,
+concurrency and failure atomicity. Run against an isolated migrated test
+database with schema-capable test credentials, using the pinned Podman runner:
+
+```bash
+: "${TEST_DATABASE_URL:?set the isolated PostgreSQL test URL}"
+bash scripts/pod.sh go test -race -count=1 ./internal/control -run '^TestCoreActivation'
+bash -n scripts/activate-core.sh
+bash scripts/pod.sh shellcheck scripts/activate-core.sh
+```
+
+When the services use a private Podman network, also export
+`TEST_PODMAN_NETWORK`; no host port is needed. Without `TEST_DATABASE_URL`, Go
+integration tests skip and are **not** activation evidence. Database tests do
+not certify a gateway: activation still requires the installation's real
+management, transport, edge-health and cleanup acceptance evidence below.
 
 ## Install and activate a regional
 

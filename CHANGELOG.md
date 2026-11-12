@@ -14,6 +14,15 @@
 
 ### Security
 
+- Require the intended OAuth audience for JWT, WebSocket and introspection,
+  including cache hits; provider rejections no longer fall through to another
+  introspection endpoint. `azp` does not substitute for `aud`.
+- Install atomic, interface-scoped WireGuard isolation before enabling peers;
+  block namespace services and peer forwarding, with explicit gateway-only DNS.
+  Filter failures abort startup and attempt to disable the interface.
+- Update pinned Core builders to Go 1.27.4 and runtime Alpine 3.24.4/OpenSSL
+  3.5.9, and refresh the affected Go networking/crypto dependencies. Exclude
+  private workspace data and nested clients from the container build context.
 - Private Core and Control candidates now use keyless Cosign OCI attestations
   for SLSA v1 provenance and SPDX, with immediate identity-bound verification,
   instead of GitHub's plan-restricted private artifact-attestation API.
@@ -62,6 +71,14 @@
 
 ### Operations
 
+- Add an idempotent operator command for initial Core activation and binding,
+  guarded by enrollment, observed/desired state and the existing placement
+  authority in one serializable transaction; include it in deployment bundles.
+- Honor the configured device quota without a payment URL, preserving the
+  existing five-device default for zero. Keep subscription limits when billing
+  is configured. Correct the logout revocation URL and allow PATCH preflights.
+- Run Core CI against PostgreSQL 18 and Redis, rejecting skipped repository or
+  Control integration tests; update Staticcheck and containerized gate tooling.
 - Deployment bundles now write their external checksum against the archive
   basename, so verification survives GitHub Actions' flat artifact-download
   layout before any SSH or host mutation.

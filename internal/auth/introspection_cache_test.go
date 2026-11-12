@@ -60,6 +60,7 @@ func TestIntrospectionCacheSingleflightDeduplicatesConcurrentMisses(t *testing.T
 		_ = json.NewEncoder(w).Encode(IntrospectionClaims{
 			Active: true,
 			Sub:    "singleflight-user",
+			Aud:    tokenAudience{"client"},
 			Exp:    time.Now().Add(time.Hour).Unix(),
 		})
 	}))
@@ -118,6 +119,7 @@ func TestInvalidateIntrospectionDoesNotAllowInFlightRepopulation(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(IntrospectionClaims{
 			Active: true,
 			Sub:    "invalidated-user",
+			Aud:    tokenAudience{"client"},
 			Exp:    time.Now().Add(time.Hour).Unix(),
 		})
 	}))

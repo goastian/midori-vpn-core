@@ -1,5 +1,11 @@
 .git
 .gitignore
+.projects/
+.agents/
+.codex/
+.git-backups/
+.stversions/
+node_modules/
 .env
 .env.*
 !.env.default
@@ -13,5 +19,6 @@ video.mp4
 !README.MD
 package-lock.json
 midori-vpn-control/
+midori-vpn-desktop/
 midorivpn-desktop/
 midorivpn-extension/

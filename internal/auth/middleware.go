@@ -130,6 +130,11 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 						respond.JsonError(w, "invalid token issuer", http.StatusUnauthorized)
 						return
 					}
+					audience, _ := token.Audience()
+					if !audienceMatches(audience, cfg.AuthentikClientID) {
+						respond.JsonError(w, "invalid token audience", http.StatusUnauthorized)
+						return
+					}
 					sub, _ = token.Subject()
 					email = getStringClaim(token, "email")
 					groups = getStringSliceClaim(token, "groups")
@@ -226,7 +231,8 @@ func ValidateTokenOnly(cfg *config.Config, jwks *JWKSProvider, tokenStr string) 
 		return claims.Sub != ""
 	}
 	iss, _ := token.Issuer()
-	return sameIssuer(iss, cfg.AuthentikTokenIssuer())
+	audience, _ := token.Audience()
+	return sameIssuer(iss, cfg.AuthentikTokenIssuer()) && audienceMatches(audience, cfg.AuthentikClientID)
 }
 
 // WSClaims holds the subset of JWT claims needed for WebSocket authorization.
@@ -280,6 +286,10 @@ func ValidateTokenAndExtractClaims(cfg *config.Config, jwks *JWKSProvider, token
 	iss, _ := token.Issuer()
 	if !sameIssuer(iss, cfg.AuthentikTokenIssuer()) {
 		return nil, errors.New("invalid token issuer")
+	}
+	audience, _ := token.Audience()
+	if !audienceMatches(audience, cfg.AuthentikClientID) {
+		return nil, errors.New("invalid token audience")
 	}
 	sub, _ := token.Subject()
 	if sub == "" {

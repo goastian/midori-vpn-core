@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/goastian/midori-vpn-core/internal/db"
 	"github.com/goastian/midori-vpn-core/internal/models"
 	"github.com/goastian/midori-vpn-core/internal/repo"
 )
@@ -88,6 +89,9 @@ func TestRegionalDiscoveryAndFleetMetricsUseOperationalNodes(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("TEST_DATABASE_URL not set — skipping integration test")
+	}
+	if err := db.RunMigrations(dsn); err != nil {
+		t.Fatalf("migrate test database: %v", err)
 	}
 	pool, err := pgxpool.New(context.Background(), dsn)
 	if err != nil {

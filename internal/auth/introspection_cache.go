@@ -148,6 +148,19 @@ func InvalidateIntrospection(token string) {
 // the SHA-256 of the token. The positive TTL is bounded by the token's own
 // exp claim (minus a small leeway) so expired tokens never come back as valid.
 func IntrospectTokenCached(cfg *config.Config, token string) (*IntrospectionClaims, error) {
+	claims, err := introspectTokenCached(cfg, token)
+	if err != nil {
+		return nil, err
+	}
+	// Recheck even on a cache/singleflight hit: the cached token must never
+	// authorize a caller configured for another OAuth client.
+	if !audienceMatches(claims.Aud, cfg.AuthentikClientID) {
+		return nil, errors.New("invalid token audience")
+	}
+	return claims, nil
+}
+
+func introspectTokenCached(cfg *config.Config, token string) (*IntrospectionClaims, error) {
 	if token == "" {
 		return IntrospectToken(cfg, token)
 	}

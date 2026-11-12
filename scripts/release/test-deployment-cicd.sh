@@ -166,6 +166,8 @@ jq -e '.schema_version == 2 and .product_version == "2.0.0" and .release_version
 [[ -f "${tmp}/one/midorivpn-${release_version}/.env.example" ]] || fail "bundle lacks the environment reference"
 [[ -f "${tmp}/one/midorivpn-${release_version}/docs/openapi.yaml" ]] || fail "bundle documentation links are incomplete"
 [[ -f "${tmp}/one/midorivpn-${release_version}/scripts/release/resolve-runtime-images.sh" ]] || fail "bundle lacks the runtime image resolver"
+[[ -f "${tmp}/one/midorivpn-${release_version}/scripts/activate-core.sh" ]] || fail "bundle lacks the modeled Core activation command"
+[[ -f "${tmp}/one/midorivpn-${release_version}/deploy/postgres/activate-core.sql" ]] || fail "bundle lacks the atomic Core activation SQL"
 bash "${tmp}/one/midorivpn-${release_version}/scripts/release/compose-deployment-values.sh" \
   --variables-file "${tmp}/variables.env" --secrets-file "${tmp}/secrets.env" \
   --core-image "ghcr.io/goastian/midori-vpn-core:${release_version}" \

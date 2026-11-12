@@ -81,7 +81,8 @@ install -m 0600 -- "${ROOT_DIR}/.env.example" "${payload}/.env.example"
 install -d -m 0700 -- "${payload}/deploy/grafana"
 install -m 0600 -- "${ROOT_DIR}/deploy/grafana/midori-vpn-dashboard.json" "${payload}/deploy/grafana/"
 install -m 0600 -- "${ROOT_DIR}/scripts/backup-postgres.sh" \
-  "${ROOT_DIR}/scripts/restore-postgres-backup.sh" "${payload}/scripts/"
+  "${ROOT_DIR}/scripts/restore-postgres-backup.sh" \
+  "${ROOT_DIR}/scripts/activate-core.sh" "${payload}/scripts/"
 install -m 0600 -- "${ROOT_DIR}/scripts/release/compose-deployment-values.sh" \
   "${ROOT_DIR}/scripts/release/validate-deployment-environment-map.sh" \
   "${ROOT_DIR}/scripts/release/resolve-runtime-images.sh" \

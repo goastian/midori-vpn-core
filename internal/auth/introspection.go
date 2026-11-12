@@ -20,12 +20,13 @@ var introspectionHTTPClient = httpx.NewClient(10 * time.Second)
 // IntrospectionClaims holds the claims returned by the Authentik introspection
 // endpoint. Exported so other packages (e.g. proxy) can use introspection.
 type IntrospectionClaims struct {
-	Active bool        `json:"active"`
-	Sub    string      `json:"sub"`
-	Iss    string      `json:"iss"`
-	Email  string      `json:"email"`
-	Exp    int64       `json:"exp"`
-	Groups interface{} `json:"groups"`
+	Active bool          `json:"active"`
+	Sub    string        `json:"sub"`
+	Iss    string        `json:"iss"`
+	Aud    tokenAudience `json:"aud"`
+	Email  string        `json:"email"`
+	Exp    int64         `json:"exp"`
+	Groups interface{}   `json:"groups"`
 }
 
 func introspectionURLs(cfg *config.Config) []string {
@@ -127,6 +128,9 @@ func IntrospectToken(cfg *config.Config, token string) (*IntrospectionClaims, er
 		cancel()
 
 		if err == nil {
+			if !audienceMatches(claims.Aud, cfg.AuthentikClientID) {
+				return nil, errors.New("invalid token audience")
+			}
 			allAttemptsFailed = false
 			slog.Debug("introspection success",
 				"endpoint", endpoint,
@@ -155,6 +159,9 @@ func IntrospectToken(cfg *config.Config, token string) (*IntrospectionClaims, er
 		if status == http.StatusMethodNotAllowed || status == http.StatusNotFound {
 			continue
 		}
+		// A provider rejection, malformed response or transport error is not
+		// evidence of a different endpoint path. Never bypass that decision.
+		break
 	}
 
 	if lastErr == nil {

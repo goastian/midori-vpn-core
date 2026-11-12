@@ -167,7 +167,10 @@ func NewHandlerWithMesh(pool *pgxpool.Pool, cfg *config.Config, wgMgr *wg.Manage
 }
 
 func NewHandlerWithMeshAndDataEncryption(pool *pgxpool.Pool, cfg *config.Config, wgMgr *wg.Manager, hub *WSHub, dataCipher *dataencryption.Cipher) *Handler {
-	billingRedis := billingRedisClient(cfg)
+	var billingClient *billing.Client
+	if strings.TrimSpace(cfg.AstianPaymentURL) != "" {
+		billingClient = billing.NewClient(cfg, billingRedisClient(cfg))
+	}
 	h := &Handler{
 		userRepo:              repo.NewUserRepo(pool),
 		serverRepo:            repo.NewServerRepo(pool),
@@ -180,7 +183,7 @@ func NewHandlerWithMeshAndDataEncryption(pool *pgxpool.Pool, cfg *config.Config,
 		trustedExtensionRepo:  repo.NewTrustedExtensionRepo(pool),
 		clientCertificateRepo: repo.NewDeviceCertificateRepo(pool),
 		multiclusterRepo:      repo.NewMulticlusterRepo(pool),
-		billingClient:         billing.NewClient(cfg, billingRedis),
+		billingClient:         billingClient,
 		wgMgr:                 wgMgr,
 		hub:                   hub,
 		maxDevicesPerUser:     cfg.MaxDevicesPerUser,

@@ -47,6 +47,9 @@ type wireGuardClient interface {
 	Close() error
 }
 
+// commandRunner substitutes only the OS boundary in network/firewall tests.
+type commandRunner func(name, stdin string, args ...string) ([]byte, error)
+
 type PeerInfo struct {
 	PublicKey     string     `json:"public_key"`
 	OperationID   uuid.UUID  `json:"operation_id"`
@@ -78,6 +81,16 @@ type Manager struct {
 	peerStateAvailable bool
 	peerLimit          int
 	privateKey         wgtypes.Key
+	runCommand         commandRunner
+}
+
+func (m *Manager) run(name, stdin string, args ...string) ([]byte, error) {
+	if m.runCommand != nil {
+		return m.runCommand(name, stdin, args...)
+	}
+	cmd := exec.Command(name, args...)
+	cmd.Stdin = strings.NewReader(stdin)
+	return cmd.CombinedOutput()
 }
 
 func NewManager(cfg *config.Config) (*Manager, error) {
@@ -162,6 +175,11 @@ func (m *Manager) ensureInterface() error {
 		return m.configureNewInterface()
 	}
 
+	// Protect an already-running interface before touching its key or peers.
+	if err := m.ensureNATRules(); err != nil {
+		return fmt.Errorf("ensureInterface: %w", err)
+	}
+
 	var zeroKey wgtypes.Key
 	if dev.PrivateKey == zeroKey {
 		slog.Info("existing interface has zero private key, generating new keypair", "interface", m.cfg.WGInterface)
@@ -187,22 +205,31 @@ func (m *Manager) ensureInterface() error {
 		m.privateKey = dev.PrivateKey
 	}
 
+	// A previous failed protection attempt may have deliberately left this
+	// interface down. Re-enable it only after the isolation rules are in place.
+	if out, err := m.run("ip", "", "link", "set", "up", "dev", m.cfg.WGInterface); err != nil {
+		return fmt.Errorf("enable protected WireGuard interface %s: %w (output: %s)", m.cfg.WGInterface, err, strings.TrimSpace(string(out)))
+	}
+
 	pubKey := m.PublicKey()
 	slog.Info("interface ready", "interface", m.cfg.WGInterface, "listen_port", m.cfg.WGPort, "peers", len(dev.Peers), "public_key", pubKey)
-	if err := m.ensureNATRules(); err != nil {
-		return fmt.Errorf("ensureInterface: %w", err)
-	}
 	return nil
 }
 
 func (m *Manager) createNetworkInterface() error {
 	iface := m.cfg.WGInterface
 
+	// Rules may match an absent interface. Install them before bringing it up,
+	// including when restoring saved peers or falling back to API/Master mode.
+	if err := m.ensureNATRules(); err != nil {
+		return fmt.Errorf("createNetworkInterface: %w", err)
+	}
+
 	// Check if interface already exists on the system
-	if err := exec.Command("ip", "link", "show", "dev", iface).Run(); err != nil {
+	if _, err := m.run("ip", "", "link", "show", "dev", iface); err != nil {
 		// Interface does not exist, attempt to load module if needed and create interface
-		_ = exec.Command("modprobe", "wireguard").Run()
-		if out, err := exec.Command("ip", "link", "add", "dev", iface, "type", "wireguard").CombinedOutput(); err != nil {
+		_, _ = m.run("modprobe", "", "wireguard")
+		if out, err := m.run("ip", "", "link", "add", "dev", iface, "type", "wireguard"); err != nil {
 			msg := strings.TrimSpace(string(out))
 			if strings.Contains(msg, "Unknown device type") || strings.Contains(msg, "Operation not permitted") {
 				slog.Warn("wireguard kernel device cannot be created in this container namespace; running in API/Master mode", "interface", iface, "detail", msg)
@@ -214,7 +241,7 @@ func (m *Manager) createNetworkInterface() error {
 
 	// Assign the gateway IP from the subnet to the interface
 	gatewayIP := m.pool.GatewayIP()
-	if out, err := exec.Command("ip", "address", "add", "dev", iface, gatewayIP).CombinedOutput(); err != nil {
+	if out, err := m.run("ip", "", "address", "add", "dev", iface, gatewayIP); err != nil {
 		msg := strings.TrimSpace(string(out))
 		if !strings.Contains(msg, "File exists") && !strings.Contains(msg, "Operation not permitted") {
 			return fmt.Errorf("ip address add %s: %s: %w", gatewayIP, msg, err)
@@ -223,7 +250,7 @@ func (m *Manager) createNetworkInterface() error {
 	}
 
 	// Bring the interface up (best-effort if already UP on host)
-	if out, err := exec.Command("ip", "link", "set", "up", "dev", iface).CombinedOutput(); err != nil {
+	if out, err := m.run("ip", "", "link", "set", "up", "dev", iface); err != nil {
 		msg := strings.TrimSpace(string(out))
 		if !strings.Contains(msg, "Operation not permitted") {
 			return fmt.Errorf("ip link set up %s: %s: %w", iface, msg, err)
@@ -231,9 +258,6 @@ func (m *Manager) createNetworkInterface() error {
 	}
 
 	slog.Info("created network interface", "interface", iface, "address", gatewayIP)
-	if err := m.ensureNATRules(); err != nil {
-		slog.Warn("ensureNATRules: NAT/firewall configuration managed on host", "error", err)
-	}
 	return nil
 }
 
@@ -392,79 +416,6 @@ func (m *Manager) restoreFromConfig(confPath string) error {
 		"public_key", base64.StdEncoding.EncodeToString(pubKey[:]),
 		"peers_restored", len(peers),
 	)
-	return nil
-}
-
-// ensureNATRules idempotently adds the iptables rules needed to forward and
-// masquerade traffic from WireGuard peers to the internet.
-// Called on interface creation and on startup (in case rules were lost after
-// a container restart with a pre-existing interface).
-//
-// MASQUERADE (NAT) failure is treated as a warning — some host environments
-// (e.g. kernels without xtables compatibility) do not support it
-// inside containers. The VPN can still route peer-to-peer traffic; internet
-// NAT must be configured on the host in that case.
-// FORWARD rule failures are returned as hard errors because without them
-// the kernel will silently drop all VPN traffic.
-func (m *Manager) ensureNATRules() error {
-	iface := m.cfg.WGInterface
-	subnet := m.cfg.Subnet
-
-	// Best-effort MASQUERADE rule: warn and continue on failure.
-	masqCheck := []string{"iptables", "-t", "nat", "-C", "POSTROUTING", "-s", subnet, "-j", "MASQUERADE"}
-	masqAdd := []string{"iptables", "-t", "nat", "-A", "POSTROUTING", "-s", subnet, "-j", "MASQUERADE"}
-	if err := exec.Command(masqCheck[0], masqCheck[1:]...).Run(); err != nil {
-		if out, addErr := exec.Command(masqAdd[0], masqAdd[1:]...).CombinedOutput(); addErr != nil {
-			slog.Warn("failed to add iptables MASQUERADE rule — internet access for VPN peers may require host-level NAT",
-				"error", addErr,
-				"output", strings.TrimSpace(string(out)),
-			)
-		} else {
-			slog.Info("added iptables rule", "rule", strings.Join(masqAdd[3:], " "))
-		}
-	}
-
-	// Best-effort MASQUERADE for the mesh overlay subnet so that mesh peers
-	// can reach the internet through this server.
-	const meshSubnet = "10.200.0.0/16"
-	meshMasqCheck := []string{"iptables", "-t", "nat", "-C", "POSTROUTING", "-s", meshSubnet, "-j", "MASQUERADE"}
-	meshMasqAdd := []string{"iptables", "-t", "nat", "-A", "POSTROUTING", "-s", meshSubnet, "-j", "MASQUERADE"}
-	if err := exec.Command(meshMasqCheck[0], meshMasqCheck[1:]...).Run(); err != nil {
-		if out, addErr := exec.Command(meshMasqAdd[0], meshMasqAdd[1:]...).CombinedOutput(); addErr != nil {
-			slog.Warn("failed to add mesh MASQUERADE rule — mesh internet access may require host-level NAT",
-				"error", addErr,
-				"output", strings.TrimSpace(string(out)),
-			)
-		} else {
-			slog.Info("added iptables rule", "rule", strings.Join(meshMasqAdd[3:], " "))
-		}
-	}
-
-	// Mandatory FORWARD rules: return an error if these fail, because without
-	// them the kernel drops all traffic through the WireGuard interface.
-	type rule struct {
-		check []string
-		add   []string
-	}
-	forwardRules := []rule{
-		{
-			check: []string{"iptables", "-C", "FORWARD", "-i", iface, "-j", "ACCEPT"},
-			add:   []string{"iptables", "-A", "FORWARD", "-i", iface, "-j", "ACCEPT"},
-		},
-		{
-			check: []string{"iptables", "-C", "FORWARD", "-o", iface, "-j", "ACCEPT"},
-			add:   []string{"iptables", "-A", "FORWARD", "-o", iface, "-j", "ACCEPT"},
-		},
-	}
-	for _, r := range forwardRules {
-		if err := exec.Command(r.check[0], r.check[1:]...).Run(); err != nil {
-			if out, addErr := exec.Command(r.add[0], r.add[1:]...).CombinedOutput(); addErr != nil {
-				return fmt.Errorf("iptables rule %q: %w (output: %s)",
-					strings.Join(r.add[3:], " "), addErr, strings.TrimSpace(string(out)))
-			}
-			slog.Info("added iptables rule", "rule", strings.Join(r.add[3:], " "))
-		}
-	}
 	return nil
 }
 

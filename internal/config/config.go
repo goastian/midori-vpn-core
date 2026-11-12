@@ -106,7 +106,7 @@ type Config struct {
 	TrustedProxies string // comma-separated list of trusted proxy IPs/CIDRs (empty = trust all — NOT recommended for production)
 
 	// Device limits
-	MaxDevicesPerUser int // max active connections per user (0 = unlimited)
+	MaxDevicesPerUser int // max concurrently connected devices; 0 uses the default of 5
 
 	// Per-user rate limit on the /connect endpoint
 	ConnectRateLimitRPS   float64 // token-bucket refill rate in tokens/second (0 = disabled)

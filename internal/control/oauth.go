@@ -556,9 +556,9 @@ type LogoutRequest struct {
 	RefreshToken string `json:"refresh_token,omitempty"`
 }
 
-// Logout invalidates the provided access token from the introspection cache so
-// that it cannot be reused, even within its normal TTL window. It optionally
-// also revokes the refresh token at the Authentik token revocation endpoint.
+// Logout evicts the provided access token from the introspection cache and
+// optionally revokes the refresh token at Authentik. Eviction is not access
+// token revocation: locally validated JWTs can remain valid until expiry.
 // The endpoint is idempotent: unknown or already-invalidated tokens return 200.
 func (h *OAuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -583,11 +583,11 @@ func (h *OAuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Best-effort revocation at Authentik (refresh token).
-	// Failures are logged but do not affect the 200 response — the local cache
-	// invalidation above is sufficient for same-node protection.
+	// Failures are logged but do not affect the 200 response. The client must
+	// discard its local credentials regardless of provider availability.
 	if req.RefreshToken != "" && h.cfg.AuthentikClientID != "" {
 		go func() {
-			revokeURL := strings.TrimRight(h.cfg.AuthentikIssuer, "/") + "/application/o/revoke-token/"
+			revokeURL := h.cfg.AuthentikOrigin() + "/application/o/revoke-token/"
 			form := url.Values{}
 			form.Set("token", req.RefreshToken)
 			form.Set("token_type_hint", "refresh_token")

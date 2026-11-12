@@ -81,11 +81,12 @@ func TestValidateTokenOnly_ValidToken(t *testing.T) {
 	}
 
 	jwks := testJWKS(t, privKey)
-	cfg := &config.Config{AuthentikIssuer: "https://auth.test.local"}
+	cfg := &config.Config{AuthentikIssuer: "https://auth.test.local", AuthentikClientID: "vpn-client"}
 
 	token := signToken(t, privKey, map[string]interface{}{
 		"iss": "https://auth.test.local",
 		"sub": "user-123",
+		"aud": []string{"vpn-client"},
 		"exp": time.Now().Add(time.Hour).Unix(),
 		"iat": time.Now().Unix(),
 	})
@@ -102,10 +103,11 @@ func TestValidateTokenOnly_WrongIssuer(t *testing.T) {
 	}
 
 	jwks := testJWKS(t, privKey)
-	cfg := &config.Config{AuthentikIssuer: "https://auth.test.local"}
+	cfg := &config.Config{AuthentikIssuer: "https://auth.test.local", AuthentikClientID: "vpn-client"}
 
 	token := signToken(t, privKey, map[string]interface{}{
 		"iss": "https://evil.example.com",
+		"aud": []string{"vpn-client"},
 		"sub": "user-123",
 		"exp": time.Now().Add(time.Hour).Unix(),
 		"iat": time.Now().Unix(),
@@ -123,12 +125,13 @@ func TestValidateTokenOnly_ExpiredToken(t *testing.T) {
 	}
 
 	jwks := testJWKS(t, privKey)
-	cfg := &config.Config{AuthentikIssuer: "https://auth.test.local"}
+	cfg := &config.Config{AuthentikIssuer: "https://auth.test.local", AuthentikClientID: "vpn-client"}
 
 	token := signToken(t, privKey, map[string]interface{}{
 		"iss": "https://auth.test.local",
 		"sub": "user-123",
 		"exp": time.Now().Add(-time.Hour).Unix(),
+		"aud": []string{"vpn-client"},
 		"iat": time.Now().Add(-2 * time.Hour).Unix(),
 	})
 
@@ -144,13 +147,14 @@ func TestValidateTokenOnly_InvalidSignature(t *testing.T) {
 	}
 
 	jwks := testJWKS(t, privKey)
-	cfg := &config.Config{AuthentikIssuer: "https://auth.test.local"}
+	cfg := &config.Config{AuthentikIssuer: "https://auth.test.local", AuthentikClientID: "vpn-client"}
 
 	// Sign with a different key
 	otherKey, _ := rsa.GenerateKey(rand.Reader, 2048)
 	token := signToken(t, otherKey, map[string]interface{}{
 		"iss": "https://auth.test.local",
 		"sub": "user-123",
+		"aud": []string{"vpn-client"},
 		"exp": time.Now().Add(time.Hour).Unix(),
 		"iat": time.Now().Unix(),
 	})
@@ -167,11 +171,12 @@ func TestValidateTokenAndExtractClaims_Valid(t *testing.T) {
 	}
 
 	jwks := testJWKS(t, privKey)
-	cfg := &config.Config{AuthentikIssuer: "https://auth.test.local"}
+	cfg := &config.Config{AuthentikIssuer: "https://auth.test.local", AuthentikClientID: "vpn-client"}
 
 	token := signToken(t, privKey, map[string]interface{}{
 		"iss":    "https://auth.test.local",
 		"sub":    "user-456",
+		"aud":    []string{"vpn-client"},
 		"exp":    time.Now().Add(time.Hour).Unix(),
 		"iat":    time.Now().Unix(),
 		"groups": []string{"plan-pro", "vpn-admins"},
@@ -196,11 +201,12 @@ func TestValidateTokenAndExtractClaims_MissingSub(t *testing.T) {
 	}
 
 	jwks := testJWKS(t, privKey)
-	cfg := &config.Config{AuthentikIssuer: "https://auth.test.local"}
+	cfg := &config.Config{AuthentikIssuer: "https://auth.test.local", AuthentikClientID: "vpn-client"}
 
 	token := signToken(t, privKey, map[string]interface{}{
 		"iss": "https://auth.test.local",
 		"exp": time.Now().Add(time.Hour).Unix(),
+		"aud": []string{"vpn-client"},
 		"iat": time.Now().Unix(),
 	})
 
@@ -217,10 +223,11 @@ func TestValidateTokenAndExtractClaims_WrongIssuer(t *testing.T) {
 	}
 
 	jwks := testJWKS(t, privKey)
-	cfg := &config.Config{AuthentikIssuer: "https://auth.test.local"}
+	cfg := &config.Config{AuthentikIssuer: "https://auth.test.local", AuthentikClientID: "vpn-client"}
 
 	token := signToken(t, privKey, map[string]interface{}{
 		"iss": "https://wrong.issuer.com",
+		"aud": []string{"vpn-client"},
 		"sub": "user-789",
 		"exp": time.Now().Add(time.Hour).Unix(),
 		"iat": time.Now().Unix(),

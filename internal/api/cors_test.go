@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/goastian/midori-vpn-core/internal/config"
@@ -110,6 +111,30 @@ func TestBrowserExtensionOriginRequiresAnExactOrigin(t *testing.T) {
 	} {
 		if isBrowserExtensionOrigin(rejected) {
 			t.Fatalf("malformed extension origin accepted: %q", rejected)
+		}
+	}
+}
+
+func TestCORSAllowsPatchPreflightOnlyForTrustedOrigins(t *testing.T) {
+	cfg := &config.Config{CORSAllowedOrigins: "https://vpn.example.test"}
+	for _, origin := range []string{"https://vpn.example.test", "https://untrusted.example.test"} {
+		request := httptest.NewRequest(http.MethodOptions, "/api/v1/control/devices/device-id", nil)
+		request.Header.Set("Origin", origin)
+		request.Header.Set("Access-Control-Request-Method", http.MethodPatch)
+		request.Header.Set("Access-Control-Request-Headers", "authorization,content-type")
+		recorder := httptest.NewRecorder()
+		CORSMiddleware(cfg)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			t.Error("preflight must not reach the application")
+		})).ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusNoContent {
+			t.Fatalf("preflight status = %d", recorder.Code)
+		}
+		allowed := false
+		for _, method := range strings.Split(recorder.Header().Get("Access-Control-Allow-Methods"), ",") {
+			allowed = allowed || strings.TrimSpace(method) == http.MethodPatch
+		}
+		if want := origin == "https://vpn.example.test"; allowed != want {
+			t.Fatalf("origin=%q PATCH allowed=%v, want %v", origin, allowed, want)
 		}
 	}
 }
