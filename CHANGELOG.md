@@ -79,6 +79,9 @@
 
 ### Operations
 
+- The public ingress template sets MIME/referrer protections and conditional
+  HTTPS-only HSTS without including unrelated subdomains; static Control CSP
+  remains separate so OAuth callback scripts retain their own policy.
 - Add an idempotent operator command for initial Core activation and binding,
   guarded by enrollment, observed/desired state and the existing placement
   authority in one serializable transaction; include it in deployment bundles.
