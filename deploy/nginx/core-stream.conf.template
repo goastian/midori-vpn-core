@@ -7,7 +7,7 @@ upstream vpn_core_connect_proxy_backend {
 
 server {
     listen __PROXY_PUBLIC_PORT__ ssl;
-    
+
     ssl_certificate     /etc/letsencrypt/live/__DOMAIN__/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/__DOMAIN__/privkey.pem;
     ssl_protocols       TLSv1.3;
