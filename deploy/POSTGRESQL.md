@@ -2,7 +2,7 @@
 
 MidoriVPN 2.0 uses PostgreSQL 18 as the only Control datastore. The standard
 principal profile keeps PostgreSQL and PgBouncer inside one private Podman pod;
-neither port is published on the host. PostgreSQL 18.6 and PgBouncer 1.25.2 are
+neither port is published on the host. PostgreSQL 18.7 and PgBouncer 1.25.2 are
 the supported patch releases as of 2026-09-04.
 
 ## Security boundary

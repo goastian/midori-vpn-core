@@ -14,6 +14,14 @@
 
 ### Security
 
+- Refresh compatible Go dependencies, including pgx 5.13, migrate 4.20.1,
+  JWX 3.4, Redis client 9.23 and the WireGuard implementation. Keep Go 1.27.4
+  and the deliberately pinned QUIC/MASQUE compatibility pair.
+- Align scanners and supply-chain tooling with Govulncheck 1.9, Trivy 0.76.2,
+  Syft 1.57.1 and Cosign 3.1.4, and refresh verified GitHub Action commit pins.
+- Refresh isolated PostgreSQL/Redis CI services to 18.7/8.10.3 and PgBouncer's
+  Alpine/OpenSSL/client packages. Update gateway builders and the strongSwan
+  runtime to 6.1.0; image builds do not certify live transport operation.
 - Require the intended OAuth audience for JWT, WebSocket and introspection,
   including cache hits; provider rejections no longer fall through to another
   introspection endpoint. `azp` does not substitute for `aud`.

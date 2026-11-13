@@ -8,7 +8,7 @@ die() {
 
 [ "$(id -u)" -ne 0 ] || die "run as the dedicated rootless Podman user"
 
-REDIS_IMAGE="${REDIS_IMAGE:-docker.io/library/redis:8.10.1-alpine}"
+REDIS_IMAGE="${REDIS_IMAGE:-docker.io/library/redis:8.10.3-alpine}"
 QUADLET_DIR="${QUADLET_DIR:-${HOME}/.config/containers/systemd/midori-control}"
 REDIS_QUADLET="${REDIS_QUADLET:-${QUADLET_DIR}/control-redis.container}"
 BACKUP_ROOT="${BACKUP_ROOT:-${HOME}/backups/midori-control}"

@@ -2,7 +2,7 @@ FROM docker.io/library/golang:1.27.4-alpine3.24@sha256:0a5f7fe796599ff4876059874
 
 RUN apk add --no-cache bash build-base git ca-certificates coreutils findutils jq ripgrep tar shellcheck && \
     go install honnef.co/go/tools/cmd/staticcheck@2026.2.2 && \
-    go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+    go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
 
 # Deployment gates need GNU grep options and real certificate validation.
 RUN apk add --no-cache grep openssl

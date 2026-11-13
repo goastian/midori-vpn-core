@@ -95,7 +95,7 @@ fi
 IMAGE_GO="localhost/midori-dev-go:${GO_BUILDER_SHA256}"
 IMAGE_NODE="${NODE_BUILDER_SHA256:+localhost/midori-dev-node:${NODE_BUILDER_SHA256}}"
 IMAGE_PROMETHEUS="docker.io/prom/prometheus@sha256:5ce7540c3c00ef4ab0c9d2c995c6a5b9c421f44b4a115d97a2c7af3b1c21cbb0"
-IMAGE_SYFT="ghcr.io/anchore/syft@sha256:41f8289664101d6ebab30a97ac8df6b6f86b92d8343285ca90f428e2bc353106"
+IMAGE_SYFT="ghcr.io/anchore/syft@sha256:03215d0e98b661d0ecbc8575dbc14d65be1743b5de5df6410aecb7e80f95b060"
 IMAGE_SHELLCHECK="docker.io/koalaman/shellcheck-alpine@sha256:c82fe42504fbc9fc68f15d36638e5ee2324ebb8b94e96a3c4e395bf361c49183"
 PODMAN_USERNS=("--userns=keep-id:uid=0,gid=0")
 PODMAN_GO_ENV=()

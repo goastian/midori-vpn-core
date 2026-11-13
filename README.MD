@@ -89,8 +89,8 @@ scripts/                      Rootless Podman build, validation and deployment t
 - Rootless Podman; Docker and host-installed language toolchains are not part of the supported workflow.
 - Go 1.27.
 - Node.js 24 LTS and npm 12.
-- PostgreSQL 18.6.
-- Redis 8.10.1.
+- PostgreSQL 18.7.
+- Redis 8.10.3.
 - Alpine 3.24 runtime.
 
 TypeScript stays at 6.0.3 while the current `typescript-eslint` peer contract requires TypeScript `<6.1`. The incompatibility is checked rather than bypassed.

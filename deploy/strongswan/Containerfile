@@ -1,6 +1,6 @@
-ARG GO_IMAGE=docker.io/library/golang:1.27.0-bookworm@sha256:ba5ef6614ca131b80a635fc6a7b715d9ee8a7f333debdbb81afb68259c7d48d4
-ARG RUNTIME_IMAGE=registry.opensuse.org/opensuse/tumbleweed@sha256:c249e585be229e74c59e28725f9381d3c433aeb6497d4108e423dd14383487dd
-ARG STRONGSWAN_VERSION=6.0.7-1.3
+ARG GO_IMAGE=docker.io/library/golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea
+ARG RUNTIME_IMAGE=registry.opensuse.org/opensuse/tumbleweed@sha256:eaf3d9ddc0b4542e190fb86652c9c6adcc8fbde482ebb2d328101cbbc8f21efe
+ARG STRONGSWAN_VERSION=6.1.0-2.1
 
 FROM ${GO_IMAGE} AS health_builder
 WORKDIR /src
@@ -16,7 +16,7 @@ RUN zypper --non-interactive install --no-recommends \
       bash ca-certificates coreutils curl iproute2 nftables openssl sed \
       "strongswan=${STRONGSWAN_VERSION}" && \
     zypper clean --all && \
-    /usr/libexec/ipsec/charon --version | grep -Fq 'strongSwan 6.0.7'
+    /usr/libexec/ipsec/charon --version | grep -Fq 'strongSwan 6.1.0'
 
 COPY --from=health_builder /out/ikev2-health /usr/local/bin/ikev2-health
 COPY deploy/strongswan/strongswan.conf.template /usr/share/midorivpn/strongswan/strongswan.conf.template

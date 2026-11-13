@@ -23,7 +23,7 @@ traffic must still be demonstrated. References: [strongSwan cloud/container guid
 
 ## Rootful Quadlet
 
-The image supplies strongSwan `6.0.7`, nftables, curl and OpenSSL. The host
+The image supplies strongSwan `6.1.0`, nftables, curl and OpenSSL. The host
 supplies rootful Podman, Linux XFRM and forwarding:
 
 ```bash
