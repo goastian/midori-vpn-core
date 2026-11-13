@@ -179,7 +179,7 @@ func StartPeerCleanup(parentCtx context.Context, pool *pgxpool.Pool) {
 				continue
 			}
 
-			auditRepo.Log(ctx, &peer.UserID, "peer.cleanup",
+			auditRepo.LogBestEffort(ctx, &peer.UserID, "peer.cleanup",
 				map[string]interface{}{
 					"peer_id":   peer.ID,
 					"server_id": peer.ServerID,

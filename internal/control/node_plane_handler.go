@@ -305,7 +305,7 @@ func (h *Handler) AdminCreateCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	admin := auth.GetUser(r)
-	h.auditRepo.Log(r.Context(), &admin.ID, "admin.cluster.create", map[string]any{"cluster_id": cluster.ID}, r.RemoteAddr)
+	h.auditRepo.LogBestEffort(r.Context(), &admin.ID, "admin.cluster.create", map[string]any{"cluster_id": cluster.ID}, r.RemoteAddr)
 	respond.JsonOK(w, cluster, http.StatusCreated)
 }
 
@@ -336,7 +336,7 @@ func (h *Handler) AdminCreateCoreNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	admin := auth.GetUser(r)
-	h.auditRepo.Log(r.Context(), &admin.ID, "admin.core-node.create", map[string]any{"node_id": node.ID}, r.RemoteAddr)
+	h.auditRepo.LogBestEffort(r.Context(), &admin.ID, "admin.core-node.create", map[string]any{"node_id": node.ID}, r.RemoteAddr)
 	respond.JsonOK(w, node, http.StatusCreated)
 }
 
@@ -371,7 +371,7 @@ func (h *Handler) AdminUpdateCoreNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	admin := auth.GetUser(r)
-	h.auditRepo.Log(r.Context(), &admin.ID, "admin.core-node.management-host.update", map[string]any{"node_id": node.ID}, r.RemoteAddr)
+	h.auditRepo.LogBestEffort(r.Context(), &admin.ID, "admin.core-node.management-host.update", map[string]any{"node_id": node.ID}, r.RemoteAddr)
 	respond.JsonOK(w, node, http.StatusOK)
 }
 
@@ -401,7 +401,7 @@ func (h *Handler) AdminIssueNodeEnrollmentToken(w http.ResponseWriter, r *http.R
 		return
 	}
 	admin := auth.GetUser(r)
-	h.auditRepo.Log(r.Context(), &admin.ID, "admin.core-node.enrollment-token.issue", map[string]any{"node_id": nodeID, "expires_at": token.ExpiresAt}, r.RemoteAddr)
+	h.auditRepo.LogBestEffort(r.Context(), &admin.ID, "admin.core-node.enrollment-token.issue", map[string]any{"node_id": nodeID, "expires_at": token.ExpiresAt}, r.RemoteAddr)
 	w.Header().Set("Cache-Control", "no-store")
 	respond.JsonOK(w, token, http.StatusCreated)
 }
@@ -417,7 +417,7 @@ func (h *Handler) AdminRevokeCoreNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	admin := auth.GetUser(r)
-	h.auditRepo.Log(r.Context(), &admin.ID, "admin.core-node.revoke", map[string]any{"node_id": nodeID}, r.RemoteAddr)
+	h.auditRepo.LogBestEffort(r.Context(), &admin.ID, "admin.core-node.revoke", map[string]any{"node_id": nodeID}, r.RemoteAddr)
 	respond.JsonOK(w, map[string]string{"node_id": nodeID.String(), "status": "revoked"}, http.StatusOK)
 }
 
@@ -504,7 +504,7 @@ func (h *Handler) AdminCreateDesiredState(w http.ResponseWriter, r *http.Request
 		return
 	}
 	admin := auth.GetUser(r)
-	h.auditRepo.Log(r.Context(), &admin.ID, "admin.core-node.desired-state.create", map[string]any{"node_id": nodeID, "revision": revision.Revision}, r.RemoteAddr)
+	h.auditRepo.LogBestEffort(r.Context(), &admin.ID, "admin.core-node.desired-state.create", map[string]any{"node_id": nodeID, "revision": revision.Revision}, r.RemoteAddr)
 	w.Header().Set("Cache-Control", "no-store")
 	respond.JsonOK(w, signed, http.StatusCreated)
 }

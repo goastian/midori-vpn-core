@@ -5,11 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/goastian/midori-vpn-core/internal/models"
@@ -31,7 +34,7 @@ func NewAuditRepo(pool *pgxpool.Pool) *AuditRepo {
 func (r *AuditRepo) Log(ctx context.Context, userID *uuid.UUID, action string, metadata map[string]interface{}, ipAddress string) error {
 	metaJSON, err := json.Marshal(metadata)
 	if err != nil {
-		metaJSON = []byte("{}")
+		return fmt.Errorf("encode audit metadata: %w", err)
 	}
 
 	masked := maskIP(ipAddress)
@@ -42,6 +45,30 @@ func (r *AuditRepo) Log(ctx context.Context, userID *uuid.UUID, action string, m
 		return fmt.Errorf("audit log: %w", err)
 	}
 	return nil
+}
+
+// LogBestEffort records an audit entry and logs a warning instead of
+// silently discarding the failure when persistence fails. Audit trails are
+// best-effort relative to the business operation they describe: callers
+// must not fail the underlying request solely because the audit write
+// failed, but the failure must still be observable. Callers that need the
+// error itself (for example, to decide whether to retry) should call Log
+// directly instead.
+func (r *AuditRepo) LogBestEffort(ctx context.Context, userID *uuid.UUID, action string, metadata map[string]interface{}, ipAddress string) {
+	if err := r.Log(ctx, userID, action, metadata, ipAddress); err != nil {
+		code := "audit_write_failed"
+		var pgError *pgconn.PgError
+		switch {
+		case errors.As(err, &pgError):
+			code = pgError.Code
+		case errors.Is(err, context.Canceled):
+			code = "context_canceled"
+		case errors.Is(err, context.DeadlineExceeded):
+			code = "deadline_exceeded"
+		}
+		// SQL/provider diagnostics can contain metadata, addresses or credentials.
+		slog.Warn("audit log: failed to persist", "action", action, "code", code)
+	}
 }
 
 // maskIP truncates the last octet of IPv4 or last 80 bits of IPv6,

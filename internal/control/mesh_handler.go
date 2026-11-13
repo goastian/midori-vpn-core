@@ -201,7 +201,7 @@ func (h *MeshHandler) CreateMesh(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, "failed to initialize mesh membership", http.StatusInternalServerError)
 		return
 	}
-	h.auditRepo.Log(r.Context(), &user.ID, "mesh.create", map[string]interface{}{"mesh_id": mesh.ID}, r.RemoteAddr)
+	h.auditRepo.LogBestEffort(r.Context(), &user.ID, "mesh.create", map[string]interface{}{"mesh_id": mesh.ID}, r.RemoteAddr)
 	h.broadcastMeshListChanged()
 	respond.JsonOK(w, mesh, http.StatusCreated)
 }
@@ -313,7 +313,7 @@ func (h *MeshHandler) JoinMesh(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, "failed to join mesh", http.StatusInternalServerError)
 		return
 	}
-	h.auditRepo.Log(r.Context(), &user.ID, "mesh.join", map[string]interface{}{"mesh_id": mesh.ID}, r.RemoteAddr)
+	h.auditRepo.LogBestEffort(r.Context(), &user.ID, "mesh.join", map[string]interface{}{"mesh_id": mesh.ID}, r.RemoteAddr)
 	h.broadcastMeshListChanged()
 	respond.JsonOK(w, member, http.StatusCreated)
 }
@@ -366,7 +366,7 @@ func (h *MeshHandler) LeaveMesh(w http.ResponseWriter, r *http.Request) {
 			respond.JsonError(w, "failed to delete mesh", http.StatusInternalServerError)
 			return
 		}
-		h.auditRepo.Log(r.Context(), &user.ID, "mesh.delete",
+		h.auditRepo.LogBestEffort(r.Context(), &user.ID, "mesh.delete",
 			map[string]interface{}{"mesh_id": meshID}, r.RemoteAddr)
 
 		// Notify former members that the mesh is gone.
@@ -404,7 +404,7 @@ func (h *MeshHandler) LeaveMesh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.auditRepo.Log(r.Context(), &user.ID, "mesh.leave",
+	h.auditRepo.LogBestEffort(r.Context(), &user.ID, "mesh.leave",
 		map[string]interface{}{"mesh_id": meshID}, r.RemoteAddr)
 
 	// Notify remaining members that this user left.
@@ -489,7 +489,7 @@ func (h *MeshHandler) ActivateNode(w http.ResponseWriter, r *http.Request) {
 	}
 	h.attachMemberToActivePeer(r.Context(), user.ID, mesh.ID, member.MeshIP)
 
-	h.auditRepo.Log(r.Context(), &user.ID, "mesh.node.activate",
+	h.auditRepo.LogBestEffort(r.Context(), &user.ID, "mesh.node.activate",
 		map[string]interface{}{"mesh_id": mesh.ID, "mesh_ip": member.MeshIP}, r.RemoteAddr)
 	if created {
 		h.broadcastMeshListChanged()
@@ -743,7 +743,7 @@ func (h *MeshHandler) AutoMesh(w http.ResponseWriter, r *http.Request) {
 	}
 	h.attachMemberToActivePeer(r.Context(), u.ID, mesh.ID, member.MeshIP)
 
-	h.auditRepo.Log(r.Context(), &u.ID, "mesh.auto.create",
+	h.auditRepo.LogBestEffort(r.Context(), &u.ID, "mesh.auto.create",
 		map[string]interface{}{"mesh_id": mesh.ID, "country": mesh.CountryCode}, r.RemoteAddr)
 	if created {
 		h.broadcastMeshListChanged()
@@ -793,7 +793,7 @@ func (h *MeshHandler) DeleteAutoMesh(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.auditRepo.Log(r.Context(), &u.ID, "mesh.auto.delete",
+	h.auditRepo.LogBestEffort(r.Context(), &u.ID, "mesh.auto.delete",
 		map[string]interface{}{"deleted": deleted}, r.RemoteAddr)
 	if deleted > 0 {
 		h.broadcastMeshListChanged()
@@ -841,7 +841,7 @@ func (h *MeshHandler) RegenerateInvite(w http.ResponseWriter, r *http.Request) {
 		respond.JsonError(w, "failed to regenerate invite code", http.StatusInternalServerError)
 		return
 	}
-	h.auditRepo.Log(r.Context(), &user.ID, "mesh.invite.regenerate", map[string]interface{}{"mesh_id": meshID}, r.RemoteAddr)
+	h.auditRepo.LogBestEffort(r.Context(), &user.ID, "mesh.invite.regenerate", map[string]interface{}{"mesh_id": meshID}, r.RemoteAddr)
 	respond.JsonOK(w, map[string]interface{}{"invite_code": code, "invite_expires_at": expiry}, http.StatusOK)
 }
 
@@ -873,7 +873,7 @@ func (h *MeshHandler) DeactivateNode(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.auditRepo.Log(r.Context(), &user.ID, "mesh.node.deactivate", nil, r.RemoteAddr)
+	h.auditRepo.LogBestEffort(r.Context(), &user.ID, "mesh.node.deactivate", nil, r.RemoteAddr)
 	h.broadcastMeshListChanged()
 	respond.JsonOK(w, meshNodeStatus{Active: false, Peers: []nodeP{}}, http.StatusOK)
 }

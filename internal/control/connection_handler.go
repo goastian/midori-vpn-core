@@ -393,7 +393,7 @@ func (h *Handler) Connect(w http.ResponseWriter, r *http.Request) {
 
 	h.attachPeerToMeshSessions(completionCtx, user.ID, peer)
 
-	h.auditRepo.Log(completionCtx, &user.ID, "peer.connect",
+	h.auditRepo.LogBestEffort(completionCtx, &user.ID, "peer.connect",
 		map[string]interface{}{
 			"operation_id": operationID,
 			"peer_id":      peer.ID,
@@ -439,7 +439,7 @@ func (h *Handler) Disconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.auditRepo.Log(r.Context(), &user.ID, "peer.disconnect",
+	h.auditRepo.LogBestEffort(r.Context(), &user.ID, "peer.disconnect",
 		map[string]interface{}{"peer_id": peerID, "server_id": peer.ServerID}, r.RemoteAddr)
 
 	respondDisconnect(w, outcome, "disconnect_pending")

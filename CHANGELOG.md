@@ -23,6 +23,14 @@
 - Update pinned Core builders to Go 1.27.4 and runtime Alpine 3.24.4/OpenSSL
   3.5.9, and refresh the affected Go networking/crypto dependencies. Exclude
   private workspace data and nested clients from the container build context.
+- Audit log writes that fail (`admin_handler.go`, `connection_handler.go`,
+  `client_certificate_handler.go`, `device_handler.go`, `mesh_handler.go`,
+  `node_plane_handler.go`, `jobs.go`, `trusted_extension_handler.go`) are now
+  logged with `slog.Warn` through a new `AuditRepo.LogBestEffort` helper
+  instead of being silently discarded; the underlying administrative or user
+  operation still succeeds independently of the audit write.
+- Audit metadata encoding failures no longer persist empty events, and warning
+  logs contain safe failure codes rather than private SQL/provider diagnostics.
 - Private Core and Control candidates now use keyless Cosign OCI attestations
   for SLSA v1 provenance and SPDX, with immediate identity-bound verification,
   instead of GitHub's plan-restricted private artifact-attestation API.

@@ -58,7 +58,7 @@ func (h *Handler) AdminUpdateTrustedExtensionOrigin(w http.ResponseWriter, r *ht
 		action = "admin.extension-origin.revoke"
 	}
 	admin := auth.GetUser(r)
-	_ = h.auditRepo.Log(r.Context(), &admin.ID, action, map[string]interface{}{
+	h.auditRepo.LogBestEffort(r.Context(), &admin.ID, action, map[string]interface{}{
 		"origin_id": id,
 		"origin":    origin,
 	}, r.RemoteAddr)

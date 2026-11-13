@@ -122,7 +122,7 @@ func (h *Handler) AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	admin := auth.GetUser(r)
-	h.auditRepo.Log(r.Context(), &admin.ID, "admin.user.create",
+	h.auditRepo.LogBestEffort(r.Context(), &admin.ID, "admin.user.create",
 		map[string]interface{}{"target_user_id": user.ID}, r.RemoteAddr)
 
 	respond.JsonOK(w, user, http.StatusCreated)
@@ -170,7 +170,7 @@ func (h *Handler) AdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	admin := auth.GetUser(r)
-	h.auditRepo.Log(r.Context(), &admin.ID, "admin.user.update",
+	h.auditRepo.LogBestEffort(r.Context(), &admin.ID, "admin.user.update",
 		map[string]interface{}{"target_user_id": id}, r.RemoteAddr)
 
 	respond.JsonOK(w, user, http.StatusOK)
@@ -203,7 +203,7 @@ func (h *Handler) AdminDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.auditRepo.Log(r.Context(), &admin.ID, "admin.user.delete",
+	h.auditRepo.LogBestEffort(r.Context(), &admin.ID, "admin.user.delete",
 		map[string]interface{}{"target_user_id": id}, r.RemoteAddr)
 
 	respond.JsonOK(w, map[string]string{"deleted": id.String()}, http.StatusOK)
@@ -265,7 +265,7 @@ func (h *Handler) AdminBanUser(w http.ResponseWriter, r *http.Request) {
 		cleanupPending = true
 	}
 
-	h.auditRepo.Log(r.Context(), &admin.ID, "admin.user.ban",
+	h.auditRepo.LogBestEffort(r.Context(), &admin.ID, "admin.user.ban",
 		map[string]interface{}{"target_user_id": id, "reason": req.Reason}, r.RemoteAddr)
 
 	if cleanupPending {
@@ -290,7 +290,7 @@ func (h *Handler) AdminUnbanUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	admin := auth.GetUser(r)
-	h.auditRepo.Log(r.Context(), &admin.ID, "admin.user.unban",
+	h.auditRepo.LogBestEffort(r.Context(), &admin.ID, "admin.user.unban",
 		map[string]interface{}{"target_user_id": id}, r.RemoteAddr)
 
 	respond.JsonOK(w, map[string]string{"status": "unbanned"}, http.StatusOK)
@@ -370,7 +370,7 @@ func (h *Handler) AdminRegisterNodeIdentity(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	admin := auth.GetUser(r)
-	h.auditRepo.Log(r.Context(), &admin.ID, "admin.node-identity.register", map[string]interface{}{"node_id": request.NodeID}, r.RemoteAddr)
+	h.auditRepo.LogBestEffort(r.Context(), &admin.ID, "admin.node-identity.register", map[string]interface{}{"node_id": request.NodeID}, r.RemoteAddr)
 	respond.JsonOK(w, map[string]string{"node_id": request.NodeID, "status": "registered"}, http.StatusCreated)
 }
 
@@ -407,7 +407,7 @@ func (h *Handler) changeNodeIdentityRevocation(w http.ResponseWriter, r *http.Re
 		return
 	}
 	admin := auth.GetUser(r)
-	h.auditRepo.Log(r.Context(), &admin.ID, action, map[string]interface{}{"node_id": nodeID}, r.RemoteAddr)
+	h.auditRepo.LogBestEffort(r.Context(), &admin.ID, action, map[string]interface{}{"node_id": nodeID}, r.RemoteAddr)
 	respond.JsonOK(w, map[string]string{"node_id": nodeID, "status": status}, http.StatusOK)
 }
 
@@ -500,7 +500,7 @@ func (h *Handler) AdminCreateServer(w http.ResponseWriter, r *http.Request) {
 	server.ApplyCapabilities()
 
 	admin := auth.GetUser(r)
-	h.auditRepo.Log(r.Context(), &admin.ID, "admin.server.create",
+	h.auditRepo.LogBestEffort(r.Context(), &admin.ID, "admin.server.create",
 		map[string]interface{}{"server_id": server.ID, "name": server.Name}, r.RemoteAddr)
 
 	respond.JsonOK(w, server, http.StatusCreated)
@@ -635,7 +635,7 @@ func (h *Handler) AdminUpdateServer(w http.ResponseWriter, r *http.Request) {
 	server.ApplyCapabilities()
 
 	admin := auth.GetUser(r)
-	h.auditRepo.Log(r.Context(), &admin.ID, "admin.server.update",
+	h.auditRepo.LogBestEffort(r.Context(), &admin.ID, "admin.server.update",
 		map[string]interface{}{"server_id": id}, r.RemoteAddr)
 
 	respond.JsonOK(w, server, http.StatusOK)
@@ -663,7 +663,7 @@ func (h *Handler) AdminDeleteServer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	admin := auth.GetUser(r)
-	h.auditRepo.Log(r.Context(), &admin.ID, "admin.server.delete",
+	h.auditRepo.LogBestEffort(r.Context(), &admin.ID, "admin.server.delete",
 		map[string]interface{}{"server_id": id}, r.RemoteAddr)
 
 	respond.JsonOK(w, map[string]string{"deleted": id.String()}, http.StatusOK)
@@ -716,7 +716,7 @@ func (h *Handler) AdminForceDisconnectPeer(w http.ResponseWriter, r *http.Reques
 	}
 
 	admin := auth.GetUser(r)
-	h.auditRepo.Log(r.Context(), &admin.ID, "admin.peer.disconnect",
+	h.auditRepo.LogBestEffort(r.Context(), &admin.ID, "admin.peer.disconnect",
 		map[string]interface{}{"peer_id": peerID, "user_id": peer.UserID}, r.RemoteAddr)
 
 	respondDisconnect(w, outcome, "disconnect_pending")

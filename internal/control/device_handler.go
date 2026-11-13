@@ -156,7 +156,7 @@ func (h *Handler) UpdateMyDevice(w http.ResponseWriter, r *http.Request) {
 		respond.SafeError(w, "failed to load active device session", err, http.StatusInternalServerError)
 		return
 	}
-	h.auditRepo.Log(r.Context(), &user.ID, "device.alias.update",
+	h.auditRepo.LogBestEffort(r.Context(), &user.ID, "device.alias.update",
 		map[string]interface{}{"device_id": deviceID, "has_alias": request.Alias != ""}, r.RemoteAddr)
 	respond.JsonOK(w, presentDevice(*device, active), http.StatusOK)
 }
@@ -238,7 +238,7 @@ func (h *Handler) DeleteMyDevice(w http.ResponseWriter, r *http.Request) {
 			if disconnectErr != nil && !errors.Is(disconnectErr, repo.ErrConnectionInProgress) {
 				slog.Error("device cleanup could not be scheduled", "device_id", deviceID, "peer_id", active.ID, "error", disconnectErr)
 			}
-			h.auditRepo.Log(r.Context(), &user.ID, "device.revoke",
+			h.auditRepo.LogBestEffort(r.Context(), &user.ID, "device.revoke",
 				map[string]interface{}{"device_id": deviceID, "cleanup_pending": true}, r.RemoteAddr)
 			w.Header().Set("Retry-After", "5")
 			respondStatus(w, "device_cleanup_pending", http.StatusAccepted)
@@ -248,20 +248,20 @@ func (h *Handler) DeleteMyDevice(w http.ResponseWriter, r *http.Request) {
 	liveOperation, err := h.peerOperationRepo.HasLiveByDevice(r.Context(), deviceID)
 	if err != nil {
 		slog.Error("device cleanup state could not be verified", "device_id", deviceID, "error", err)
-		h.auditRepo.Log(r.Context(), &user.ID, "device.revoke",
+		h.auditRepo.LogBestEffort(r.Context(), &user.ID, "device.revoke",
 			map[string]interface{}{"device_id": deviceID, "cleanup_pending": true}, r.RemoteAddr)
 		w.Header().Set("Retry-After", "5")
 		respondStatus(w, "device_cleanup_pending", http.StatusAccepted)
 		return
 	}
 	if liveOperation {
-		h.auditRepo.Log(r.Context(), &user.ID, "device.revoke",
+		h.auditRepo.LogBestEffort(r.Context(), &user.ID, "device.revoke",
 			map[string]interface{}{"device_id": deviceID, "cleanup_pending": true}, r.RemoteAddr)
 		w.Header().Set("Retry-After", "5")
 		respondStatus(w, "device_cleanup_pending", http.StatusAccepted)
 		return
 	}
-	h.auditRepo.Log(r.Context(), &user.ID, "device.revoke",
+	h.auditRepo.LogBestEffort(r.Context(), &user.ID, "device.revoke",
 		map[string]interface{}{"device_id": deviceID}, r.RemoteAddr)
 	respond.JsonOK(w, presentDevice(*device, nil), http.StatusOK)
 }

@@ -110,7 +110,7 @@ func (h *Handler) EnrollDeviceCertificate(w http.ResponseWriter, r *http.Request
 		respond.SafeError(w, "failed to persist device certificate", err, http.StatusInternalServerError)
 		return
 	}
-	h.auditRepo.Log(r.Context(), &user.ID, "certificate.enroll", map[string]interface{}{
+	h.auditRepo.LogBestEffort(r.Context(), &user.ID, "certificate.enroll", map[string]interface{}{
 		"certificate_id": certificate.ID,
 		"device_id":      device.ID,
 		"server_id":      certificate.ServerID,
@@ -151,7 +151,7 @@ func (h *Handler) RevokeDeviceCertificate(w http.ResponseWriter, r *http.Request
 		respond.JsonError(w, "active certificate not found", http.StatusNotFound)
 		return
 	}
-	h.auditRepo.Log(r.Context(), &user.ID, "certificate.revoke", map[string]interface{}{
+	h.auditRepo.LogBestEffort(r.Context(), &user.ID, "certificate.revoke", map[string]interface{}{
 		"certificate_id": certificateID,
 	}, r.RemoteAddr)
 	respond.JsonOK(w, map[string]string{"status": "revoked"}, http.StatusOK)
