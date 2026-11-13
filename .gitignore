@@ -57,7 +57,6 @@ docker/
 # Subproyectos vinculados localmente
 midori-vpn-control/
 midori-vpn-desktop/
-midorivpn-desktop/
 midorivpn-extension/
 
 # Python y herramientas auxiliares
