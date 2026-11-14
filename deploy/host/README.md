@@ -19,6 +19,12 @@ operator runbook for protected Actions configuration, release order, first
 installation, upgrades, recovery, rotation and the 2.0.0 availability boundary.
 This file documents the individual host tools.
 
+For the initial one-node beta, use the existing principal profile with
+WireGuard for Desktop and authenticated HTTPS CONNECT for both extension
+packages. See [`docs/MVP_SINGLE_NODE.md`](../../docs/MVP_SINGLE_NODE.md) for the
+transport-only preset, private backend requirements and acceptance limits.
+The preset does not remove management/enrollment gates or activate a service.
+
 ## 1. Prepare openSUSE
 
 Inspect first, then apply through `sudo`:

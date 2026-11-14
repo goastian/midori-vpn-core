@@ -4,6 +4,11 @@
 
 ### Governance
 
+- Define the initial limited beta as one principal/local Core, Linux Desktop
+  over WireGuard and Firefox/Chromium extension over authenticated HTTPS
+  CONNECT. Add a transport-only deployment preset while deferring other
+  transports and multi-node acceptance without removing their implementations
+  or bypassing security, management, recovery or client release gates.
 - Added a dated project status review with pending regional, client and
   database acceptance, expired extension tooling exceptions and validation
   limits; removed obsolete next-candidate numbers from release runbooks.
@@ -14,6 +19,9 @@
 
 ### Security
 
+- Reject enabled proxy deployments without declared TLS before rendering units;
+  the Nginx stream renderer also rejects an incompatible TLS backend and a
+  public/backend host-port collision instead of generating unusable ingress.
 - Refresh compatible Go dependencies, including pgx 5.13, migrate 4.20.1,
   JWX 3.4, Redis client 9.23 and the WireGuard implementation. Keep Go 1.27.4
   and the deliberately pinned QUIC/MASQUE compatibility pair.

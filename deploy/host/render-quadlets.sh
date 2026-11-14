@@ -166,6 +166,16 @@ if [[ "${cfg[PROXY_ENABLED]:-false}" == true ]]; then
   for key in PROXY_PORT PROXY_HOST_PORT PROXY_MAX_CONNS_PER_USER PROXY_TLS_ENABLED PROXY_TLS_TERMINATED_BY_NGINX PROXY_SERVER_ID TRANSPORT_CLUSTER_ID; do
     host_require_env cfg "${key}"
   done
+  for key in PROXY_TLS_ENABLED PROXY_TLS_TERMINATED_BY_NGINX; do
+    [[ "${cfg[${key}]}" == true || "${cfg[${key}]}" == false ]] || host_die "${key} must be true or false"
+  done
+  [[ "${cfg[PROXY_TLS_ENABLED]}" == true || "${cfg[PROXY_TLS_TERMINATED_BY_NGINX]}" == true ]] || host_die "proxy requires TLS in Core or at the Nginx ingress"
+  if [[ "${cfg[PROXY_TLS_ENABLED]}" == true ]]; then
+    for key in PROXY_TLS_CERT PROXY_TLS_KEY; do
+      host_require_env cfg "${key}"
+      host_validate_absolute_path "${cfg[${key}]}" "${key}"
+    done
+  fi
 fi
 if [[ "${cfg[WSS_TUNNEL_ENABLED]:-false}" == true ]]; then
   host_require_env cfg WSS_TUNNEL_SERVER_ID

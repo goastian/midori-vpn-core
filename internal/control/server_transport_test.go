@@ -64,6 +64,43 @@ func TestEnabledServerTransport(t *testing.T) {
 	}
 }
 
+func TestWireGuardProxyOnlyTransportInventory(t *testing.T) {
+	requests := []TransportRequest{
+		{Protocol: "wireguard", Host: "edge.example.test", Port: 51820, Enabled: boolPtr(true), Priority: 100},
+		{Protocol: "proxy", Host: "edge.example.test", Port: 8444, Enabled: boolPtr(true), Priority: 90},
+	}
+	transports, err := validateTransportRequests(requests, true, false)
+	if err != nil {
+		t.Fatalf("WireGuard/proxy inventory rejected: %v", err)
+	}
+	if len(transports) != 2 {
+		t.Fatalf("expected exactly two capabilities, got %#v", transports)
+	}
+	server := &models.VPNServer{Transports: transports}
+	for index, protocol := range []string{"wireguard", "proxy"} {
+		if transports[index].Protocol != protocol || transports[index].HealthStatus != "unknown" {
+			t.Fatalf("unexpected initial %s capability: %#v", protocol, transports[index])
+		}
+		if _, ok := enabledServerTransport(server, protocol); ok {
+			t.Fatalf("%s selected before its health check", protocol)
+		}
+		server.Transports[index].HealthStatus = "healthy"
+		if _, ok := enabledServerTransport(server, protocol); !ok {
+			t.Fatalf("healthy %s capability was not selected", protocol)
+		}
+		server.Transports[index].Enabled = false
+		if _, ok := enabledServerTransport(server, protocol); ok {
+			t.Fatalf("disabled %s capability was selected", protocol)
+		}
+		server.Transports[index].Enabled = true
+	}
+	for _, protocol := range []string{"wss", "masque", "openvpn", "ikev2"} {
+		if _, ok := enabledServerTransport(server, protocol); ok {
+			t.Fatalf("deferred %s capability was manufactured", protocol)
+		}
+	}
+}
+
 func TestValidateOpenVPNMetadata(t *testing.T) {
 	valid := map[string]interface{}{
 		"server_name": "vpn.example.test",

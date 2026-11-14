@@ -4,6 +4,11 @@ Midori VPN is a Linux-first VPN platform built around WireGuard. The project
 includes the Go Core API, the Vue Control panel, a native Go Linux agent with a
 browser-served Vue UI, and Firefox/Chromium proxy extensions.
 
+The [single-node limited-beta scope](docs/MVP_SINGLE_NODE.md) includes Desktop
+over WireGuard and the browser extension over authenticated HTTPS CONNECT.
+Other implemented transports and multi-node failover are deferred from that
+initial scope, not certified by their presence in this source tree.
+
 The versioned HTTP contract is [docs/openapi.yaml](docs/openapi.yaml). Router
 coverage is checked bidirectionally so documented and implemented operations
 cannot drift silently.
@@ -11,8 +16,8 @@ cannot drift silently.
 The target topology for one central Control and independent regional Core
 clusters is defined in
 [docs/CENTRAL_CONTROL_ARCHITECTURE.md](docs/CENTRAL_CONTROL_ARCHITECTURE.md).
-It distinguishes the implemented single-principal baseline from the remaining
-regional production gates.
+It describes the longer-term topology. Regional acceptance remains required
+before adding those nodes, but is deferred from the initial single-node beta.
 
 Version 2.0.0 is an active rework. Linux x86_64 RPM is the only Desktop target;
 the abandoned Tauri/Rust and non-Linux client sources have been removed.
@@ -23,7 +28,7 @@ the abandoned Tauri/Rust and non-Linux client sources have been removed.
 |---|---|
 | Implemented | The source tree contains the central Control/Core plane, durable device and peer lifecycle, signed node management, private observability and the transports described below. |
 | Certified | The principal staging baseline and its enabled transports have completed their component-specific gates. Certification is deployment- and transport-specific, not a claim about every server. |
-| Pending | 2.0.0 remains **Unreleased**. A new independent regional server and the final rebuilt artifacts must complete their acceptance gates before release. |
+| Pending | 2.0.0 remains **Unreleased**. The single-node beta still requires host security, real WireGuard/proxy and both-client acceptance, recovery, legal approval and final verified artifacts. Additional transports and regional/failover acceptance are deferred, not completed. |
 
 The changelog and source describe work in the unreleased line; they are not a
 substitute for a published artifact or a deployment acceptance record.

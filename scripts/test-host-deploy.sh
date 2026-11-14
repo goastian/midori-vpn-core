@@ -211,6 +211,95 @@ if [[ -n "${quadlet_bin}" ]]; then
   grep -Fq 'midorivpn-core.service' "${test_root}/quadlet-dryrun.txt" || fail "Quadlet did not generate the Core service"
 fi
 
+mvp_env="${test_root}/mvp.env"
+cp "${render_env}" "${mvp_env}"
+install -d -m 0700 "${test_root}/mvp-tls"
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -sha256 -nodes -days 1 \
+  -subj '/CN=offline-render.example.test' -keyout "${test_root}/mvp-tls/server.key" \
+  -out "${test_root}/mvp-tls/server.crt" > "${test_root}/mvp-tls/openssl.log" 2>&1
+cat > "${test_root}/mvp-values.env" <<EOF
+PROXY_PORT=8444
+PROXY_HOST_PORT=18444
+PROXY_SERVER_ID=10000000-0000-4000-8000-000000000001
+TRANSPORT_CLUSTER_ID=20000000-0000-4000-8000-000000000001
+DOMAIN=vpn.example.test
+ACME_WEBROOT=/var/lib/midorivpn-acme
+NGINX_VHOST_PATH=/etc/nginx/vhosts.d/midorivpn.conf
+NGINX_STREAM_VHOST_PATH=/etc/nginx/stream.d/midorivpn-proxy.conf
+MANAGEMENT_TLS_CERT=${test_root}/mvp-tls/server.crt
+MANAGEMENT_TLS_KEY=${test_root}/mvp-tls/server.key
+MANAGEMENT_TLS_CA=${test_root}/mvp-tls/server.crt
+EOF
+chmod 0600 "${test_root}/mvp-values.env"
+bash "${HOST_DIR}/patch-env.sh" --env-file "${mvp_env}" --values-file "${test_root}/mvp-values.env" --backup-dir "${test_root}/mvp-value-backups" >/dev/null
+bash "${HOST_DIR}/patch-env.sh" --env-file "${mvp_env}" --values-file "${ROOT}/deploy/mvp/wireguard-proxy.env.example" --backup-dir "${test_root}/mvp-policy-backups" >/dev/null
+mvp_render="${test_root}/mvp-render"
+bash "${HOST_DIR}/render-quadlets.sh" --env-file "${mvp_env}" --output-dir "${mvp_render}" --runtime-dir "${runtime_dir}" >/dev/null
+assert_contains "${mvp_render}/rootless/midorivpn.pod" 'PublishPort=51820:51820/udp'
+assert_contains "${mvp_render}/rootless/midorivpn.pod" 'PublishPort=127.0.0.1:18444:8444/tcp'
+assert_contains "${mvp_render}/rootless/midorivpn.pod" 'PublishPort=127.0.0.1:8085:8085/tcp'
+assert_contains "${mvp_render}/rootless/midorivpn.pod" 'PublishPort=127.0.0.1:5173:80/tcp'
+for expected in PROXY_ENABLED=true PROXY_TLS_ENABLED=false PROXY_TLS_TERMINATED_BY_NGINX=true WSS_TUNNEL_ENABLED=false MASQUE_ENABLED=false NODE_EXTERNAL_TRANSPORTS=; do
+  assert_contains "${mvp_render}/rootless/env/core.env" "${expected}"
+done
+[[ -f "${mvp_render}/rootless/midorivpn-control.container" ]] || fail "MVP omitted Control"
+[[ -z "$(find "${mvp_render}/rootful" -type f -print -quit)" ]] || fail "MVP rendered a deferred rootful gateway"
+[[ "$(grep -c '^PublishPort=' "${mvp_render}/rootless/midorivpn.pod")" == 4 ]] || fail "MVP exposed an unexpected pod port"
+if grep -Fq '/run/midorivpn-health' "${mvp_render}/rootless/midorivpn-core.container"; then
+  fail "MVP mounted a deferred external gateway health directory"
+fi
+if grep -Eq 'admin-secret|pool-secret|grafana-secret' "${mvp_render}/rootless/env/core.env"; then
+  fail "MVP leaked privileged service credentials to Core"
+fi
+if [[ -n "${quadlet_bin}" ]]; then
+  QUADLET_UNIT_DIRS="${mvp_render}/rootless" "${quadlet_bin}" -user -dryrun > "${test_root}/mvp-quadlet-dryrun.txt" 2>&1 || {
+    tail -n 120 "${test_root}/mvp-quadlet-dryrun.txt" >&2
+    fail "Podman Quadlet rejected the MVP units"
+  }
+fi
+
+sed 's/^PROXY_TLS_TERMINATED_BY_NGINX=true$/PROXY_TLS_TERMINATED_BY_NGINX=false/' "${mvp_env}" > "${test_root}/mvp-plaintext.env"
+chmod 0600 "${test_root}/mvp-plaintext.env"
+if bash "${HOST_DIR}/render-quadlets.sh" --env-file "${test_root}/mvp-plaintext.env" --output-dir "${test_root}/mvp-plaintext-render" --runtime-dir "${runtime_dir}" > "${test_root}/mvp-plaintext.log" 2>&1; then
+  fail "renderer accepted an enabled proxy without TLS"
+fi
+grep -Fq 'proxy requires TLS' "${test_root}/mvp-plaintext.log" || fail "plaintext proxy was not rejected for its TLS policy"
+[[ ! -e "${test_root}/mvp-plaintext-render" ]] || fail "invalid proxy configuration left a deployment bundle"
+sed 's/^PROXY_TLS_TERMINATED_BY_NGINX=true$/PROXY_TLS_TERMINATED_BY_NGINX=yes/' "${mvp_env}" > "${test_root}/mvp-invalid-tls.env"
+chmod 0600 "${test_root}/mvp-invalid-tls.env"
+if bash "${HOST_DIR}/render-quadlets.sh" --env-file "${test_root}/mvp-invalid-tls.env" --output-dir "${test_root}/mvp-invalid-tls-render" --runtime-dir "${runtime_dir}" > "${test_root}/mvp-invalid-tls.log" 2>&1; then
+  fail "renderer accepted a malformed proxy TLS boolean"
+fi
+grep -Fq 'PROXY_TLS_TERMINATED_BY_NGINX must be true or false' "${test_root}/mvp-invalid-tls.log" || fail "malformed proxy TLS flag was not rejected for its boolean policy"
+sed 's/^PROXY_TLS_ENABLED=false$/PROXY_TLS_ENABLED=true/' "${mvp_env}" > "${test_root}/mvp-no-tls-material.env"
+chmod 0600 "${test_root}/mvp-no-tls-material.env"
+if bash "${HOST_DIR}/render-quadlets.sh" --env-file "${test_root}/mvp-no-tls-material.env" --output-dir "${test_root}/mvp-no-tls-material-render" --runtime-dir "${runtime_dir}" > "${test_root}/mvp-no-tls-material.log" 2>&1; then
+  fail "renderer accepted direct proxy TLS without certificate material"
+fi
+grep -Fq 'missing required environment value: PROXY_TLS_CERT' "${test_root}/mvp-no-tls-material.log" || fail "direct proxy TLS was not rejected for its missing certificate"
+
+bash "${HOST_DIR}/configure-nginx.sh" --env-file "${mvp_env}" --render-only "${test_root}/mvp-nginx" >/dev/null
+grep -Fq 'listen 8444 ssl;' "${test_root}/mvp-nginx/stream.conf" || fail "MVP ingress omitted proxy TLS"
+grep -Fq 'server 127.0.0.1:18444;' "${test_root}/mvp-nginx/stream.conf" || fail "MVP proxy backend is not the declared loopback port"
+grep -Fq 'ssl_protocols       TLSv1.3;' "${test_root}/mvp-nginx/stream.conf" || fail "MVP proxy weakened its TLS policy"
+sed 's/^PROXY_TLS_ENABLED=false$/PROXY_TLS_ENABLED=true/' "${mvp_env}" > "${test_root}/mvp-double-tls.env"
+chmod 0600 "${test_root}/mvp-double-tls.env"
+if bash "${HOST_DIR}/configure-nginx.sh" --env-file "${test_root}/mvp-double-tls.env" --render-only "${test_root}/mvp-double-tls-nginx" > "${test_root}/mvp-double-tls.log" 2>&1; then
+  fail "Nginx rendered a TLS backend behind its TLS termination template"
+fi
+grep -Fq 'Nginx stream TLS termination requires' "${test_root}/mvp-double-tls.log" || fail "proxy ingress was not rejected for its incompatible TLS mode"
+[[ ! -e "${test_root}/mvp-double-tls-nginx" ]] || fail "incompatible proxy ingress left a rendered configuration"
+for proxy_backend in 8444 08444; do
+  collision_case="${test_root}/mvp-colliding-proxy-${proxy_backend}"
+  sed "s/^PROXY_HOST_PORT=18444$/PROXY_HOST_PORT=${proxy_backend}/" "${mvp_env}" > "${collision_case}.env"
+  chmod 0600 "${collision_case}.env"
+  if bash "${HOST_DIR}/configure-nginx.sh" --env-file "${collision_case}.env" --render-only "${collision_case}-nginx" > "${collision_case}.log" 2>&1; then
+    fail "Nginx accepted a proxy ingress/backend host port collision"
+  fi
+  grep -Fq 'proxy ingress and loopback backend must use different host ports' "${collision_case}.log" || fail "proxy collision was not rejected for its port policy"
+  [[ ! -e "${collision_case}-nginx" ]] || fail "colliding proxy ingress left a rendered configuration"
+done
+
 masque_env="${test_root}/masque.env"
 sed 's/^MASQUE_ENABLED=false$/MASQUE_ENABLED=true/' "${render_env}" > "${masque_env}"
 cat >> "${masque_env}" <<'EOF'

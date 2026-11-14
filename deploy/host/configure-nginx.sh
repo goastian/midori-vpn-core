@@ -101,16 +101,20 @@ if [[ "${management_only}" == false ]]; then
   fi
 fi
 if [[ "${proxy_enabled}" == true ]]; then
+  # This template terminates TLS, so its loopback backend must speak CONNECT
+  # without a second TLS layer. Direct Core TLS needs a different ingress.
+  [[ "${cfg[PROXY_TLS_ENABLED]:-}" == false && "${cfg[PROXY_TLS_TERMINATED_BY_NGINX]:-}" == true ]] || host_die "Nginx stream TLS termination requires PROXY_TLS_ENABLED=false and PROXY_TLS_TERMINATED_BY_NGINX=true"
   for key in NGINX_STREAM_VHOST_PATH PROXY_HOST_PORT PROXY_PORT; do
     host_require_env cfg "${key}"
   done
   [[ "${cfg[NGINX_STREAM_VHOST_PATH]}" == /etc/nginx/* ]] || host_die "NGINX_STREAM_VHOST_PATH must remain below /etc/nginx"
   host_validate_absolute_path "${cfg[NGINX_STREAM_VHOST_PATH]}" NGINX_STREAM_VHOST_PATH
   for key in PROXY_HOST_PORT PROXY_PORT; do
-    if [[ ! "${cfg[${key}]}" =~ ^[0-9]+$ ]] || ((cfg[${key}] < 1 || cfg[${key}] > 65535)); then
+    if [[ ! "${cfg[${key}]}" =~ ^[0-9]+$ ]] || ((10#${cfg[${key}]} < 1 || 10#${cfg[${key}]} > 65535)); then
       host_die "${key} must be a valid port"
     fi
   done
+  ((10#${cfg[PROXY_HOST_PORT]} != 10#${cfg[PROXY_PORT]})) || host_die "proxy ingress and loopback backend must use different host ports"
   destinations+=("${cfg[NGINX_STREAM_VHOST_PATH]}")
   rendered_names+=(stream)
 fi
