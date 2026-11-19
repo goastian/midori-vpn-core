@@ -1156,6 +1156,11 @@ components:
       type: http
       scheme: bearer
       bearerFormat: Authentik JWT or JWE
+      description: >-
+        Accounts are managed in Authentik. Protected HTTP endpoints and the
+        authenticated WebSocket require a valid subject and the exact vpn-users
+        group. Administrative access additionally requires vpn-admins; global
+        admins or authentik Admins groups do not grant VPN administrator privileges.
     TunnelBearer:
       type: http
       scheme: bearer

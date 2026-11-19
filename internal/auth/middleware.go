@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -145,6 +146,10 @@ func JWTMiddleware(cfg *config.Config, pool *pgxpool.Pool, jwks *JWKSProvider) f
 				respond.JsonError(w, "missing sub claim", http.StatusUnauthorized)
 				return
 			}
+			if !slices.Contains(groups, "vpn-users") {
+				respond.JsonError(w, "VPN access required", http.StatusForbidden)
+				return
+			}
 
 			user, err := userRepo.UpsertByAuthentikUID(r.Context(), sub, email, groups)
 			if err != nil {
@@ -197,42 +202,10 @@ func getStringSliceClaim(token jwt.Token, key string) []string {
 	return nil
 }
 
-// ValidateTokenOnly checks if a JWT is valid without extracting user info.
-// Used for WebSocket authentication via query parameter.
+// ValidateTokenOnly validates the identity and VPN admission without returning claims.
 func ValidateTokenOnly(cfg *config.Config, jwks *JWKSProvider, tokenStr string) bool {
-	if isJWE(tokenStr) {
-		claims, intErr := IntrospectTokenCached(cfg, tokenStr)
-		if intErr != nil {
-			slog.Warn("WS JWE introspection failed", "code", "introspection_failed")
-			return false
-		}
-		if claims.Iss != "" && !sameIssuer(claims.Iss, cfg.AuthentikTokenIssuer()) {
-			return false
-		}
-		return claims.Sub != ""
-	}
-
-	keySet := jwks.KeySet()
-	token, err := jwt.Parse(
-		[]byte(tokenStr),
-		jwt.WithKeySet(keySet),
-		jwt.WithValidate(true),
-		jwt.WithAcceptableSkew(30*time.Second),
-	)
-	if err != nil {
-		claims, intErr := IntrospectTokenCached(cfg, tokenStr)
-		if intErr != nil {
-			slog.Warn("WS JWT validation/introspection failed", "code", "token_validation_failed")
-			return false
-		}
-		if claims.Iss != "" && !sameIssuer(claims.Iss, cfg.AuthentikTokenIssuer()) {
-			return false
-		}
-		return claims.Sub != ""
-	}
-	iss, _ := token.Issuer()
-	audience, _ := token.Audience()
-	return sameIssuer(iss, cfg.AuthentikTokenIssuer()) && audienceMatches(audience, cfg.AuthentikClientID)
+	_, err := ValidateTokenAndExtractClaims(cfg, jwks, tokenStr)
+	return err == nil
 }
 
 // WSClaims holds the subset of JWT claims needed for WebSocket authorization.
@@ -241,7 +214,7 @@ type WSClaims struct {
 	Groups  []string
 }
 
-// ValidateTokenAndExtractClaims validates a JWT and returns the subject and groups.
+// ValidateTokenAndExtractClaims validates the token and VPN admission before returning claims.
 func ValidateTokenAndExtractClaims(cfg *config.Config, jwks *JWKSProvider, tokenStr string) (*WSClaims, error) {
 	if isJWE(tokenStr) {
 		claims, intErr := IntrospectTokenCached(cfg, tokenStr)
@@ -254,9 +227,13 @@ func ValidateTokenAndExtractClaims(cfg *config.Config, jwks *JWKSProvider, token
 		if claims.Sub == "" {
 			return nil, errors.New("missing sub claim")
 		}
+		groups := introspectionGroups(claims.Groups)
+		if !slices.Contains(groups, "vpn-users") {
+			return nil, errors.New("VPN access required")
+		}
 		return &WSClaims{
 			Subject: claims.Sub,
-			Groups:  introspectionGroups(claims.Groups),
+			Groups:  groups,
 		}, nil
 	}
 
@@ -278,9 +255,13 @@ func ValidateTokenAndExtractClaims(cfg *config.Config, jwks *JWKSProvider, token
 		if claims.Sub == "" {
 			return nil, errors.New("missing sub claim")
 		}
+		groups := introspectionGroups(claims.Groups)
+		if !slices.Contains(groups, "vpn-users") {
+			return nil, errors.New("VPN access required")
+		}
 		return &WSClaims{
 			Subject: claims.Sub,
-			Groups:  introspectionGroups(claims.Groups),
+			Groups:  groups,
 		}, nil
 	}
 	iss, _ := token.Issuer()
@@ -295,8 +276,12 @@ func ValidateTokenAndExtractClaims(cfg *config.Config, jwks *JWKSProvider, token
 	if sub == "" {
 		return nil, errors.New("missing sub claim")
 	}
+	groups := getStringSliceClaim(token, "groups")
+	if !slices.Contains(groups, "vpn-users") {
+		return nil, errors.New("VPN access required")
+	}
 	return &WSClaims{
 		Subject: sub,
-		Groups:  getStringSliceClaim(token, "groups"),
+		Groups:  groups,
 	}, nil
 }

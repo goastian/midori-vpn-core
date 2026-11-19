@@ -19,6 +19,11 @@
 
 ### Security
 
+- Require the exact `vpn-users` group before HTTP JIT provisioning and
+  WebSocket admission. Restrict VPN administrator permissions and administrator
+  WebSocket limits to `vpn-admins`, without implicit global Authentik privileges.
+  Token-only validation now shares the claims/admission validator and rejects
+  identities without a subject.
 - Reject enabled proxy deployments without declared TLS before rendering units;
   the Nginx stream renderer also rejects an incompatible TLS backend and a
   public/backend host-port collision instead of generating unusable ingress.

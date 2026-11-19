@@ -11,15 +11,19 @@ import (
 )
 
 func TestAdminOnlyRejectsMissingAndNonAdminUsers(t *testing.T) {
-	handler := AdminOnly(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Fatal("protected handler was called")
-	}))
-
 	for name, user := range map[string]*models.User{
-		"missing":   nil,
-		"non-admin": {Groups: []string{"vpn-users"}},
+		"missing":            nil,
+		"non-admin":          {Groups: []string{"vpn-users"}},
+		"global admins":      {Groups: []string{"vpn-users", "admins"}},
+		"authentik admins":   {Groups: []string{"vpn-users", "authentik Admins"}},
+		"both global groups": {Groups: []string{"admins", "authentik Admins"}},
+		"similar group":      {Groups: []string{"vpn-admins-extra"}},
+		"different case":     {Groups: []string{"VPN-ADMINS"}},
 	} {
 		t.Run(name, func(t *testing.T) {
+			handler := AdminOnly(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Fatal("protected handler was called")
+			}))
 			request := httptest.NewRequest(http.MethodGet, "/api/v1/admin/health", nil)
 			if user != nil {
 				request = request.WithContext(context.WithValue(context.Background(), auth.UserCtxKey, user))

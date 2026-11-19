@@ -38,6 +38,7 @@ func TestJWTRequiresIntendedAudience(t *testing.T) {
 			cfg := &config.Config{AuthentikIssuer: "https://auth.test.local", AuthentikClientID: test.clientID}
 			claims := map[string]any{
 				"iss": cfg.AuthentikIssuer, "sub": "audience-user", "exp": time.Now().Add(time.Hour).Unix(),
+				"groups": []string{"vpn-users"},
 				// An authorized party must not substitute for a missing/wrong audience.
 				"azp": "vpn-client",
 			}
@@ -83,6 +84,7 @@ func TestIntrospectionRequiresIntendedAudience(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(map[string]any{
 					"active": true, "sub": "introspection-user", "iss": "https://auth.test.local",
 					"exp": time.Now().Add(time.Hour).Unix(), "aud": test.audience, "azp": "vpn-client",
+					"groups": []string{"vpn-users"},
 				})
 			}))
 			defer server.Close()

@@ -84,11 +84,12 @@ func TestValidateTokenOnly_ValidToken(t *testing.T) {
 	cfg := &config.Config{AuthentikIssuer: "https://auth.test.local", AuthentikClientID: "vpn-client"}
 
 	token := signToken(t, privKey, map[string]interface{}{
-		"iss": "https://auth.test.local",
-		"sub": "user-123",
-		"aud": []string{"vpn-client"},
-		"exp": time.Now().Add(time.Hour).Unix(),
-		"iat": time.Now().Unix(),
+		"iss":    "https://auth.test.local",
+		"sub":    "user-123",
+		"aud":    []string{"vpn-client"},
+		"exp":    time.Now().Add(time.Hour).Unix(),
+		"iat":    time.Now().Unix(),
+		"groups": []string{"vpn-users"},
 	})
 
 	if !auth.ValidateTokenOnly(cfg, jwks, token) {
@@ -106,11 +107,12 @@ func TestValidateTokenOnly_WrongIssuer(t *testing.T) {
 	cfg := &config.Config{AuthentikIssuer: "https://auth.test.local", AuthentikClientID: "vpn-client"}
 
 	token := signToken(t, privKey, map[string]interface{}{
-		"iss": "https://evil.example.com",
-		"aud": []string{"vpn-client"},
-		"sub": "user-123",
-		"exp": time.Now().Add(time.Hour).Unix(),
-		"iat": time.Now().Unix(),
+		"iss":    "https://evil.example.com",
+		"aud":    []string{"vpn-client"},
+		"sub":    "user-123",
+		"exp":    time.Now().Add(time.Hour).Unix(),
+		"iat":    time.Now().Unix(),
+		"groups": []string{"vpn-users"},
 	})
 
 	if auth.ValidateTokenOnly(cfg, jwks, token) {
@@ -128,11 +130,12 @@ func TestValidateTokenOnly_ExpiredToken(t *testing.T) {
 	cfg := &config.Config{AuthentikIssuer: "https://auth.test.local", AuthentikClientID: "vpn-client"}
 
 	token := signToken(t, privKey, map[string]interface{}{
-		"iss": "https://auth.test.local",
-		"sub": "user-123",
-		"exp": time.Now().Add(-time.Hour).Unix(),
-		"aud": []string{"vpn-client"},
-		"iat": time.Now().Add(-2 * time.Hour).Unix(),
+		"iss":    "https://auth.test.local",
+		"sub":    "user-123",
+		"exp":    time.Now().Add(-time.Hour).Unix(),
+		"aud":    []string{"vpn-client"},
+		"iat":    time.Now().Add(-2 * time.Hour).Unix(),
+		"groups": []string{"vpn-users"},
 	})
 
 	if auth.ValidateTokenOnly(cfg, jwks, token) {
@@ -152,11 +155,12 @@ func TestValidateTokenOnly_InvalidSignature(t *testing.T) {
 	// Sign with a different key
 	otherKey, _ := rsa.GenerateKey(rand.Reader, 2048)
 	token := signToken(t, otherKey, map[string]interface{}{
-		"iss": "https://auth.test.local",
-		"sub": "user-123",
-		"aud": []string{"vpn-client"},
-		"exp": time.Now().Add(time.Hour).Unix(),
-		"iat": time.Now().Unix(),
+		"iss":    "https://auth.test.local",
+		"sub":    "user-123",
+		"aud":    []string{"vpn-client"},
+		"exp":    time.Now().Add(time.Hour).Unix(),
+		"iat":    time.Now().Unix(),
+		"groups": []string{"vpn-users"},
 	})
 
 	if auth.ValidateTokenOnly(cfg, jwks, token) {
@@ -179,7 +183,7 @@ func TestValidateTokenAndExtractClaims_Valid(t *testing.T) {
 		"aud":    []string{"vpn-client"},
 		"exp":    time.Now().Add(time.Hour).Unix(),
 		"iat":    time.Now().Unix(),
-		"groups": []string{"plan-pro", "vpn-admins"},
+		"groups": []string{"plan-pro", "vpn-admins", "vpn-users"},
 	})
 
 	claims, err := auth.ValidateTokenAndExtractClaims(cfg, jwks, token)
@@ -189,8 +193,8 @@ func TestValidateTokenAndExtractClaims_Valid(t *testing.T) {
 	if claims.Subject != "user-456" {
 		t.Errorf("expected subject 'user-456', got %q", claims.Subject)
 	}
-	if len(claims.Groups) != 2 {
-		t.Errorf("expected 2 groups, got %d", len(claims.Groups))
+	if len(claims.Groups) != 3 {
+		t.Errorf("expected 3 groups, got %d", len(claims.Groups))
 	}
 }
 
@@ -204,10 +208,11 @@ func TestValidateTokenAndExtractClaims_MissingSub(t *testing.T) {
 	cfg := &config.Config{AuthentikIssuer: "https://auth.test.local", AuthentikClientID: "vpn-client"}
 
 	token := signToken(t, privKey, map[string]interface{}{
-		"iss": "https://auth.test.local",
-		"exp": time.Now().Add(time.Hour).Unix(),
-		"aud": []string{"vpn-client"},
-		"iat": time.Now().Unix(),
+		"iss":    "https://auth.test.local",
+		"exp":    time.Now().Add(time.Hour).Unix(),
+		"aud":    []string{"vpn-client"},
+		"iat":    time.Now().Unix(),
+		"groups": []string{"vpn-users"},
 	})
 
 	_, err = auth.ValidateTokenAndExtractClaims(cfg, jwks, token)
@@ -226,11 +231,12 @@ func TestValidateTokenAndExtractClaims_WrongIssuer(t *testing.T) {
 	cfg := &config.Config{AuthentikIssuer: "https://auth.test.local", AuthentikClientID: "vpn-client"}
 
 	token := signToken(t, privKey, map[string]interface{}{
-		"iss": "https://wrong.issuer.com",
-		"aud": []string{"vpn-client"},
-		"sub": "user-789",
-		"exp": time.Now().Add(time.Hour).Unix(),
-		"iat": time.Now().Unix(),
+		"iss":    "https://wrong.issuer.com",
+		"aud":    []string{"vpn-client"},
+		"sub":    "user-789",
+		"exp":    time.Now().Add(time.Hour).Unix(),
+		"iat":    time.Now().Unix(),
+		"groups": []string{"vpn-users"},
 	})
 
 	_, err = auth.ValidateTokenAndExtractClaims(cfg, jwks, token)

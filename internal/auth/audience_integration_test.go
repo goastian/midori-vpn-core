@@ -55,7 +55,8 @@ func TestJWTMiddlewareAudienceBeforeProvisioning(t *testing.T) {
 				claims := map[string]any{
 					"active": true, "iss": "https://auth.test.local", "sub": subject,
 					"aud": []string{audience}, "email": subject + "@test.invalid",
-					"exp": time.Now().Add(time.Hour).Unix(),
+					"exp":    time.Now().Add(time.Hour).Unix(),
+					"groups": []string{"vpn-users"},
 				}
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					if kind == "jwt" {
